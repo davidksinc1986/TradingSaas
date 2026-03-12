@@ -9,6 +9,12 @@
 <section class="grid-2">
   <div class="card">
     <h2>Usuarios</h2>
+    <form id="create-user-form" class="form-grid admin-form-grid" style="margin-bottom:12px;">
+      <label>Usuario / Email<input name="email" required></label>
+      <label>Nombre<input name="name" required></label>
+      <label>Contraseña<input name="password" required></label>
+      <button class="btn primary" type="submit">Crear usuario</button>
+    </form>
     <div id="admin-users" class="stack"></div>
   </div>
   <div class="card">

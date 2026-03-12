@@ -8,9 +8,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./quant_suite.db"
     credentials_key: str = "replace-with-32-url-safe-base64-key"
 
-    admin_email: str = "admin@example.com"
-    admin_name: str = "Admin"
-    admin_password: str = "ChangeMe123!"
+    admin_email: str = "davidksinc"
+    admin_name: str = "davidksinc"
+    admin_password: str = "M@davi19!"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
