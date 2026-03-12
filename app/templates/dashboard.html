@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="dashboard-header">
+  <div>
+    <span class="pill">Hola, {{ user.name }}</span>
+    <h1>Control central de conectores, símbolos y estrategias</h1>
+    <p>Esta versión añade límites por usuario administrados por el admin, dropdown de símbolos sugeridos por plataforma, entrada manual y guías paso a paso para conectar cada servicio.</p>
+  </div>
+</section>
+
+<section class="stats-grid">
+  <div class="card stat"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
+  <div class="card stat"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
+  <div class="card stat"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
+  <div class="card stat"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <div class="row-between">
+      <div>
+        <h2>Agregar conector</h2>
+        <p class="hint">El usuario solo verá plataformas habilitadas por el admin. Puedes elegir símbolos sugeridos o escribirlos manualmente.</p>
+      </div>
+      <button class="btn" type="button" id="open-guide-btn">Ver guía de conexión</button>
+    </div>
+    <form id="connector-form" class="form-grid">
+      <label>Plataforma
+        <select name="platform" id="platform-select"></select>
+      </label>
+      <label>Etiqueta<input name="label" placeholder="Mi cuenta principal" required></label>
+      <label>Modo
+        <select name="mode">
+          <option value="paper">paper</option>
+          <option value="live">live</option>
+          <option value="signal">signal</option>
+        </select>
+      </label>
+      <label>Tipo de mercado
+        <select name="market_type" id="market-type-select"></select>
+      </label>
+      <div class="card soft-card">
+        <strong>Símbolos sugeridos</strong>
+        <div id="symbol-preset-list" class="chip-wrap"></div>
+        <small class="hint" id="symbol-limit-hint"></small>
+      </div>
+      <label>Símbolos elegidos (coma separados)<input id="symbols-input" name="symbols" placeholder="BTC/USDT,ETH/USDT,XAUUSD"></label>
+      <label>Config JSON<textarea id="config-json" name="config" placeholder='{"paper_balance":10000,"stop_pct":0.01}'></textarea></label>
+      <label>Secrets JSON<textarea id="secrets-json" name="secrets" placeholder='{"api_key":"...","secret_key":"..."}'></textarea></label>
+      <button class="btn primary" type="submit">Guardar conector</button>
+    </form>
+    <div class="examples">
+      <strong>Ejemplo rápido</strong>
+      <pre id="connector-example"></pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Ejecutar estrategia</h2>
+    <form id="run-form" class="form-grid">
+      <label>Connector IDs<input name="connector_ids" placeholder="1,2,3" required></label>
+      <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+      <label>Timeframe<input name="timeframe" value="1h"></label>
+      <label>Estrategia
+        <select name="strategy_slug">
+          <option value="ema_rsi">EMA + RSI</option>
+          <option value="mean_reversion_zscore">Mean Reversion Z-Score</option>
+          <option value="momentum_breakout">Momentum Breakout</option>
+        </select>
+      </label>
+      <label>Riesgo por trade<input name="risk_per_trade" type="number" step="0.001" value="0.01"></label>
+      <label>Prob. mínima ML<input name="min_ml_probability" type="number" step="0.01" value="0.55"></label>
+      <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
+      <button class="btn primary" type="submit">Ejecutar</button>
+    </form>
+    <pre id="run-output" class="prebox"></pre>
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h2>Conectores guardados</h2>
+    <div id="connectors-list" class="stack"></div>
+  </div>
+  <div class="card">
+    <h2>Distribución por plataforma</h2>
+    <canvas id="platform-chart" height="220"></canvas>
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h2>Tus límites por plataforma</h2>
+    <div id="limits-list" class="stack"></div>
+  </div>
+  <div class="card">
+    <h2>Webhook de TradingView</h2>
+    <p class="hint">URL: <code>/api/webhooks/tradingview</code>. Puede reenviar la señal a Binance, Bybit, OKX o MT5 con <code>target_connector_id</code>.</p>
+    <pre class="prebox">{
+  "connector_id": 3,
+  "target_connector_id": 1,
+  "passphrase": "mi-clave-webhook",
+  "symbol": "BTC/USDT",
+  "side": "buy",
+  "price": 65000,
+  "quantity": 0.01,
+  "strategy_slug": "tv_breakout"
+}</pre>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Últimas transacciones</h2>
+  <div class="table-wrap">
+    <table id="trades-table">
+      <thead>
+        <tr>
+          <th>Fecha</th>
+          <th>Plataforma</th>
+          <th>Mercado</th>
+          <th>Símbolo</th>
+          <th>Lado</th>
+          <th>Cantidad</th>
+          <th>Precio</th>
+          <th>Status</th>
+          <th>PNL</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<script src="/static/dashboard.js"></script>
+{% endblock %}

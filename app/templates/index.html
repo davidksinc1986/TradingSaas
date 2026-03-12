@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="pill">Trading cuantitativo multi-plataforma</span>
+    <h1>Una sola cuenta de usuario para gestionar MT5, cTrader, TradingView, Binance, Bybit y OKX.</h1>
+    <p>
+      Crea usuario, agrega conectores, define símbolos, corre estrategias cuantitativas, recibe señales y revisa un dashboard
+      con tu historial de transacciones.
+    </p>
+    <div class="actions">
+      <a class="btn primary" href="/auth/register">Crear cuenta</a>
+      <a class="btn" href="/auth/login">Iniciar sesión</a>
+    </div>
+  </div>
+  <div class="card panel">
+    <h3>Qué trae esta base</h3>
+    <ul>
+      <li>Multiusuario</li>
+      <li>Selección de varios símbolos por conector</li>
+      <li>Paper trading y live base</li>
+      <li>Dashboard con métricas</li>
+      <li>Webhook TradingView</li>
+      <li>Crypto exchanges con credenciales por usuario</li>
+    </ul>
+  </div>
+</section>
+{% endblock %}

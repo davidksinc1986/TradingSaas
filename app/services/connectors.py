@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from app.security import decrypt_payload
+
+try:
+    import ccxt
+except Exception:
+    ccxt = None
+
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
+
+
+@dataclass
+class ExecutionResult:
+    status: str
+    message: str
+    fill_price: float
+    quantity: float
+    raw: dict[str, Any]
+
+
+class BaseConnectorClient:
+    def __init__(self, connector):
+        self.connector = connector
+        self.secrets = decrypt_payload(connector.encrypted_secret_blob)
+        self.config = connector.config_json or {}
+
+    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+        return ExecutionResult(
+            status="paper-filled",
+            message="Paper execution completed",
+            fill_price=price_hint,
+            quantity=quantity,
+            raw={"mode": self.connector.mode, "platform": self.connector.platform, "market_type": getattr(self.connector, "market_type", "spot")},
+        )
+
+    def test_connection(self) -> dict[str, Any]:
+        return {"ok": True, "platform": self.connector.platform, "mode": self.connector.mode, "market_type": getattr(self.connector, "market_type", "spot")}
+
+
+class CCXTConnectorClient(BaseConnectorClient):
+    def build_exchange(self):
+        if ccxt is None:
+            raise RuntimeError("ccxt is not installed")
+        exchange_class = getattr(ccxt, self.connector.platform)
+        kwargs = {
+            "apiKey": self.secrets.get("api_key"),
+            "secret": self.secrets.get("secret_key"),
+            "enableRateLimit": True,
+        }
+        if self.connector.platform == "okx" and self.secrets.get("passphrase"):
+            kwargs["password"] = self.secrets.get("passphrase")
+        if self.secrets.get("password"):
+            kwargs["password"] = self.secrets.get("password")
+        options = {}
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        if self.connector.platform in {"binance", "bybit", "okx"}:
+            options["defaultType"] = "future" if market_type == "futures" else "spot"
+        if self.config.get("sandbox"):
+            options["sandboxMode"] = True
+        if options:
+            kwargs["options"] = options
+        exchange = exchange_class(kwargs)
+        if self.config.get("sandbox") and hasattr(exchange, "set_sandbox_mode"):
+            exchange.set_sandbox_mode(True)
+        return exchange
+
+    def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
+        try:
+            return float(exchange.amount_to_precision(symbol, quantity))
+        except Exception:
+            return float(quantity)
+
+    def _resolve_fill_price(self, order: dict[str, Any], price_hint: float) -> float:
+        return float(order.get("average") or order.get("price") or order.get("cost") or price_hint)
+
+    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(symbol, side, quantity, price_hint)
+        exchange = self.build_exchange()
+        exchange.load_markets()
+        quantity = self._normalize_amount(exchange, symbol, quantity)
+        order = exchange.create_order(symbol=symbol, type="market", side=side, amount=quantity)
+        fill_price = self._resolve_fill_price(order, price_hint)
+        return ExecutionResult(
+            status="live-submitted",
+            message="Live order submitted via CCXT",
+            fill_price=fill_price,
+            quantity=float(order.get("amount") or quantity),
+            raw=order,
+        )
+
+    def test_connection(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return {"ok": True, "mode": self.connector.mode, "note": "paper/signal mode"}
+        exchange = self.build_exchange()
+        markets = exchange.load_markets()
+        balance = None
+        try:
+            balance = exchange.fetch_balance()
+        except Exception as exc:
+            balance = {"error": str(exc)}
+        return {
+            "ok": True,
+            "platform": self.connector.platform,
+            "markets_loaded": len(markets),
+            "balance_preview": balance,
+        }
+
+
+class MT5ConnectorClient(BaseConnectorClient):
+    def _ensure_session(self):
+        if mt5 is None:
+            raise RuntimeError("MetaTrader5 package is not available in this environment")
+        path = self.config.get("terminal_path")
+        login = self.secrets.get("login") or self.config.get("login")
+        password = self.secrets.get("password")
+        server = self.secrets.get("server") or self.config.get("server")
+
+        initialized = mt5.initialize(path=path) if path else mt5.initialize()
+        if not initialized:
+            raise RuntimeError(f"mt5.initialize failed: {mt5.last_error()}")
+
+        if login and password and server:
+            authorized = mt5.login(login=int(login), password=str(password), server=str(server))
+            if not authorized:
+                raise RuntimeError(f"mt5.login failed: {mt5.last_error()}")
+
+    def _shutdown(self):
+        if mt5 is not None:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+
+    def _market_price(self, symbol: str, side: str, price_hint: float) -> float:
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return price_hint
+        return float(tick.ask if side == "buy" else tick.bid or price_hint)
+
+    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(symbol, side, quantity, price_hint)
+        self._ensure_session()
+        try:
+            if not mt5.symbol_select(symbol, True):
+                raise RuntimeError(f"symbol_select failed for {symbol}: {mt5.last_error()}")
+            order_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+            fill_type = getattr(mt5, self.config.get("type_filling", "ORDER_FILLING_IOC"), mt5.ORDER_FILLING_IOC)
+            price = self._market_price(symbol, side, price_hint)
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(quantity),
+                "type": order_type,
+                "price": price,
+                "deviation": int(self.config.get("deviation", 20)),
+                "magic": int(self.config.get("magic", 260311)),
+                "comment": self.config.get("comment", "quant-suite"),
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": fill_type,
+            }
+            stop_pct = float(self.config.get("stop_pct", 0) or 0)
+            take_pct = float(self.config.get("take_pct", 0) or 0)
+            if stop_pct > 0:
+                request["sl"] = price * (1 - stop_pct) if side == "buy" else price * (1 + stop_pct)
+            if take_pct > 0:
+                request["tp"] = price * (1 + take_pct) if side == "buy" else price * (1 - take_pct)
+            result = mt5.order_send(request)
+            if result is None:
+                raise RuntimeError(f"mt5.order_send returned None: {mt5.last_error()}")
+            retcode = getattr(result, "retcode", None)
+            if retcode != mt5.TRADE_RETCODE_DONE:
+                raise RuntimeError(f"mt5 order rejected retcode={retcode} last_error={mt5.last_error()}")
+            result_dict = result._asdict() if hasattr(result, "_asdict") else {"retcode": retcode}
+            return ExecutionResult(
+                status="live-submitted",
+                message="Live order submitted via MetaTrader5",
+                fill_price=float(getattr(result, "price", price) or price),
+                quantity=float(getattr(result, "volume", quantity) or quantity),
+                raw=result_dict,
+            )
+        finally:
+            self._shutdown()
+
+    def test_connection(self) -> dict[str, Any]:
+        self._ensure_session()
+        try:
+            account = mt5.account_info()
+            if account is None:
+                raise RuntimeError(f"mt5.account_info failed: {mt5.last_error()}")
+            account_dict = account._asdict() if hasattr(account, "_asdict") else {"login": getattr(account, "login", None)}
+            return {"ok": True, "account": account_dict}
+        finally:
+            self._shutdown()
+
+
+class TradingViewConnectorClient(BaseConnectorClient):
+    def test_connection(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "platform": "tradingview",
+            "note": "Use /api/webhooks/tradingview as webhook URL and configure a passphrase if desired.",
+        }
+
+
+class CTraderConnectorClient(BaseConnectorClient):
+    def _bridge_url(self) -> str | None:
+        return self.config.get("bridge_url") or self.secrets.get("bridge_url")
+
+    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(symbol, side, quantity, price_hint)
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return ExecutionResult(
+                status="bridge-required",
+                message="cTrader live mode requires a bridge_url or a dedicated Open API client implementation.",
+                fill_price=price_hint,
+                quantity=quantity,
+                raw={"platform": "ctrader"},
+            )
+        payload = {
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price_hint": price_hint,
+            "access_token": self.secrets.get("access_token"),
+            "account_id": self.secrets.get("account_id"),
+            "client_id": self.secrets.get("client_id"),
+            "client_secret": self.secrets.get("client_secret"),
+        }
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(bridge_url.rstrip("/") + "/execute", json=payload)
+            response.raise_for_status()
+            data = response.json()
+        return ExecutionResult(
+            status=data.get("status", "live-submitted"),
+            message=data.get("message", "cTrader bridge order submitted"),
+            fill_price=float(data.get("fill_price", price_hint)),
+            quantity=float(data.get("quantity", quantity)),
+            raw=data,
+        )
+
+    def test_connection(self) -> dict[str, Any]:
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return {"ok": True, "note": "No bridge_url configured yet; cTrader remains ready for bridge mode."}
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(bridge_url.rstrip("/") + "/health")
+            response.raise_for_status()
+            return {"ok": True, "bridge": response.json()}
+
+
+
+def get_client(connector):
+    if connector.platform in {"binance", "bybit", "okx"}:
+        return CCXTConnectorClient(connector)
+    if connector.platform == "mt5":
+        return MT5ConnectorClient(connector)
+    if connector.platform == "ctrader":
+        return CTraderConnectorClient(connector)
+    if connector.platform == "tradingview":
+        return TradingViewConnectorClient(connector)
+    return BaseConnectorClient(connector)
