@@ -8,6 +8,18 @@ async function api(url, options = {}) {
   return res.json();
 }
 
+function showFeedback(message, kind = "ok") {
+  const el = document.getElementById("admin-feedback");
+  if (!el) return;
+  el.classList.remove("hidden", "status-ok", "status-error");
+  el.classList.add(kind === "ok" ? "status-ok" : "status-error");
+  el.textContent = message;
+}
+
+function symbolsToChips(symbols = []) {
+  return symbols.map((symbol) => `<span class="chip chip-static">${symbol}</span>`).join("");
+}
+
 async function refreshAdmin() {
   const [users, policies, grants] = await Promise.all([
     api("/api/admin/users"),
@@ -18,7 +30,7 @@ async function refreshAdmin() {
   document.getElementById("admin-users").innerHTML = users.map(u => `
     <div class="connector-item">
       <strong>${u.name}</strong>
-      <div class="connector-meta"><span>${u.email}</span><span>id: ${u.id}</span><span>admin: ${u.is_admin}</span><span>active: ${u.is_active}</span></div>
+      <div class="connector-meta"><span>${u.email}</span><span>ID: ${u.id}</span><span>Admin: ${u.is_admin ? "Sí" : "No"}</span><span>Activo: ${u.is_active ? "Sí" : "No"}</span></div>
       <div class="row-wrap">
         <button class="btn" onclick="toggleUser(${u.id}, ${!u.is_active}, null)">${u.is_active ? 'Desactivar' : 'Activar'}</button>
         <button class="btn" onclick="toggleUser(${u.id}, null, ${!u.is_admin})">${u.is_admin ? 'Quitar admin' : 'Hacer admin'}</button>
@@ -26,20 +38,55 @@ async function refreshAdmin() {
     </div>
   `).join("");
 
-  document.getElementById("admin-policies").innerHTML = policies.map(p => `
-    <div class="connector-item">
-      <strong>${p.display_name}</strong>
-      <div class="connector-meta"><span>${p.platform}</span><span>global: ${p.is_enabled_global}</span><span>manual: ${p.allow_manual_symbols}</span></div>
-      <div class="row-wrap">
-        <button class="btn" onclick='togglePolicy(${JSON.stringify(p.platform)}, ${!p.is_enabled_global}, null)'>${p.is_enabled_global ? 'Deshabilitar global' : 'Habilitar global'}</button>
-        <button class="btn" onclick='togglePolicy(${JSON.stringify(p.platform)}, null, ${!p.allow_manual_symbols})'>Manual ${p.allow_manual_symbols ? 'OFF' : 'ON'}</button>
+  document.getElementById("admin-policies").innerHTML = policies.map(p => {
+    const globalBadge = p.is_enabled_global ? "Global: Activado" : "Global: Desactivado";
+    const manualBadge = p.allow_manual_symbols ? "Carga manual: Permitida" : "Carga manual: Bloqueada";
+    return `
+      <div class="connector-item">
+        <div class="row-between">
+          <strong>${p.display_name}</strong>
+          <div class="row-wrap">
+            <span class="pill tiny ${p.is_enabled_global ? "pill-on" : "pill-off"}">${globalBadge}</span>
+            <span class="pill tiny ${p.allow_manual_symbols ? "pill-on" : "pill-off"}">${manualBadge}</span>
+          </div>
+        </div>
+        <div class="row-wrap" style="margin-top:8px;">
+          <button class="btn" onclick='togglePolicy(${JSON.stringify(p.platform)}, ${!p.is_enabled_global}, null)'>${p.is_enabled_global ? 'Desactivar acceso global' : 'Activar acceso global'}</button>
+          <button class="btn" onclick='togglePolicy(${JSON.stringify(p.platform)}, null, ${!p.allow_manual_symbols})'>${p.allow_manual_symbols ? 'Bloquear símbolos manuales' : 'Permitir símbolos manuales'}</button>
+        </div>
+        <div class="symbol-block">
+          <small class="hint"><strong>Símbolos sugeridos</strong></small>
+          <div class="chip-wrap">${symbolsToChips(p.top_symbols || [])}</div>
+        </div>
+        <div class="symbol-block">
+          <small class="hint"><strong>Símbolos permitidos por política</strong></small>
+          <div class="chip-wrap">${symbolsToChips(p.allowed_symbols || [])}</div>
+        </div>
       </div>
-      <small class="hint">Top 10: ${(p.top_symbols || []).join(", ")}</small>
-      <small class="hint">Permitidos: ${(p.allowed_symbols || []).join(", ")}</small>
+    `;
+  }).join("");
+
+  const grantsByUser = grants.reduce((acc, grant) => {
+    if (!acc[grant.user_id]) acc[grant.user_id] = [];
+    acc[grant.user_id].push(grant);
+    return acc;
+  }, {});
+
+  document.getElementById("grant-output").innerHTML = Object.entries(grantsByUser).map(([userId, entries]) => `
+    <div class="connector-item">
+      <strong>Usuario ID ${userId}</strong>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Plataforma</th><th>Estado</th><th>Máx. símbolos</th><th>Máx. movimientos</th><th>Notas</th></tr>
+          </thead>
+          <tbody>
+            ${entries.map(grant => `<tr><td>${grant.platform}</td><td>${grant.is_enabled ? "Habilitado" : "Deshabilitado"}</td><td>${grant.max_symbols}</td><td>${grant.max_daily_movements}</td><td>${grant.notes || "-"}</td></tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
     </div>
   `).join("");
-
-  document.getElementById("grant-output").textContent = JSON.stringify(grants, null, 2);
 }
 
 async function toggleUser(id, is_active, is_admin) {
@@ -66,24 +113,37 @@ document.getElementById('grant-form')?.addEventListener('submit', async (e) => {
       notes: fd.get('notes'),
     })
   });
+  showFeedback("Límites actualizados correctamente.");
   refreshAdmin();
 });
 
 document.getElementById('create-user-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  await api('/api/admin/users', {
-    method: 'POST',
-    body: JSON.stringify({
-      email: String(fd.get('email') || '').trim(),
-      name: String(fd.get('name') || '').trim(),
-      password: String(fd.get('password') || ''),
-    })
-  });
-  e.target.reset();
-  refreshAdmin();
+  try {
+    const fd = new FormData(e.target);
+    const password = String(fd.get('password') || '');
+    if (password.length < 6) {
+      showFeedback("La contraseña debe tener al menos 6 caracteres.", "error");
+      return;
+    }
+
+    await api('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: String(fd.get('email') || '').trim(),
+        name: String(fd.get('name') || '').trim(),
+        password,
+      })
+    });
+    showFeedback("Usuario creado exitosamente.");
+    e.target.reset();
+    refreshAdmin();
+  } catch (err) {
+    showFeedback(`No se pudo crear el usuario: ${err.message}`, "error");
+  }
 });
 
 refreshAdmin().catch(err => {
-  document.getElementById('grant-output').textContent = err.message;
+  const output = document.getElementById('grant-output');
+  if (output) output.innerHTML = `<div class="status-msg status-error">${err.message}</div>`;
 });

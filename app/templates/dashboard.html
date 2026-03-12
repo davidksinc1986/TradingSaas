@@ -24,6 +24,9 @@
       </div>
       <button class="btn" type="button" id="open-guide-btn">Ver guía de conexión</button>
     </div>
+
+    <div class="platform-catalog" id="platform-catalog"></div>
+
     <form id="connector-form" class="form-grid">
       <label>Plataforma
         <select name="platform" id="platform-select"></select>
@@ -58,7 +61,11 @@
   <div class="card">
     <h2>Ejecutar estrategia</h2>
     <form id="run-form" class="form-grid">
-      <label>Connector IDs<input name="connector_ids" placeholder="1,2,3" required></label>
+      <label>Conectores disponibles para ejecutar
+        <select id="run-connector-select" multiple size="5"></select>
+      </label>
+      <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
+
       <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
       <label>Timeframe<input name="timeframe" value="1h"></label>
       <label>Estrategia
@@ -68,8 +75,14 @@
           <option value="momentum_breakout">Momentum Breakout</option>
         </select>
       </label>
+      <small class="hint">EMA+RSI: tendencia + momentum. Mean Reversion: busca retorno al promedio. Momentum Breakout: opera rupturas de niveles clave.</small>
+
       <label>Riesgo por trade<input name="risk_per_trade" type="number" step="0.001" value="0.01"></label>
+      <small class="hint">Se expresa como decimal del capital por operación. Ejemplo: 0.01 = 1%, 0.02 = 2%.</small>
+
       <label>Prob. mínima ML<input name="min_ml_probability" type="number" step="0.01" value="0.55"></label>
+      <small class="hint">Rango recomendado entre 0 y 1. Ejemplo: 0.55 = 55% de confianza mínima.</small>
+
       <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
       <button class="btn primary" type="submit">Ejecutar</button>
     </form>
