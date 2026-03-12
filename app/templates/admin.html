@@ -10,11 +10,13 @@
   <div class="card">
     <h2>Usuarios</h2>
     <form id="create-user-form" class="form-grid admin-form-grid" style="margin-bottom:12px;">
-      <label>Usuario / Email<input name="email" required></label>
-      <label>Nombre<input name="name" required></label>
-      <label>Contraseña<input name="password" required></label>
+      <label>Email de acceso<input name="email" type="email" placeholder="usuario@dominio.com" required></label>
+      <label>Nombre<input name="name" minlength="2" required></label>
+      <label>Contraseña<input name="password" type="password" minlength="6" required></label>
       <button class="btn primary" type="submit">Crear usuario</button>
     </form>
+    <small class="hint">La contraseña debe tener al menos 6 caracteres para poder crear el usuario.</small>
+    <div id="admin-feedback" class="status-msg hidden"></div>
     <div id="admin-users" class="stack"></div>
   </div>
   <div class="card">
@@ -48,7 +50,7 @@
     <label>Notas<input name="notes" placeholder="Plan pro, cuenta demo, etc."></label>
     <button class="btn primary" type="submit">Guardar límite</button>
   </form>
-  <pre id="grant-output" class="prebox"></pre>
+  <div id="grant-output" class="stack" style="margin-top:12px;"></div>
 </section>
 
 <script src="/static/admin.js"></script>
