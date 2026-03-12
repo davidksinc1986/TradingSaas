@@ -4,7 +4,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.db import get_db
 from app.models import User
-from app.schemas import UserCreate, UserLogin
+from app.schemas import UserLogin
 from app.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -18,23 +18,16 @@ def login_page(request: Request):
 
 @router.get("/register", response_class=HTMLResponse)
 def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request, "title": "Register"})
+    raise HTTPException(status_code=403, detail="Self registration is disabled. Contact admin.")
 
 
 @router.post("/register")
 def register(email: str = Form(...), name: str = Form(...), password: str = Form(...), db=Depends(get_db)):
-    payload = UserCreate(email=email, name=name, password=password)
-    exists = db.query(User).filter(User.email == payload.email).first()
-    if exists:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user = User(email=payload.email, name=payload.name, hashed_password=hash_password(payload.password))
-    db.add(user)
-    db.commit()
-    return RedirectResponse(url="/auth/login", status_code=303)
+    raise HTTPException(status_code=403, detail="Self registration is disabled. Contact admin.")
 
 
 @router.post("/login")
-def login(email: str = Form(...), password: str = Form(...), db=Depends(get_db)):
+def login(request: Request, email: str = Form(...), password: str = Form(...), db=Depends(get_db)):
     payload = UserLogin(email=email, password=password)
     user = db.query(User).filter(User.email == payload.email).first()
     if not user or not verify_password(payload.password, user.hashed_password):
@@ -43,7 +36,14 @@ def login(email: str = Form(...), password: str = Form(...), db=Depends(get_db))
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled by admin")
     token = create_access_token(user.email)
     response = RedirectResponse(url="/dashboard", status_code=303)
-    response.set_cookie("access_token", f"Bearer {token}", httponly=True, samesite="lax")
+    response.set_cookie(
+        "access_token",
+        f"Bearer {token}",
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=60 * 60 * 12,
+    )
     return response
 
 

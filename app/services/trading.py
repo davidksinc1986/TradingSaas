@@ -57,6 +57,9 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 price=price,
                 stop_pct=float((connector.config_json or {}).get("stop_pct", 0.01)),
             )
+            max_risk_amount = float((connector.config_json or {}).get("max_risk_amount", 0) or 0)
+            if max_risk_amount > 0:
+                qty = min(qty, max_risk_amount / max(price, 0.0000001))
 
             should_execute = signal != "hold" and prob >= min_ml_probability
             effective_mode = "live" if (use_live_if_available and connector.mode == "live") else connector.mode

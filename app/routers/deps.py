@@ -9,7 +9,9 @@ def current_user(request: Request, db=Depends(get_db)) -> User:
     auth = request.cookies.get("access_token")
     if not auth:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    token = auth.replace("Bearer ", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token format")
+    token = auth.removeprefix("Bearer ")
     email = decode_access_token(token)
     if not email:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")

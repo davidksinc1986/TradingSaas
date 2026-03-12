@@ -13,18 +13,19 @@ class UserCreate(BaseModel):
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=3, max_length=255)
     password: str
 
 
 class ConnectorCreate(BaseModel):
+    user_id: int | None = None
     platform: PLATFORMS
     label: str
     mode: Literal["paper", "live", "signal"] = "paper"
     market_type: Literal["spot", "futures", "cfd", "forex", "signals"] = "spot"
-    symbols: list[str] = []
-    config: dict[str, Any] = {}
-    secrets: dict[str, Any] = {}
+    symbols: list[str] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConnectorUpdate(BaseModel):
@@ -42,8 +43,8 @@ class StrategyRequest(BaseModel):
     symbols: list[str]
     timeframe: str = "1h"
     strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"] = "ema_rsi"
-    risk_per_trade: float = 0.01
-    min_ml_probability: float = 0.55
+    risk_per_trade: float = Field(default=0.01, gt=0, le=0.1)
+    min_ml_probability: float = Field(default=0.55, ge=0, le=1)
     use_live_if_available: bool = False
 
 
@@ -56,12 +57,18 @@ class TradingViewWebhook(BaseModel):
     strategy_slug: str = "tradingview_alert"
     passphrase: str | None = None
     target_connector_id: int | None = None
-    extra: dict[str, Any] = {}
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdminUserUpdate(BaseModel):
     is_active: bool | None = None
     is_admin: bool | None = None
+
+
+class AdminUserCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    name: str = Field(min_length=2, max_length=255)
+    password: str = Field(min_length=6, max_length=255)
 
 
 class AdminGrantUpdate(BaseModel):

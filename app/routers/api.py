@@ -4,6 +4,7 @@ from app.db import get_db
 from app.models import Connector, PlatformPolicy, TradeLog, User, UserPlatformGrant
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
+    AdminUserCreate,
     AdminGrantUpdate,
     AdminPolicyUpdate,
     AdminUserUpdate,
@@ -12,7 +13,7 @@ from app.schemas import (
     StrategyRequest,
     TradingViewWebhook,
 )
-from app.security import encrypt_payload
+from app.security import encrypt_payload, hash_password
 from app.services.connectors import get_client
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.trading import dashboard_data, run_strategy
@@ -24,6 +25,18 @@ router = APIRouter(prefix="/api", tags=["api"])
 def me(user=Depends(current_user), db=Depends(get_db)):
     ensure_user_grants(db, user)
     return {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin}
+
+
+@router.put("/me")
+def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
+    next_name = payload.get("name")
+    if next_name is not None:
+        clean_name = str(next_name).strip()
+        if len(clean_name) < 2 or len(clean_name) > 255:
+            raise HTTPException(status_code=400, detail="Name must be between 2 and 255 characters")
+        user.name = clean_name
+    db.commit()
+    return {"ok": True, "id": user.id, "name": user.name}
 
 
 @router.get("/platform-metadata")
@@ -70,11 +83,15 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
 
 
 @router.post("/connectors")
-def create_connector(payload: ConnectorCreate, db=Depends(get_db), user=Depends(current_user)):
-    ensure_user_grants(db, user)
-    validate_connector_request(db, user, payload.platform, payload.symbols)
+def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = Depends(admin_user)):
+    target_user_id = payload.user_id or user.id
+    target_user = db.query(User).filter(User.id == target_user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+    ensure_user_grants(db, target_user)
+    validate_connector_request(db, target_user, payload.platform, payload.symbols)
     connector = Connector(
-        user_id=user.id,
+        user_id=target_user.id,
         platform=payload.platform,
         label=payload.label,
         mode=payload.mode,
@@ -90,13 +107,16 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user=Depends(
 
 
 @router.put("/connectors/{connector_id}")
-def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get_db), user=Depends(current_user)):
-    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get_db), user: User = Depends(admin_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
 
     next_symbols = payload.symbols if payload.symbols is not None else connector.symbols_json.get("symbols", [])
-    validate_connector_request(db, user, connector.platform, next_symbols, connector_id=connector.id)
+    owner = db.query(User).filter(User.id == connector.user_id).first()
+    if not owner:
+        raise HTTPException(status_code=400, detail="Connector owner not found")
+    validate_connector_request(db, owner, connector.platform, next_symbols, connector_id=connector.id)
 
     if payload.label is not None:
         connector.label = payload.label
@@ -117,8 +137,8 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
 
 
 @router.delete("/connectors/{connector_id}")
-def delete_connector(connector_id: int, db=Depends(get_db), user=Depends(current_user)):
-    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+def delete_connector(connector_id: int, db=Depends(get_db), user: User = Depends(admin_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
     db.delete(connector)
@@ -137,6 +157,24 @@ def test_connector(connector_id: int, db=Depends(get_db), user=Depends(current_u
         return {"status": "ok", "message": "Connection test completed", "raw": data}
     except Exception as exc:
         return {"status": "error", "message": str(exc), "raw": {"platform": connector.platform}}
+
+
+@router.put("/connectors/{connector_id}/credentials")
+def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    if payload.secrets is not None:
+        connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
+
+    if payload.config is not None:
+        current = connector.config_json or {}
+        current.update(payload.config)
+        connector.config_json = current
+
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/strategies/run")
@@ -259,6 +297,25 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         user.is_admin = payload.is_admin
     db.commit()
     return {"ok": True}
+
+
+@router.post("/admin/users")
+def admin_create_user(payload: AdminUserCreate, db=Depends(get_db), _: User = Depends(admin_user)):
+    exists = db.query(User).filter(User.email == payload.email).first()
+    if exists:
+        raise HTTPException(status_code=400, detail="User already exists")
+    user = User(
+        email=payload.email,
+        name=payload.name,
+        hashed_password=hash_password(payload.password),
+        is_active=True,
+        is_admin=False,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    ensure_user_grants(db, user)
+    return {"ok": True, "user_id": user.id}
 
 
 @router.get("/admin/policies")

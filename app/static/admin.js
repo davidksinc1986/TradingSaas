@@ -69,6 +69,21 @@ document.getElementById('grant-form')?.addEventListener('submit', async (e) => {
   refreshAdmin();
 });
 
+document.getElementById('create-user-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await api('/api/admin/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: String(fd.get('email') || '').trim(),
+      name: String(fd.get('name') || '').trim(),
+      password: String(fd.get('password') || ''),
+    })
+  });
+  e.target.reset();
+  refreshAdmin();
+});
+
 refreshAdmin().catch(err => {
   document.getElementById('grant-output').textContent = err.message;
 });

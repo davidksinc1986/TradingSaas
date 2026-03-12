@@ -4,7 +4,7 @@ Esta es la reconstrucción descargable de la v4 en ZIP.
 
 ## Qué incluye
 
-- multiusuario con login y registro
+- multiusuario con login (usuarios creados por super user)
 - cuenta admin inicial por variables de entorno
 - control de usuarios y límites por plataforma
 - conectores para MT5, cTrader, TradingView, Binance, Bybit y OKX
@@ -30,12 +30,18 @@ En esta base se usa sobre todo para **cTrader**:
 ## Variables importantes
 
 ```env
-ADMIN_EMAIL=admin@example.com
-ADMIN_NAME=Super Admin
-ADMIN_PASSWORD=ChangeMe123!
+ADMIN_EMAIL=davidksinc
+ADMIN_NAME=davidksinc
+ADMIN_PASSWORD=M@davi19!
 SECRET_KEY=super-secret-change-me
 DATABASE_URL=sqlite:///./quant_suite.db
 ```
+
+## Modelo operativo actual
+
+- Registro público desactivado: los usuarios los crea el super user.
+- Solo super user puede crear/editar/eliminar conectores y límites.
+- Usuario final: dashboard de solo lectura para operación y actualización de credenciales del conector (keys/secrets/config técnica).
 
 ## Correr local
 

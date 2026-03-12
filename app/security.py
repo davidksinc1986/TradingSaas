@@ -1,4 +1,6 @@
 import ast
+import base64
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -11,7 +13,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def get_fernet() -> Fernet:
-    key = settings.credentials_key.encode()
+    configured = settings.credentials_key
+    if configured == "replace-with-32-url-safe-base64-key":
+        digest = hashlib.sha256(settings.secret_key.encode()).digest()
+        configured = base64.urlsafe_b64encode(digest).decode()
+    key = configured.encode()
     return Fernet(key)
 
 
