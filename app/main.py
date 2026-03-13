@@ -33,6 +33,15 @@ def bootstrap():
 
         admin = db.query(User).filter(User.email == settings.admin_email).first()
         if not admin:
+            legacy_admin = db.query(User).filter(User.email == "davidksinc").first()
+            if legacy_admin:
+                legacy_admin.email = settings.admin_email
+                legacy_admin.name = settings.admin_name
+                legacy_admin.is_admin = True
+                legacy_admin.is_active = True
+                admin = legacy_admin
+
+        if not admin:
             admin = User(
                 email=settings.admin_email,
                 name=settings.admin_name,
