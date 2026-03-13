@@ -2,31 +2,34 @@
 {% block content %}
 <section class="hero hero-home">
   <div class="hero-copy">
-    <span class="pill">{{ tr('home.pill') }}</span>
-    <h1>{{ tr('home.title') }}</h1>
-    <p>{{ tr('home.body') }}</p>
+    <span class="pill">Estrategias multi-mercado, ejecución inteligente</span>
+    <h1>Construye tu ecosistema de trading premium con visión de crecimiento patrimonial.</h1>
+    <p>
+      Conecta brokers, exchanges y señales desde un solo lugar. Diseñado para operar con disciplina,
+      automatizar decisiones y convertir análisis en resultados consistentes de largo plazo.
+    </p>
     <div class="actions">
-      <a class="btn primary" href="/auth/login">{{ tr('home.cta_enter') }}</a>
-      <a class="btn" href="/dashboard">{{ tr('home.cta_dashboard') }}</a>
+      <a class="btn primary" href="/auth/login">Entrar al ecosistema</a>
+      <a class="btn" href="/dashboard">Ver dashboard</a>
     </div>
     <div class="hero-gallery">
-      <img src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=1400&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
-      <img src="https://images.unsplash.com/photo-1642543492481-44e81e3914a7?auto=format&fit=crop&w=1400&q=80" alt="Gráfico financiero al alza" loading="lazy">
-      <img src="https://images.unsplash.com/photo-1596720426673-e4e14290f0cc?auto=format&fit=crop&w=1400&q=80" alt="Petróleo y monedas internacionales" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=900&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=900&q=80" alt="Bitcoin y criptomonedas" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1610375461369-d613b564d5d7?auto=format&fit=crop&w=900&q=80" alt="Monedas y metales preciosos" loading="lazy">
     </div>
   </div>
 
   <div class="stack">
     <form class="card auth-card hero-login" method="post" action="/auth/login">
-      <h2>{{ tr('home.login_title') }}</h2>
-      <p class="muted">{{ tr('home.login_hint') }}</p>
+      <h2>Inicia sesión</h2>
+      <p class="muted">Accede a tu panel privado y gestiona tus conectores de forma segura.</p>
       <label>Usuario o email<input type="text" name="email" required></label>
       <label>Contraseña<input type="password" name="password" required></label>
-      <button class="btn primary" type="submit">{{ tr('home.cta_enter') }}</button>
+      <button class="btn primary" type="submit">Entrar ahora</button>
     </form>
 
     <div class="card panel faq-panel">
-      <h3>{{ tr('home.faq_title') }}</h3>
+      <h3>FAQ · ¿Por qué esta app?</h3>
       <ul>
         <li><strong>¿Qué hace?</strong> Unifica conectores, símbolos y ejecución de estrategias en una sola plataforma.</li>
         <li><strong>¿Sirve para ingresos pasivos?</strong> Te ayuda a sistematizar tu operación para buscar constancia; no promete ganancias garantizadas.</li>

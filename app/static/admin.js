@@ -32,7 +32,7 @@ async function refreshSelectedUserProfile() {
   if (!select || !out || !select.value) return;
 
   const data = await api(`/api/admin/users/${select.value}/profile`);
-  const { user, policies, grants, connectors, strategy_control } = data;
+  const { user, policies, grants, connectors } = data;
   const grantMap = grants.reduce((acc, g) => ({ ...acc, [g.platform]: g }), {});
 
   out.innerHTML = `
@@ -71,7 +71,7 @@ async function refreshSelectedUserProfile() {
                 <label>Máx. símbolos<input name="max_symbols" type="number" value="${grant.max_symbols}"></label>
                 <label>Máx. movimientos diarios<input name="max_daily_movements" type="number" value="${grant.max_daily_movements}"></label>
                 <label>Notas<input name="notes" value="${grant.notes || ""}" placeholder="Ej: fixed:10 o percent:75"></label>
-                <button class="btn save-btn" type="submit">Guardar</button>
+                <button class="btn primary" type="submit">Guardar</button>
               </div>
             </form>
           `;
@@ -97,30 +97,11 @@ async function refreshSelectedUserProfile() {
               </label>
               <label>Valor<input name="allocation_value" type="number" step="0.01" value="${c.allocation_value || 0}"></label>
               <label>Símbolos autorizados<input name="symbols" value="${(c.symbols || []).join(",")}" placeholder="BTC/USDT,ETH/USDT"></label>
-              <button class="btn save-btn" type="submit">Guardar conector</button>
+              <button class="btn primary" type="submit">Guardar conector</button>
             </div>
           </form>
         `).join("") || '<small class="hint">Este usuario aún no tiene conectores.</small>'}
       </div>
-    </div>
-
-    <div class="connector-item">
-      <strong>Estrategias del usuario</strong>
-      <p class="hint">Puedes dejar el usuario "Manejado por admin" o permitir que lo gestione él mismo.</p>
-      <form id="strategy-control-form" class="form-grid admin-form-grid" style="margin-top:8px;">
-        <label>Modo de gestión
-          <select name="managed_by_admin">
-            <option value="true" ${strategy_control?.managed_by_admin ? "selected" : ""}>Manejado por admin</option>
-            <option value="false" ${!strategy_control?.managed_by_admin ? "selected" : ""}>Manejado por usuario</option>
-          </select>
-        </label>
-        <label>Estrategias permitidas
-          <select name="allowed_strategies" multiple size="3">
-            ${(strategy_control?.all_strategies || []).map((slug) => `<option value="${slug}" ${(strategy_control?.allowed_strategies || []).includes(slug) ? "selected" : ""}>${slug}</option>`).join("")}
-          </select>
-        </label>
-        <button class="btn save-btn" type="submit">Guardar estrategias</button>
-      </form>
     </div>
   `;
 
@@ -161,22 +142,6 @@ async function refreshSelectedUserProfile() {
       showFeedback("Conector actualizado correctamente.");
       refreshSelectedUserProfile();
     });
-  });
-
-  out.querySelector("#strategy-control-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const fd = new FormData(form);
-    const selected = Array.from(form.querySelector('select[name="allowed_strategies"]').selectedOptions).map((option) => option.value);
-    await api(`/api/admin/users/${user.id}/strategy-control`, {
-      method: "PUT",
-      body: JSON.stringify({
-        managed_by_admin: fd.get("managed_by_admin") === "true",
-        allowed_strategies: selected,
-      }),
-    });
-    showFeedback("Estrategias actualizadas correctamente.");
-    refreshSelectedUserProfile();
   });
 }
 

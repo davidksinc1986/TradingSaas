@@ -43,7 +43,6 @@ def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
         db.commit()
     return control
 
-
 @router.get("/me")
 def me(user=Depends(current_user), db=Depends(get_db)):
     ensure_user_grants(db, user)
@@ -339,10 +338,11 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         raise HTTPException(status_code=404, detail="User not found")
 
     if _is_root_admin(user):
-        raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be modified")
+if _is_root_admin(user):
+    raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be modified")
 
-    if payload.is_admin is not None and not _is_root_admin(actor):
-        raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
+if payload.is_admin is not None and not _is_root_admin(actor):
+    raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
@@ -396,12 +396,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "display_name": p.display_name,
             "is_enabled_global": p.is_enabled_global,
             "user_enabled": grants_by_platform.get(p.platform).is_enabled if p.platform in grants_by_platform else False,
-        } for p in db.query(PlatformPolicy).order_by(PlatformPolicy.display_name.asc()).all()],
-        "strategy_control": {
-            "managed_by_admin": strategy_control.managed_by_admin,
-            "allowed_strategies": (strategy_control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
-            "all_strategies": ALL_STRATEGIES,
-        }
+        } for p in db.query(PlatformPolicy).order_by(PlatformPolicy.display_name.asc()).all()]
     }
 
 
