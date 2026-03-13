@@ -35,6 +35,7 @@ const PLATFORM_FIELD_MAP = {
   ],
 };
 let METADATA={platforms:[]};
+let STRATEGY_CONTROL = { managed_by_admin: false, allowed_strategies: [], all_strategies: [] };
 async function api(url,options={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},credentials:'same-origin',...options});if(!res.ok) throw new Error(await res.text());return res.json();}
 function parseCsv(value){return String(value || '').split(',').map(x=>x.trim()).filter(Boolean);}
 function getPlatformMeta(platform){return METADATA.platforms.find(p=>p.platform===platform);}
@@ -131,6 +132,27 @@ async function refreshDashboard(){
   const tbody=document.querySelector('#trades-table tbody');tbody.innerHTML=trades.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString()}</td><td>${t.platform}</td><td>${(t.meta&&t.meta.market_type)||'-'}</td><td>${t.symbol}</td><td>${t.side}</td><td>${t.quantity}</td><td>${Number(t.price).toFixed(4)}</td><td>${t.status}</td><td>${t.pnl}</td></tr>`).join('');
   const labels=Object.keys(summary.platforms||{});const values=Object.values(summary.platforms||{});const canvas=document.getElementById('platform-chart');if(window.platformChart) window.platformChart.destroy();window.platformChart=new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data:values}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}}}});
 }
+
+function applyStrategyControlUI() {
+  const select = document.querySelector('select[name="strategy_slug"]');
+  const hint = document.getElementById('strategy-managed-hint');
+  if (!select) return;
+
+  const allowed = STRATEGY_CONTROL.allowed_strategies?.length ? STRATEGY_CONTROL.allowed_strategies : Array.from(select.options).map((o) => o.value);
+  Array.from(select.options).forEach((option) => {
+    option.hidden = !allowed.includes(option.value);
+    option.disabled = !allowed.includes(option.value);
+  });
+  if (!allowed.includes(select.value) && allowed.length) select.value = allowed[0];
+
+  if (STRATEGY_CONTROL.managed_by_admin) {
+    select.disabled = true;
+    if (hint) hint.textContent = 'Estrategia gestionada por administrador para esta cuenta.';
+  } else {
+    select.disabled = false;
+    if (hint) hint.textContent = 'Puedes elegir entre las estrategias habilitadas para tu cuenta.';
+  }
+}
 async function testConnector(id){const out=await api(`/api/connectors/${id}/test`,{method:'POST'});alert(`${out.status}: ${out.message}\n\n${JSON.stringify(out.raw,null,2)}`);}async function deleteConnector(id){await api(`/api/connectors/${id}`,{method:'DELETE'});refreshDashboard();}
 document.getElementById('platform-select')?.addEventListener('change',e=>{setPlatformExample(e.target.value);});
 document.getElementById('market-type-select')?.addEventListener('change',()=>{setPlatformExample(document.getElementById('platform-select').value);});
@@ -155,5 +177,12 @@ document.getElementById('run-form')?.addEventListener('submit',async e=>{
   }
   const result=await api('/api/strategies/run',{method:'POST',body:JSON.stringify({connector_ids:connectorIds,symbols:parseCsv(fd.get('symbols')),timeframe:fd.get('timeframe'),strategy_slug:fd.get('strategy_slug'),risk_per_trade:Number(fd.get('risk_per_trade')),min_ml_probability:Number(fd.get('min_ml_probability')),use_live_if_available:fd.get('use_live_if_available')==='on'})});document.getElementById('run-output').textContent=JSON.stringify(result,null,2);refreshDashboard();
 });
-async function init(){METADATA=await api('/api/platform-metadata');renderPlatformCatalog();renderPlatformSelect();await refreshDashboard();}
+async function init(){
+  METADATA=await api('/api/platform-metadata');
+  STRATEGY_CONTROL = await api('/api/strategy-control');
+  renderPlatformCatalog();
+  renderPlatformSelect();
+  applyStrategyControlUI();
+  await refreshDashboard();
+}
 init().catch(err=>{console.error(err);const out=document.getElementById('run-output');if(out) out.textContent='Error cargando dashboard: '+err.message;});

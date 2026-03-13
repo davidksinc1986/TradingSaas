@@ -1,15 +1,15 @@
 <!doctype html>
-<html lang="es">
+<html lang="{{ locale or 'es' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{{ title }} • Multi Market Quant Suite</title>
+  <title>{{ title }} • {{ tr('app.name') }}</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Multi Market Quant Suite v3</div>
+    <div class="brand">{{ tr('app.name') }} <small class="brand-cutline">{{ tr('app.tagline') }}</small></div>
     <nav class="nav">
       <a href="/">Inicio</a>
       <a href="/dashboard">Dashboard</a>

@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./quant_suite.db"
     credentials_key: str = "replace-with-32-url-safe-base64-key"
 
-    admin_email: str = "davidksinc"
+    admin_email: str = "davidksinc@gmail.com"
     admin_name: str = "davidksinc"
     admin_password: str = "M@davi19!"
 

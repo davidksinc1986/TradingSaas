@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
-from app.models import Connector, PlatformPolicy, TradeLog, User, UserPlatformGrant
+from app.core import settings
+from app.models import Connector, PlatformPolicy, TradeLog, User, UserPlatformGrant, UserStrategyControl
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
     AdminUserCreate,
     AdminGrantUpdate,
     AdminPolicyUpdate,
+    AdminStrategyControlUpdate,
     AdminUserUpdate,
     ConnectorCreate,
     ConnectorUpdate,
@@ -19,14 +21,27 @@ from app.services.policies import ensure_user_grants, get_user_grant, validate_c
 from app.services.trading import dashboard_data, run_strategy
 
 router = APIRouter(prefix="/api", tags=["api"])
-ROOT_ADMIN_HANDLE = "davidksinc"
+ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
+ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]
 
 
 def _is_root_admin(user: User) -> bool:
-    email_handle = (user.email or "").split("@")[0].strip().lower()
-    name_handle = (user.name or "").strip().lower()
-    return email_handle == ROOT_ADMIN_HANDLE or name_handle == ROOT_ADMIN_HANDLE
+    # IMPORTANT: root-admin identity must rely on immutable identity only.
+    # user.name is editable via /api/me and cannot be used for privilege checks.
+    return (user.email or "").strip().lower() == ROOT_ADMIN_EMAIL
 
+
+def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
+    control = db.query(UserStrategyControl).filter(UserStrategyControl.user_id == user_id).first()
+    if not control:
+        control = UserStrategyControl(user_id=user_id, managed_by_admin=False, allowed_strategies_json={"items": ALL_STRATEGIES})
+        db.add(control)
+        db.commit()
+        db.refresh(control)
+    if not (control.allowed_strategies_json or {}).get("items"):
+        control.allowed_strategies_json = {"items": ALL_STRATEGIES}
+        db.commit()
+    return control
 
 @router.get("/me")
 def me(user=Depends(current_user), db=Depends(get_db)):
@@ -194,6 +209,11 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
 
 @router.post("/strategies/run")
 def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Depends(current_user)):
+    control = _ensure_strategy_control(db, user.id)
+    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+    if control.managed_by_admin and payload.strategy_slug not in allowed:
+        raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+
     result = run_strategy(
         db=db,
         user_id=user.id,
@@ -206,6 +226,16 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         use_live_if_available=payload.use_live_if_available,
     )
     return {"ok": True, "results": result}
+
+
+@router.get("/strategy-control")
+def get_strategy_control(db=Depends(get_db), user=Depends(current_user)):
+    control = _ensure_strategy_control(db, user.id)
+    return {
+        "managed_by_admin": control.managed_by_admin,
+        "allowed_strategies": (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
+        "all_strategies": ALL_STRATEGIES,
+    }
 
 
 @router.get("/dashboard")
@@ -308,10 +338,11 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         raise HTTPException(status_code=404, detail="User not found")
 
     if _is_root_admin(user):
-        raise HTTPException(status_code=403, detail="davidksinc is hierarchical and cannot be modified")
+if _is_root_admin(user):
+    raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be modified")
 
-    if payload.is_admin is not None and not _is_root_admin(actor):
-        raise HTTPException(status_code=403, detail="Only davidksinc can assign or remove admin role")
+if payload.is_admin is not None and not _is_root_admin(actor):
+    raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
@@ -331,6 +362,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
     connectors = db.query(Connector).filter(Connector.user_id == user_id).order_by(Connector.created_at.desc()).all()
     grants = db.query(UserPlatformGrant).filter(UserPlatformGrant.user_id == user_id).all()
     grants_by_platform = {g.platform: g for g in grants}
+    strategy_control = _ensure_strategy_control(db, user.id)
 
     return {
         "user": {
@@ -445,5 +477,18 @@ def admin_upsert_grant(payload: AdminGrantUpdate, db=Depends(get_db), _: User = 
     grant.max_symbols = payload.max_symbols
     grant.max_daily_movements = payload.max_daily_movements
     grant.notes = payload.notes
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/admin/users/{user_id}/strategy-control")
+def admin_update_strategy_control(user_id: int, payload: AdminStrategyControlUpdate, db=Depends(get_db), _: User = Depends(admin_user)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    control = _ensure_strategy_control(db, user_id)
+    control.managed_by_admin = payload.managed_by_admin
+    allowed = [s for s in payload.allowed_strategies if s in ALL_STRATEGIES]
+    control.allowed_strategies_json = {"items": allowed or ALL_STRATEGIES}
     db.commit()
     return {"ok": True}
