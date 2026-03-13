@@ -9,21 +9,29 @@
             <stop offset="0%" stop-color="#f0b90b" />
             <stop offset="100%" stop-color="#ffe186" />
           </linearGradient>
+          <radialGradient id="snakeGlow" cx="55%" cy="40%" r="65%">
+            <stop offset="0%" stop-color="#ffe9a6" stop-opacity="0.8" />
+            <stop offset="100%" stop-color="#f0b90b" stop-opacity="0" />
+          </radialGradient>
         </defs>
-        <g opacity="0.18" stroke="#f6d365" stroke-width="2" fill="none">
-          <circle cx="60" cy="38" r="22" />
-          <circle cx="122" cy="54" r="18" />
-          <circle cx="182" cy="36" r="20" />
-          <circle cx="245" cy="60" r="19" />
+        <rect x="8" y="8" width="304" height="164" rx="26" fill="url(#snakeGlow)" opacity="0.38" />
+        <g opacity="0.22" stroke="#f6d365" stroke-width="2" fill="none">
+          <circle cx="64" cy="42" r="20" />
+          <circle cx="124" cy="60" r="16" />
+          <circle cx="184" cy="44" r="18" />
+          <circle cx="246" cy="62" r="17" />
         </g>
-        <path d="M22 140 C 58 125, 78 130, 108 108 S 162 78, 194 86 S 246 54, 296 24" stroke="url(#snakeStroke)" stroke-width="14" fill="none" stroke-linecap="round"/>
-        <circle cx="296" cy="24" r="12" fill="#ffe186"/>
-        <circle cx="300" cy="20" r="2.5" fill="#1b1400"/>
-        <path d="M307 24 l12 8" stroke="#ffe186" stroke-width="3" stroke-linecap="round"/>
+        <path d="M24 138 C 64 120, 94 124, 128 100 S 186 74, 216 86 S 250 74, 276 54" stroke="#654a00" stroke-opacity="0.45" stroke-width="18" fill="none" stroke-linecap="round"/>
+        <path d="M24 138 C 64 120, 94 124, 128 100 S 186 74, 216 86 S 250 74, 276 54" stroke="url(#snakeStroke)" stroke-width="13" fill="none" stroke-linecap="round"/>
+        <path d="M276 54 C 290 44, 296 34, 301 26" stroke="url(#snakeStroke)" stroke-width="12" fill="none" stroke-linecap="round"/>
+        <ellipse cx="302" cy="24" rx="13" ry="11" fill="#ffe186"/>
+        <circle cx="306" cy="20" r="2.6" fill="#1b1400"/>
+        <path d="M313 26 l9 5" stroke="#ffe186" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M292 22 q6 4 10 1" stroke="#1b1400" stroke-opacity="0.4" stroke-width="1.6" fill="none"/>
       </svg>
       <div>
-        <h2 class="hero-brand-title">Trading Snake Mafia</h2>
-        <p class="hero-brand-slogan">Quantom Matematics</p>
+        <h2 class="hero-brand-title">Trading Snake Mafia<br/> quantum computing mathematics</h2>
+        <p class="hero-brand-slogan">Ejecución algorítmica con identidad premium</p>
       </div>
     </div>
     <span class="pill">Estrategias multi-mercado, ejecución inteligente</span>
@@ -37,9 +45,9 @@
       <a class="btn" href="/dashboard">Ver dashboard</a>
     </div>
     <div class="hero-slider" id="hero-slider">
-      <img class="active" src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=1600&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
-      <img src="https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=1600&q=80" alt="Bitcoin y criptomonedas" loading="lazy">
-      <img src="https://images.unsplash.com/photo-1518544866330-95a2b7f8e90f?auto=format&fit=crop&w=1600&q=80" alt="Mesa con laptop y análisis financiero" loading="lazy">
+      <div class="hero-slide active" style="background-image:url('https://images.pexels.com/photos/6802042/pexels-photo-6802042.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Pantallas con gráficos financieros"></div>
+      <div class="hero-slide" style="background-image:url('https://images.pexels.com/photos/730547/pexels-photo-730547.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Bitcoin y criptomonedas"></div>
+      <div class="hero-slide" style="background-image:url('https://images.pexels.com/photos/6770775/pexels-photo-6770775.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Mesa con laptop y análisis financiero"></div>
     </div>
   </div>
 
@@ -78,7 +86,7 @@
 (function(){
   const slider=document.getElementById('hero-slider');
   if(!slider) return;
-  const slides=Array.from(slider.querySelectorAll('img'));
+  const slides=Array.from(slider.querySelectorAll('.hero-slide'));
   let index=0;
   setInterval(()=>{
     slides[index].classList.remove('active');
