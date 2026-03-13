@@ -3,7 +3,7 @@
 <section class="dashboard-header">
   <span class="pill">Admin</span>
   <h1>Panel de control administrativo</h1>
-  <p>Desde aquí puedes habilitar o deshabilitar usuarios, plataformas, límites por cuenta, símbolos sugeridos y símbolos permitidos.</p>
+  <p>Gestiona usuarios, permisos por plataforma y configuración de movimiento por app para el usuario seleccionado.</p>
 </section>
 
 <section class="grid-2">
@@ -17,40 +17,20 @@
     </form>
     <small class="hint">La contraseña debe tener al menos 6 caracteres para poder crear el usuario.</small>
     <div id="admin-feedback" class="status-msg hidden"></div>
+    <label style="margin-top:12px;display:block;">Usuario a gestionar
+      <select id="selected-user"></select>
+    </label>
     <div id="admin-users" class="stack"></div>
   </div>
   <div class="card">
-    <h2>Políticas de plataforma</h2>
-    <div id="admin-policies" class="stack"></div>
+    <h2>Perfil del usuario seleccionado</h2>
+    <div id="selected-user-profile" class="stack"></div>
   </div>
 </section>
 
 <section class="card">
-  <h2>Asignar límites por usuario</h2>
-  <form id="grant-form" class="form-grid admin-form-grid">
-    <label>User ID<input name="user_id" type="number" required></label>
-    <label>Plataforma
-      <select name="platform">
-        <option value="mt5">MT5</option>
-        <option value="ctrader">cTrader</option>
-        <option value="tradingview">TradingView</option>
-        <option value="binance">Binance</option>
-        <option value="bybit">Bybit</option>
-        <option value="okx">OKX</option>
-      </select>
-    </label>
-    <label>Habilitado
-      <select name="is_enabled">
-        <option value="true">Sí</option>
-        <option value="false">No</option>
-      </select>
-    </label>
-    <label>Máx. símbolos<input name="max_symbols" type="number" value="5" required></label>
-    <label>Máx. movimientos diarios<input name="max_daily_movements" type="number" value="20" required></label>
-    <label>Notas<input name="notes" placeholder="Plan pro, cuenta demo, etc."></label>
-    <button class="btn primary" type="submit">Guardar límite</button>
-  </form>
-  <div id="grant-output" class="stack" style="margin-top:12px;"></div>
+  <h2>Políticas globales de plataforma</h2>
+  <div id="admin-policies" class="stack"></div>
 </section>
 
 <script src="/static/admin.js"></script>
