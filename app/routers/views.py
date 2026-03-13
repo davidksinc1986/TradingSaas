@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from app.core import settings
 from app.db import get_db
 from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
 from app.routers.deps import admin_user, current_user
@@ -16,6 +17,7 @@ def base_context(request: Request, **kwargs):
     locale = detect_locale(request)
     ctx = {
         "request": request,
+        "static_version": settings.static_version,
         "locale": locale,
         "supported_locales": SUPPORTED_LOCALES,
         "tr": lambda key: translate(key, locale),

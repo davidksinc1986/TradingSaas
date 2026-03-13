@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 720
     database_url: str = "sqlite:///./quant_suite.db"
     credentials_key: str = "replace-with-32-url-safe-base64-key"
+    static_version: str = "1"
 
     admin_email: str = "davidksinc@gmail.com"
     admin_name: str = "davidksinc"

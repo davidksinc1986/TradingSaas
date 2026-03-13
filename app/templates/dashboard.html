@@ -24,13 +24,16 @@
 
 <section id="tab-profile" class="tab-panel active">
   <div class="card">
-    <h2>Perfil de usuario</h2>
+    <h2 id="profile-title">Perfil de usuario</h2>
     <form id="profile-form" class="form-grid profile-grid">
       <label>Nombre
         <input name="name" id="profile-name" required>
       </label>
       <label>Email
         <input name="email" id="profile-email" disabled>
+      </label>
+      <label>Número de teléfono (WhatsApp futuro)
+        <input name="phone" id="profile-phone" placeholder="+57 300 000 0000">
       </label>
       <small class="hint">El email solo puede editarlo el super user.</small>
       <button class="btn primary" type="submit">Guardar perfil</button>
@@ -101,7 +104,21 @@
     </div>
   </div>
 
-  <section class="card">
+  
+  <section class="card" id="admin-market-board" style="display:none;">
+    <div class="row-between">
+      <h2>Dashboard interactivo de mercado (Top 10)</h2>
+      <button class="btn" id="refresh-market-btn" type="button">Actualizar ahora</button>
+    </div>
+    <div class="market-board">
+      <div>
+        <canvas id="market-strength-chart" height="240"></canvas>
+      </div>
+      <div id="market-ticker-list" class="ticker-list"></div>
+    </div>
+  </section>
+
+<section class="card">
     <div class="row-between">
       <h2>Transacciones</h2>
       <label>Filtro
@@ -155,5 +172,5 @@
   </div>
 </div>
 
-<script src="/static/dashboard.js"></script>
+<script src="/static/dashboard.js?v={{ static_version }}"></script>
 {% endblock %}

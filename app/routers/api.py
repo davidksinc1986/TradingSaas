@@ -46,7 +46,7 @@ def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
 @router.get("/me")
 def me(user=Depends(current_user), db=Depends(get_db)):
     ensure_user_grants(db, user)
-    return {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin}
+    return {"id": user.id, "email": user.email, "name": user.name, "phone": user.phone, "is_admin": user.is_admin}
 
 
 @router.put("/me")
@@ -57,8 +57,16 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         if len(clean_name) < 2 or len(clean_name) > 255:
             raise HTTPException(status_code=400, detail="Name must be between 2 and 255 characters")
         user.name = clean_name
+
+    next_phone = payload.get("phone")
+    if next_phone is not None:
+        clean_phone = str(next_phone).strip()
+        if clean_phone and (len(clean_phone) < 7 or len(clean_phone) > 40):
+            raise HTTPException(status_code=400, detail="Phone must be between 7 and 40 characters")
+        user.phone = clean_phone or None
+
     db.commit()
-    return {"ok": True, "id": user.id, "name": user.name}
+    return {"ok": True, "id": user.id, "name": user.name, "phone": user.phone}
 
 
 @router.get("/platform-metadata")
@@ -260,6 +268,28 @@ def dashboard(db=Depends(get_db), user=Depends(current_user)):
     }
 
 
+@router.get("/market/top-strength")
+async def market_top_strength(limit: int = 10, user=Depends(current_user)):
+    _ = user
+    import httpx
+
+    target = min(max(limit, 1), 20)
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        payload = response.json()
+
+    usdt_pairs = [item for item in payload if str(item.get("symbol", "")).endswith("USDT")]
+    ranked = sorted(usdt_pairs, key=lambda item: float(item.get("priceChangePercent", 0) or 0), reverse=True)[:target]
+    return [{
+        "symbol": item.get("symbol"),
+        "price": float(item.get("lastPrice", 0) or 0),
+        "change_percent": float(item.get("priceChangePercent", 0) or 0),
+        "volume": float(item.get("quoteVolume", 0) or 0),
+    } for item in ranked]
+
+
 @router.get("/trades")
 def list_trades(db=Depends(get_db), user=Depends(current_user)):
     trades = db.query(TradeLog).filter(TradeLog.user_id == user.id).order_by(TradeLog.created_at.desc()).limit(200).all()
@@ -406,6 +436,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "name": user.name,
             "is_admin": user.is_admin,
             "is_active": user.is_active,
+            "phone": user.phone,
             "is_root": _is_root_admin(user),
         },
         "grants": [{
