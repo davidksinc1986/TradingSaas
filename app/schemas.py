@@ -86,3 +86,8 @@ class AdminPolicyUpdate(BaseModel):
     allow_manual_symbols: bool | None = None
     top_symbols: list[str] | None = None
     allowed_symbols: list[str] | None = None
+
+
+class AdminStrategyControlUpdate(BaseModel):
+    managed_by_admin: bool
+    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]] = Field(default_factory=list)

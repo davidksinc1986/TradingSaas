@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_db
+from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
 from app.models import User
 from app.schemas import UserLogin
 from app.security import create_access_token, hash_password, verify_password
@@ -11,9 +12,21 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 templates = Jinja2Templates(directory="app/templates")
 
 
+def base_context(request: Request, **kwargs):
+    locale = detect_locale(request)
+    ctx = {
+        "request": request,
+        "locale": locale,
+        "supported_locales": SUPPORTED_LOCALES,
+        "tr": lambda key: translate(key, locale),
+    }
+    ctx.update(kwargs)
+    return ctx
+
+
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "title": "Login"})
+    return templates.TemplateResponse("login.html", base_context(request, title="Login"))
 
 
 @router.get("/register", response_class=HTMLResponse)
