@@ -1,11 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="dashboard-header">
+<section class="dashboard-header dashboard-header-grid">
   <div>
     <span class="pill">Hola, {{ user.name }}</span>
     <h1>Tu centro de operación inteligente</h1>
-    <p>Todo tu flujo en un solo lugar: perfil, conectores por plataforma, estrategias y resultados.</p>
+    <p>Gestiona conectores, estrategias y resultados desde una vista simple y rápida.</p>
   </div>
+  <aside class="card economic-summary" id="economic-summary">
+    <div class="row-between">
+      <h3>Resumen económico</h3>
+      <small class="hint">Inversiones registradas</small>
+    </div>
+    <div class="economic-grid">
+      <div class="economic-item">
+        <small>Compras</small>
+        <strong id="eco-buy">0.00</strong>
+      </div>
+      <div class="economic-item">
+        <small>Ventas</small>
+        <strong id="eco-sell">0.00</strong>
+      </div>
+      <div class="economic-item economic-item-wide">
+        <small>Generado este mes</small>
+        <strong id="eco-monthly-pnl">0.00</strong>
+      </div>
+    </div>
+  </aside>
 </section>
 
 <section class="stats-grid">
