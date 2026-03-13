@@ -42,20 +42,20 @@
       <label>Tipo de mercado
         <select name="market_type" id="market-type-select"></select>
       </label>
-      <div class="card soft-card">
+      <div class="card soft-card" id="suggested-symbol-card">
         <strong>Símbolos sugeridos</strong>
         <div id="symbol-preset-list" class="chip-wrap"></div>
         <small class="hint" id="symbol-limit-hint"></small>
       </div>
-      <label>Símbolos elegidos (coma separados)<input id="symbols-input" name="symbols" placeholder="BTC/USDT,ETH/USDT,XAUUSD"></label>
-      <label>Config JSON<textarea id="config-json" name="config" placeholder='{"paper_balance":10000,"stop_pct":0.01}'></textarea></label>
-      <label>Secrets JSON<textarea id="secrets-json" name="secrets" placeholder='{"api_key":"...","secret_key":"..."}'></textarea></label>
+      <label>Símbolos elegidos (separados por coma)<input id="symbols-input" name="symbols" placeholder="BTC/USDT,ETH/USDT"></label>
+
+      <div class="card soft-card">
+        <strong>Credenciales del conector</strong>
+        <p class="hint">Completa estos campos. Nosotros guardamos la configuración técnica por detrás.</p>
+        <div id="connector-friendly-fields" class="form-grid"></div>
+      </div>
       <button class="btn primary" type="submit">Guardar conector</button>
     </form>
-    <div class="examples">
-      <strong>Ejemplo rápido</strong>
-      <pre id="connector-example"></pre>
-    </div>
   </div>
 
   <div class="card">

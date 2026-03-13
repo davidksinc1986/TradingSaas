@@ -19,6 +19,13 @@ from app.services.policies import ensure_user_grants, get_user_grant, validate_c
 from app.services.trading import dashboard_data, run_strategy
 
 router = APIRouter(prefix="/api", tags=["api"])
+ROOT_ADMIN_HANDLE = "davidksinc"
+
+
+def _is_root_admin(user: User) -> bool:
+    email_handle = (user.email or "").split("@")[0].strip().lower()
+    name_handle = (user.name or "").strip().lower()
+    return email_handle == ROOT_ADMIN_HANDLE or name_handle == ROOT_ADMIN_HANDLE
 
 
 @router.get("/me")
@@ -83,8 +90,10 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
 
 
 @router.post("/connectors")
-def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = Depends(admin_user)):
+def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = Depends(current_user)):
     target_user_id = payload.user_id or user.id
+    if target_user_id != user.id:
+        admin_user(user)
     target_user = db.query(User).filter(User.id == target_user_id).first()
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")
@@ -107,10 +116,12 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
 
 
 @router.put("/connectors/{connector_id}")
-def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get_db), user: User = Depends(admin_user)):
+def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get_db), user: User = Depends(current_user)):
     connector = db.query(Connector).filter(Connector.id == connector_id).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+    if connector.user_id != user.id:
+        admin_user(user)
 
     next_symbols = payload.symbols if payload.symbols is not None else connector.symbols_json.get("symbols", [])
     owner = db.query(User).filter(User.id == connector.user_id).first()
@@ -127,7 +138,9 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     if payload.symbols is not None:
         connector.symbols_json = {"symbols": payload.symbols}
     if payload.config is not None:
-        connector.config_json = payload.config
+        current = connector.config_json or {}
+        current.update(payload.config)
+        connector.config_json = current
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -137,10 +150,12 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
 
 
 @router.delete("/connectors/{connector_id}")
-def delete_connector(connector_id: int, db=Depends(get_db), user: User = Depends(admin_user)):
+def delete_connector(connector_id: int, db=Depends(get_db), user: User = Depends(current_user)):
     connector = db.query(Connector).filter(Connector.id == connector_id).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+    if connector.user_id != user.id:
+        admin_user(user)
     db.delete(connector)
     db.commit()
     return {"ok": True}
@@ -287,16 +302,70 @@ def admin_list_users(db=Depends(get_db), _: User = Depends(admin_user)):
 
 
 @router.put("/admin/users/{user_id}")
-def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db), _: User = Depends(admin_user)):
+def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db), actor: User = Depends(admin_user)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if _is_root_admin(user):
+        raise HTTPException(status_code=403, detail="davidksinc is hierarchical and cannot be modified")
+
+    if payload.is_admin is not None and not _is_root_admin(actor):
+        raise HTTPException(status_code=403, detail="Only davidksinc can assign or remove admin role")
+
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.is_admin is not None:
         user.is_admin = payload.is_admin
     db.commit()
     return {"ok": True}
+
+
+@router.get("/admin/users/{user_id}/profile")
+def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin_user)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    ensure_user_grants(db, user)
+    connectors = db.query(Connector).filter(Connector.user_id == user_id).order_by(Connector.created_at.desc()).all()
+    grants = db.query(UserPlatformGrant).filter(UserPlatformGrant.user_id == user_id).all()
+    grants_by_platform = {g.platform: g for g in grants}
+
+    return {
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "is_admin": user.is_admin,
+            "is_active": user.is_active,
+            "is_root": _is_root_admin(user),
+        },
+        "grants": [{
+            "platform": grant.platform,
+            "is_enabled": grant.is_enabled,
+            "max_symbols": grant.max_symbols,
+            "max_daily_movements": grant.max_daily_movements,
+            "notes": grant.notes,
+        } for grant in grants],
+        "connectors": [{
+            "id": c.id,
+            "platform": c.platform,
+            "label": c.label,
+            "mode": c.mode,
+            "market_type": c.market_type,
+            "is_enabled": c.is_enabled,
+            "symbols": c.symbols_json.get("symbols", []),
+            "allocation_mode": (c.config_json or {}).get("allocation_mode", "fixed"),
+            "allocation_value": (c.config_json or {}).get("allocation_value", (c.config_json or {}).get("default_quantity", 0)),
+        } for c in connectors],
+        "policies": [{
+            "platform": p.platform,
+            "display_name": p.display_name,
+            "is_enabled_global": p.is_enabled_global,
+            "user_enabled": grants_by_platform.get(p.platform).is_enabled if p.platform in grants_by_platform else False,
+        } for p in db.query(PlatformPolicy).order_by(PlatformPolicy.display_name.asc()).all()]
+    }
 
 
 @router.post("/admin/users")

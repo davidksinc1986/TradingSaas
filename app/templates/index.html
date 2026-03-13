@@ -1,27 +1,42 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero">
-  <div>
-    <span class="pill">Trading cuantitativo multi-plataforma</span>
-    <h1>Una sola cuenta de usuario para gestionar MT5, cTrader, TradingView, Binance, Bybit y OKX.</h1>
+<section class="hero hero-home">
+  <div class="hero-copy">
+    <span class="pill">Estrategias multi-mercado, ejecución inteligente</span>
+    <h1>Construye tu ecosistema de trading premium con visión de crecimiento patrimonial.</h1>
     <p>
-      El super usuario centraliza la operación: crea usuarios, configura conectores/plataformas/símbolos y límites.
-      El usuario final inicia sesión y opera con dashboard de lectura, cargando solo credenciales necesarias.
+      Conecta brokers, exchanges y señales desde un solo lugar. Diseñado para operar con disciplina,
+      automatizar decisiones y convertir análisis en resultados consistentes de largo plazo.
     </p>
     <div class="actions">
-      <a class="btn primary" href="/auth/login">Iniciar sesión</a>
+      <a class="btn primary" href="/auth/login">Entrar al ecosistema</a>
+      <a class="btn" href="/dashboard">Ver dashboard</a>
+    </div>
+    <div class="hero-gallery">
+      <img src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=900&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=900&q=80" alt="Bitcoin y criptomonedas" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1610375461369-d613b564d5d7?auto=format&fit=crop&w=900&q=80" alt="Monedas y metales preciosos" loading="lazy">
     </div>
   </div>
-  <div class="card panel">
-    <h3>Qué trae esta base</h3>
-    <ul>
-      <li>Multiusuario</li>
-      <li>Selección de varios símbolos por conector</li>
-      <li>Paper trading y live base</li>
-      <li>Dashboard con métricas</li>
-      <li>Webhook TradingView</li>
-      <li>Crypto exchanges con credenciales por usuario</li>
-    </ul>
+
+  <div class="stack">
+    <form class="card auth-card hero-login" method="post" action="/auth/login">
+      <h2>Inicia sesión</h2>
+      <p class="muted">Accede a tu panel privado y gestiona tus conectores de forma segura.</p>
+      <label>Usuario o email<input type="text" name="email" required></label>
+      <label>Contraseña<input type="password" name="password" required></label>
+      <button class="btn primary" type="submit">Entrar ahora</button>
+    </form>
+
+    <div class="card panel faq-panel">
+      <h3>FAQ · ¿Por qué esta app?</h3>
+      <ul>
+        <li><strong>¿Qué hace?</strong> Unifica conectores, símbolos y ejecución de estrategias en una sola plataforma.</li>
+        <li><strong>¿Sirve para ingresos pasivos?</strong> Te ayuda a sistematizar tu operación para buscar constancia; no promete ganancias garantizadas.</li>
+        <li><strong>¿Mis datos están protegidos?</strong> Cada usuario ve solo sus conectores, movimientos y configuración; el control global queda solo en admin.</li>
+        <li><strong>¿Puedo crecer con esto?</strong> Sí, escalando reglas, riesgo y conectores por cuenta según tu perfil.</li>
+      </ul>
+    </div>
   </div>
 </section>
 {% endblock %}
