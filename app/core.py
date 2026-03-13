@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     admin_name: str = "davidksinc"
     admin_password: str = "M@davi19!"
 
+    telegram_admin_chat_id: str = "6902163541"
+    telegram_admin_bot_token: str = "8550578940:AAFRio825HETZLIbSR22wN8j_xD5u9D_rWA"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
 

@@ -35,6 +35,8 @@ ADMIN_NAME=davidksinc
 ADMIN_PASSWORD=M@davi19!
 SECRET_KEY=super-secret-change-me
 DATABASE_URL=sqlite:///./quant_suite.db
+TELEGRAM_ADMIN_CHAT_ID=6902163541
+TELEGRAM_ADMIN_BOT_TOKEN=8550578940:AAFRio825HETZLIbSR22wN8j_xD5u9D_rWA
 ```
 
 ## Modelo operativo actual
