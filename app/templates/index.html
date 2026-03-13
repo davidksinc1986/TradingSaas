@@ -2,6 +2,30 @@
 {% block content %}
 <section class="hero hero-home">
   <div class="hero-copy">
+    <div class="brand-hero">
+      <svg class="snake-logo" viewBox="0 0 320 180" role="img" aria-label="Logo serpiente trading">
+        <defs>
+          <linearGradient id="snakeStroke" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#f0b90b" />
+            <stop offset="100%" stop-color="#ffe186" />
+          </linearGradient>
+        </defs>
+        <g opacity="0.18" stroke="#f6d365" stroke-width="2" fill="none">
+          <circle cx="60" cy="38" r="22" />
+          <circle cx="122" cy="54" r="18" />
+          <circle cx="182" cy="36" r="20" />
+          <circle cx="245" cy="60" r="19" />
+        </g>
+        <path d="M22 140 C 58 125, 78 130, 108 108 S 162 78, 194 86 S 246 54, 296 24" stroke="url(#snakeStroke)" stroke-width="14" fill="none" stroke-linecap="round"/>
+        <circle cx="296" cy="24" r="12" fill="#ffe186"/>
+        <circle cx="300" cy="20" r="2.5" fill="#1b1400"/>
+        <path d="M307 24 l12 8" stroke="#ffe186" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h2 class="hero-brand-title">Trading Snake Mafia</h2>
+        <p class="hero-brand-slogan">Quantom Matematics</p>
+      </div>
+    </div>
     <span class="pill">Estrategias multi-mercado, ejecución inteligente</span>
     <h1>Construye tu ecosistema de trading premium con visión de crecimiento patrimonial.</h1>
     <p>
@@ -12,31 +36,55 @@
       <a class="btn primary" href="/auth/login">Entrar al ecosistema</a>
       <a class="btn" href="/dashboard">Ver dashboard</a>
     </div>
-    <div class="hero-gallery">
-      <img src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=900&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
-      <img src="https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=900&q=80" alt="Bitcoin y criptomonedas" loading="lazy">
-      <img src="https://images.unsplash.com/photo-1610375461369-d613b564d5d7?auto=format&fit=crop&w=900&q=80" alt="Monedas y metales preciosos" loading="lazy">
+    <div class="hero-slider" id="hero-slider">
+      <img class="active" src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=1600&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1621761191319-c6fb62004040?auto=format&fit=crop&w=1600&q=80" alt="Bitcoin y criptomonedas" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1518544866330-95a2b7f8e90f?auto=format&fit=crop&w=1600&q=80" alt="Mesa con laptop y análisis financiero" loading="lazy">
     </div>
   </div>
 
   <div class="stack">
     <form class="card auth-card hero-login" method="post" action="/auth/login">
       <h2>Inicia sesión</h2>
-      <p class="muted">Accede a tu panel privado y gestiona tus conectores de forma segura.</p>
+      <p class="muted">Empieza hoy y toma decisiones de trading con más claridad, control y confianza.</p>
       <label>Usuario o email<input type="text" name="email" required></label>
       <label>Contraseña<input type="password" name="password" required></label>
       <button class="btn primary" type="submit">Entrar ahora</button>
     </form>
-
-    <div class="card panel faq-panel">
-      <h3>FAQ · ¿Por qué esta app?</h3>
-      <ul>
-        <li><strong>¿Qué hace?</strong> Unifica conectores, símbolos y ejecución de estrategias en una sola plataforma.</li>
-        <li><strong>¿Sirve para ingresos pasivos?</strong> Te ayuda a sistematizar tu operación para buscar constancia; no promete ganancias garantizadas.</li>
-        <li><strong>¿Mis datos están protegidos?</strong> Cada usuario ve solo sus conectores, movimientos y configuración; el control global queda solo en admin.</li>
-        <li><strong>¿Puedo crecer con esto?</strong> Sí, escalando reglas, riesgo y conectores por cuenta según tu perfil.</li>
-      </ul>
-    </div>
   </div>
 </section>
+
+<section class="card panel faq-panel faq-bottom">
+  <h3>Preguntas frecuentes</h3>
+  <details open>
+    <summary>¿Qué hace esta plataforma?</summary>
+    <p>Centraliza conectores, símbolos, ejecución y seguimiento para que operes con enfoque profesional.</p>
+  </details>
+  <details>
+    <summary>¿Me ayuda a crecer de forma consistente?</summary>
+    <p>Sí. Está pensada para ordenar tu proceso, medir resultados y mejorar decisiones con disciplina.</p>
+  </details>
+  <details>
+    <summary>¿Mis datos están protegidos?</summary>
+    <p>Cada usuario ve solo su información; la administración global queda restringida al panel de admin.</p>
+  </details>
+  <details>
+    <summary>¿Puedo comenzar aunque aún esté aprendiendo?</summary>
+    <p>Claro. La app guía cada paso para que puedas iniciar con confianza y escalar tu operación progresivamente.</p>
+  </details>
+</section>
+
+<script>
+(function(){
+  const slider=document.getElementById('hero-slider');
+  if(!slider) return;
+  const slides=Array.from(slider.querySelectorAll('img'));
+  let index=0;
+  setInterval(()=>{
+    slides[index].classList.remove('active');
+    index=(index+1)%slides.length;
+    slides[index].classList.add('active');
+  },3500);
+})();
+</script>
 {% endblock %}
