@@ -3,8 +3,8 @@
 <section class="dashboard-header">
   <div>
     <span class="pill">Hola, {{ user.name }}</span>
-    <h1>Control central de conectores, símbolos y estrategias</h1>
-    <p>Ahora organizado por pestañas para trabajar más cómodo: conectores, estrategias y actividad.</p>
+    <h1>Tu centro de operación inteligente</h1>
+    <p>Todo tu flujo en un solo lugar: perfil, conectores por plataforma, estrategias y resultados.</p>
   </div>
 </section>
 
@@ -16,60 +16,32 @@
 </section>
 
 <section class="tabs" id="dashboard-tabs">
-  <button class="tab-btn active" type="button" data-tab="connectors">Conectores</button>
+  <button class="tab-btn active" type="button" data-tab="profile">Perfil de usuario</button>
+  <button class="tab-btn" type="button" data-tab="connectors">Conectores</button>
   <button class="tab-btn" type="button" data-tab="strategies">Estrategias</button>
   <button class="tab-btn" type="button" data-tab="activity">Actividad</button>
 </section>
 
-<section id="tab-connectors" class="tab-panel active">
-  <div class="grid-2">
-    <div class="card">
-      <div class="row-between">
-        <div>
-          <h2>Agregar conector</h2>
-          <p class="hint">Formulario guiado para que no tengas que editar JSON.</p>
-        </div>
-        <button class="btn" type="button" id="open-guide-btn">Ver guía de conexión</button>
-      </div>
-
-      <div class="platform-catalog" id="platform-catalog"></div>
-
-      <form id="connector-form" class="form-grid">
-        <label>Plataforma
-          <select name="platform" id="platform-select"></select>
-        </label>
-        <label>Etiqueta<input name="label" placeholder="Mi cuenta principal" required></label>
-        <label>Modo
-          <select name="mode">
-            <option value="paper">paper</option>
-            <option value="live">live</option>
-            <option value="signal">signal</option>
-          </select>
-        </label>
-        <label>Tipo de mercado
-          <select name="market_type" id="market-type-select"></select>
-        </label>
-        <div class="card soft-card" id="suggested-symbol-card">
-          <strong>Símbolos sugeridos</strong>
-          <div id="symbol-preset-list" class="chip-wrap"></div>
-          <small class="hint" id="symbol-limit-hint"></small>
-        </div>
-        <label>Símbolos elegidos (separados por coma)<input id="symbols-input" name="symbols" placeholder="BTC/USDT,ETH/USDT"></label>
-
-        <div class="card soft-card">
-          <strong>Credenciales del conector</strong>
-          <p class="hint">Completa estos campos. Nosotros guardamos la configuración técnica por detrás.</p>
-          <div id="connector-friendly-fields" class="form-grid"></div>
-        </div>
-        <button class="btn primary" type="submit">Guardar conector</button>
-      </form>
-    </div>
-
-    <div class="card">
-      <h2>Conectores guardados</h2>
-      <div id="connectors-list" class="stack"></div>
-    </div>
+<section id="tab-profile" class="tab-panel active">
+  <div class="card">
+    <h2>Perfil de usuario</h2>
+    <form id="profile-form" class="form-grid profile-grid">
+      <label>Nombre
+        <input name="name" id="profile-name" required>
+      </label>
+      <label>Email
+        <input name="email" id="profile-email" disabled>
+      </label>
+      <small class="hint">El email solo puede editarlo el super user.</small>
+      <button class="btn primary" type="submit">Guardar perfil</button>
+    </form>
+    <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
   </div>
+</section>
+
+<section id="tab-connectors" class="tab-panel">
+  <section class="tabs" id="platform-tabs"></section>
+  <div id="platform-panels"></div>
 </section>
 
 <section id="tab-strategies" class="tab-panel">
@@ -95,11 +67,7 @@
         <small class="hint" id="strategy-managed-hint"></small>
 
         <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
-        <small class="hint">Ingresa entero. Ejemplo: 75 = 75% del capital por operación.</small>
-
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
-        <small class="hint">Ingresa entero. Ejemplo: 55 = 55% de confianza mínima.</small>
-
         <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
         <button class="btn primary" type="submit">Ejecutar</button>
       </form>
@@ -123,52 +91,48 @@
       <canvas id="platform-chart" height="220"></canvas>
     </div>
     <div class="card">
-      <h2>Tus límites por plataforma</h2>
-      <div id="limits-list" class="stack"></div>
+      <h2>Webhook de TradingView explicado fácil</h2>
+      <ul class="hint">
+        <li>1) TradingView envía una alerta a una URL segura de tu cuenta.</li>
+        <li>2) La app valida tu clave secreta (passphrase).</li>
+        <li>3) Si indicas <code>target_connector_id</code>, reenvía la orden a Binance/Bybit/OKX/MT5.</li>
+      </ul>
+      <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
     </div>
   </div>
 
-  <section class="grid-2">
-    <div class="card">
-      <h2>Webhook de TradingView</h2>
-      <p class="hint">URL: <code>/api/webhooks/tradingview</code>. Puede reenviar la señal a Binance, Bybit, OKX o MT5 con <code>target_connector_id</code>.</p>
-      <pre class="prebox">{
-  "connector_id": 3,
-  "target_connector_id": 1,
-  "passphrase": "mi-clave-webhook",
-  "symbol": "BTC/USDT",
-  "side": "buy",
-  "price": 65000,
-  "quantity": 0.01,
-  "strategy_slug": "tv_breakout"
-}</pre>
+  <section class="card">
+    <div class="row-between">
+      <h2>Transacciones</h2>
+      <label>Filtro
+        <select id="trade-range-filter">
+          <option value="day">Diario</option>
+          <option value="week" selected>Semanal</option>
+          <option value="month">Mensual</option>
+        </select>
+      </label>
     </div>
-    <section class="card">
-      <h2>Últimas transacciones</h2>
-      <div class="table-wrap">
-        <table id="trades-table">
-          <thead>
-            <tr>
-              <th>Fecha</th>
-              <th>Plataforma</th>
-              <th>Mercado</th>
-              <th>Símbolo</th>
-              <th>Lado</th>
-              <th>Cantidad</th>
-              <th>Precio</th>
-              <th>Status</th>
-              <th>PNL</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+    <div class="trade-metrics" id="trade-metrics"></div>
+    <div class="table-wrap">
+      <table id="trades-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Plataforma</th>
+            <th>Símbolo</th>
+            <th>Inversión</th>
+            <th>Resultado</th>
+            <th>PNL</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 </section>
 
 <div id="strategy-info-modal" class="modal hidden">
-  <div class="modal-card card" style="max-width:760px;">
+  <div class="modal-card card strategy-modal-card">
     <div class="modal-head">
       <h3 id="strategy-modal-title">Estrategia</h3>
       <button class="btn" type="button" id="strategy-info-close">Cerrar</button>
