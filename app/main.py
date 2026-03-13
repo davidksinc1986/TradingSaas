@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.core import settings
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from app.db import Base, SessionLocal, engine
 from app.models import StrategyProfile, User, UserStrategyControl
@@ -22,8 +22,14 @@ app.include_router(api.router)
 
 
 def ensure_schema_updates(db):
-    db.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
-    db.commit()
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    if "phone" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
+        db.commit()
 
 
 @app.on_event("startup")
