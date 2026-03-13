@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
+from app.core import settings
 from app.models import Connector, PlatformPolicy, TradeLog, User, UserPlatformGrant, UserStrategyControl
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
@@ -20,14 +21,14 @@ from app.services.policies import ensure_user_grants, get_user_grant, validate_c
 from app.services.trading import dashboard_data, run_strategy
 
 router = APIRouter(prefix="/api", tags=["api"])
-ROOT_ADMIN_HANDLE = "davidksinc"
+ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
 ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]
 
 
 def _is_root_admin(user: User) -> bool:
-    email_handle = (user.email or "").split("@")[0].strip().lower()
-    name_handle = (user.name or "").strip().lower()
-    return email_handle == ROOT_ADMIN_HANDLE or name_handle == ROOT_ADMIN_HANDLE
+    # IMPORTANT: root-admin identity must rely on immutable identity only.
+    # user.name is editable via /api/me and cannot be used for privilege checks.
+    return (user.email or "").strip().lower() == ROOT_ADMIN_EMAIL
 
 
 def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
@@ -338,10 +339,10 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         raise HTTPException(status_code=404, detail="User not found")
 
     if _is_root_admin(user):
-        raise HTTPException(status_code=403, detail="davidksinc is hierarchical and cannot be modified")
+        raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be modified")
 
     if payload.is_admin is not None and not _is_root_admin(actor):
-        raise HTTPException(status_code=403, detail="Only davidksinc can assign or remove admin role")
+        raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
