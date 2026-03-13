@@ -338,18 +338,15 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         raise HTTPException(status_code=404, detail="User not found")
 
     if _is_root_admin(user):
-if _is_root_admin(user):
-    raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be modified")
+        raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be modified")
 
-if payload.is_admin is not None and not _is_root_admin(actor):
-    raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
+    if payload.is_admin is not None and not _is_root_admin(actor):
+        raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
 
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.is_admin is not None:
         user.is_admin = payload.is_admin
-    db.commit()
-    return {"ok": True}
 
 
 @router.get("/admin/users/{user_id}/profile")
