@@ -5,8 +5,10 @@ from fastapi.templating import Jinja2Templates
 from app.core import settings
 from app.db import get_db
 from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
-from app.routers.deps import admin_user, current_user
+from app.models import PlanConfig, PricingConfig
+from app.routers.deps import admin_user, current_user, optional_user
 from app.services.policies import ensure_user_grants
+from app.services.pricing import estimate_monthly_cost
 from app.services.trading import dashboard_data
 
 router = APIRouter(tags=["views"])
@@ -27,8 +29,20 @@ def base_context(request: Request, **kwargs):
 
 
 @router.get("/")
-def home(request: Request):
-    return templates.TemplateResponse("index.html", base_context(request, title="Home"))
+def home(request: Request, user=Depends(optional_user), db=Depends(get_db)):
+    plans = db.query(PlanConfig).filter(PlanConfig.is_active.is_(True)).order_by(PlanConfig.sort_order.asc(), PlanConfig.id.asc()).all()
+    pricing = db.query(PricingConfig).first()
+    default_quote = estimate_monthly_cost(pricing, apps=3, symbols=15, daily_movements=20) if pricing else None
+    return templates.TemplateResponse("index.html", base_context(
+        request,
+        title="Home",
+        user=user,
+        plans=plans,
+        pricing=pricing,
+        default_quote=default_quote,
+        contact_name=settings.admin_name,
+        contact_email=settings.admin_email,
+    ))
 
 
 @router.get("/dashboard")

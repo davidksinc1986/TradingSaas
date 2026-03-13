@@ -41,8 +41,11 @@
       automatizar decisiones y convertir análisis en resultados consistentes de largo plazo.
     </p>
     <div class="actions">
+      {% if user %}
+      <a class="btn primary" href="/dashboard">Ir al dashboard</a>
+      {% else %}
       <a class="btn primary" href="/auth/login">Entrar al ecosistema</a>
-      <a class="btn" href="/dashboard">Ver dashboard</a>
+      {% endif %}
     </div>
     <div class="hero-slider" id="hero-slider">
       <div class="hero-slide active" style="background-image:url('https://images.pexels.com/photos/6802042/pexels-photo-6802042.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Pantallas con gráficos financieros"></div>
@@ -52,6 +55,13 @@
   </div>
 
   <div class="stack">
+    {% if user %}
+    <div class="card auth-card hero-login">
+      <h2>Bienvenido, {{ user.name }}</h2>
+      <p class="muted">Tu sesión está activa. Puedes continuar a tu panel para gestionar conectores y estrategias.</p>
+      <a class="btn primary" href="/dashboard">Abrir dashboard</a>
+    </div>
+    {% else %}
     <form class="card auth-card hero-login" method="post" action="/auth/login">
       <h2>Inicia sesión</h2>
       <p class="muted">Empieza hoy y toma decisiones de trading con más claridad, control y confianza.</p>
@@ -59,8 +69,58 @@
       <label>Contraseña<input type="password" name="password" required></label>
       <button class="btn primary" type="submit">Entrar ahora</button>
     </form>
+    {% endif %}
   </div>
 </section>
+
+{% if not user %}
+<section class="grid-2 public-blocks">
+  <article class="card">
+    <h3>Contáctame</h3>
+    <p class="muted">Si aún no tienes usuario, escríbeme y te ayudo a definir el plan ideal.</p>
+    <p><strong>{{ contact_name }}</strong><br><a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+  </article>
+  <article class="card">
+    <h3>Ejemplo base</h3>
+    <p class="muted">3 apps · 15 símbolos · 20 movimientos diarios</p>
+    <p class="plan-price">USD $20/mes (referencia comercial)</p>
+    {% if default_quote %}
+    <small class="hint">Costo estimado de infraestructura + comisión base: USD ${{ '%.2f'|format(default_quote.estimated_total_usd) }}</small>
+    {% endif %}
+  </article>
+</section>
+
+<section class="card">
+  <h3>Planes disponibles</h3>
+  <div class="plan-grid">
+    {% for plan in plans %}
+    <article class="plan-card">
+      <h4>{{ plan.name }}</h4>
+      <p class="muted">{{ plan.description }}</p>
+      <ul>
+        <li>Apps: {{ plan.apps }}</li>
+        <li>Símbolos: {{ plan.symbols }}</li>
+        <li>Movimientos diarios: {{ plan.daily_movements }}</li>
+      </ul>
+      <strong>USD ${{ '%.2f'|format(plan.monthly_price_usd) }}/mes</strong>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h3>Calculadora de plan custom</h3>
+  <form id="public-estimator" class="form-grid admin-form-grid">
+    <label>Apps<input type="number" name="apps" min="0" value="3"></label>
+    <label>Símbolos<input type="number" name="symbols" min="0" value="15"></label>
+    <label>Movimientos diarios<input type="number" name="daily_movements" min="0" value="20"></label>
+    <button class="btn primary btn-sm public-calc-btn" type="submit">Calcular</button>
+  </form>
+  <div id="public-estimate-result" class="status-msg" style="margin-top:10px;">
+    Completa valores y presiona calcular.
+  </div>
+</section>
+{% endif %}
 
 <section class="card panel faq-panel faq-bottom">
   <h3>Preguntas frecuentes</h3>
@@ -93,6 +153,33 @@
     index=(index+1)%slides.length;
     slides[index].classList.add('active');
   },3500);
+})();
+
+(function(){
+  const form=document.getElementById('public-estimator');
+  const output=document.getElementById('public-estimate-result');
+  if(!form||!output) return;
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(form);
+    const payload = {
+      apps:Number(fd.get('apps')||0),
+      symbols:Number(fd.get('symbols')||0),
+      daily_movements:Number(fd.get('daily_movements')||0)
+    };
+    try{
+      const res = await fetch('/api/public/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      output.classList.add('status-ok');
+      output.classList.remove('status-error');
+      output.innerHTML = `Infraestructura estimada: <strong>USD $${data.infra_cost_usd.toFixed(2)}</strong> · RAM ${data.estimated_ram_gb} GB · Disco ${data.estimated_disk_gb} GB · Comisión base USD $${data.base_commission_usd.toFixed(2)} · <strong>Total USD $${data.estimated_total_usd.toFixed(2)}/mes</strong>`;
+    }catch(err){
+      output.classList.add('status-error');
+      output.classList.remove('status-ok');
+      output.textContent='No se pudo calcular en este momento.';
+    }
+  });
 })();
 </script>
 {% endblock %}

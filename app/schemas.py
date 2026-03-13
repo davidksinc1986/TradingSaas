@@ -91,3 +91,26 @@ class AdminPolicyUpdate(BaseModel):
 class AdminStrategyControlUpdate(BaseModel):
     managed_by_admin: bool
     allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]] = Field(default_factory=list)
+
+
+class AdminPricingConfigUpdate(BaseModel):
+    base_commission_usd: float = Field(ge=0)
+    cost_per_app_usd: float = Field(ge=0)
+    cost_per_symbol_usd: float = Field(ge=0)
+    cost_per_movement_usd: float = Field(ge=0)
+    cost_per_gb_ram_usd: float = Field(ge=0)
+    cost_per_gb_disk_usd: float = Field(ge=0)
+    suggested_ram_per_app_gb: float = Field(gt=0)
+    suggested_disk_per_app_gb: float = Field(gt=0)
+
+
+class AdminPlanConfigPayload(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = ""
+    apps: int = Field(ge=0)
+    symbols: int = Field(ge=0)
+    daily_movements: int = Field(ge=0)
+    monthly_price_usd: float = Field(ge=0)
+    is_custom: bool = False
+    is_active: bool = True
+    sort_order: int = 0

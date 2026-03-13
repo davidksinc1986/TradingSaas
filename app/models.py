@@ -55,6 +55,37 @@ class PlatformPolicy(Base):
     user_grants = relationship("UserPlatformGrant", back_populates="platform_policy", cascade="all, delete-orphan")
 
 
+class PricingConfig(Base):
+    __tablename__ = "pricing_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    base_commission_usd: Mapped[float] = mapped_column(Float, default=15.0)
+    cost_per_app_usd: Mapped[float] = mapped_column(Float, default=2.5)
+    cost_per_symbol_usd: Mapped[float] = mapped_column(Float, default=0.3)
+    cost_per_movement_usd: Mapped[float] = mapped_column(Float, default=0.15)
+    cost_per_gb_ram_usd: Mapped[float] = mapped_column(Float, default=2.0)
+    cost_per_gb_disk_usd: Mapped[float] = mapped_column(Float, default=0.1)
+    suggested_ram_per_app_gb: Mapped[float] = mapped_column(Float, default=1.0)
+    suggested_disk_per_app_gb: Mapped[float] = mapped_column(Float, default=3.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PlanConfig(Base):
+    __tablename__ = "plan_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    apps: Mapped[int] = mapped_column(Integer, default=1)
+    symbols: Mapped[int] = mapped_column(Integer, default=5)
+    daily_movements: Mapped[int] = mapped_column(Integer, default=10)
+    monthly_price_usd: Mapped[float] = mapped_column(Float, default=20.0)
+    is_custom: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class UserPlatformGrant(Base):
     __tablename__ = "user_platform_grants"
     __table_args__ = (UniqueConstraint("user_id", "platform", name="uq_user_platform_grant"),)

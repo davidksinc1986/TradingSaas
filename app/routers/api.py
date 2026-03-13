@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
 from app.core import settings
-from app.models import Connector, PlatformPolicy, TradeLog, User, UserPlatformGrant, UserStrategyControl
+from app.models import Connector, PlanConfig, PlatformPolicy, PricingConfig, TradeLog, User, UserPlatformGrant, UserStrategyControl
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
     AdminUserCreate,
     AdminGrantUpdate,
+    AdminPlanConfigPayload,
     AdminPolicyUpdate,
+    AdminPricingConfigUpdate,
     AdminStrategyControlUpdate,
     AdminUserUpdate,
     ConnectorCreate,
@@ -18,6 +20,7 @@ from app.schemas import (
 from app.security import encrypt_payload, hash_password
 from app.services.connectors import get_client
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
+from app.services.pricing import estimate_monthly_cost
 from app.services.trading import dashboard_data, run_strategy
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -383,6 +386,49 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
     }
 
 
+@router.get("/public/plans-config")
+def public_plans_config(db=Depends(get_db)):
+    pricing = db.query(PricingConfig).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Pricing config missing")
+    plans = db.query(PlanConfig).filter(PlanConfig.is_active.is_(True)).order_by(PlanConfig.sort_order.asc(), PlanConfig.id.asc()).all()
+    quote = estimate_monthly_cost(pricing, apps=3, symbols=15, daily_movements=20)
+    return {
+        "pricing": {
+            "base_commission_usd": pricing.base_commission_usd,
+            "cost_per_app_usd": pricing.cost_per_app_usd,
+            "cost_per_symbol_usd": pricing.cost_per_symbol_usd,
+            "cost_per_movement_usd": pricing.cost_per_movement_usd,
+            "cost_per_gb_ram_usd": pricing.cost_per_gb_ram_usd,
+            "cost_per_gb_disk_usd": pricing.cost_per_gb_disk_usd,
+            "suggested_ram_per_app_gb": pricing.suggested_ram_per_app_gb,
+            "suggested_disk_per_app_gb": pricing.suggested_disk_per_app_gb,
+        },
+        "plans": [{
+            "id": plan.id,
+            "name": plan.name,
+            "description": plan.description,
+            "apps": plan.apps,
+            "symbols": plan.symbols,
+            "daily_movements": plan.daily_movements,
+            "monthly_price_usd": plan.monthly_price_usd,
+            "is_custom": plan.is_custom,
+        } for plan in plans],
+        "example_quote": quote,
+    }
+
+
+@router.post("/public/estimate")
+def public_estimate(payload: dict, db=Depends(get_db)):
+    pricing = db.query(PricingConfig).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Pricing config missing")
+    apps = max(int(payload.get("apps", 1)), 0)
+    symbols = max(int(payload.get("symbols", 1)), 0)
+    daily_movements = max(int(payload.get("daily_movements", 1)), 0)
+    return estimate_monthly_cost(pricing, apps=apps, symbols=symbols, daily_movements=daily_movements)
+
+
 @router.get("/admin/users")
 def admin_list_users(db=Depends(get_db), _: User = Depends(admin_user)):
     users = db.query(User).order_by(User.created_at.desc()).all()
@@ -517,6 +563,88 @@ def admin_update_policy(platform: str, payload: AdminPolicyUpdate, db=Depends(ge
         policy.top_symbols_json = {"symbols": payload.top_symbols}
     if payload.allowed_symbols is not None:
         policy.allowed_symbols_json = {"symbols": payload.allowed_symbols}
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/admin/pricing-config")
+def admin_get_pricing_config(db=Depends(get_db), _: User = Depends(admin_user)):
+    pricing = db.query(PricingConfig).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Pricing config missing")
+    return {
+        "id": pricing.id,
+        "base_commission_usd": pricing.base_commission_usd,
+        "cost_per_app_usd": pricing.cost_per_app_usd,
+        "cost_per_symbol_usd": pricing.cost_per_symbol_usd,
+        "cost_per_movement_usd": pricing.cost_per_movement_usd,
+        "cost_per_gb_ram_usd": pricing.cost_per_gb_ram_usd,
+        "cost_per_gb_disk_usd": pricing.cost_per_gb_disk_usd,
+        "suggested_ram_per_app_gb": pricing.suggested_ram_per_app_gb,
+        "suggested_disk_per_app_gb": pricing.suggested_disk_per_app_gb,
+    }
+
+
+@router.put("/admin/pricing-config")
+def admin_update_pricing_config(payload: AdminPricingConfigUpdate, db=Depends(get_db), _: User = Depends(admin_user)):
+    pricing = db.query(PricingConfig).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Pricing config missing")
+    pricing.base_commission_usd = payload.base_commission_usd
+    pricing.cost_per_app_usd = payload.cost_per_app_usd
+    pricing.cost_per_symbol_usd = payload.cost_per_symbol_usd
+    pricing.cost_per_movement_usd = payload.cost_per_movement_usd
+    pricing.cost_per_gb_ram_usd = payload.cost_per_gb_ram_usd
+    pricing.cost_per_gb_disk_usd = payload.cost_per_gb_disk_usd
+    pricing.suggested_ram_per_app_gb = payload.suggested_ram_per_app_gb
+    pricing.suggested_disk_per_app_gb = payload.suggested_disk_per_app_gb
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/admin/plans")
+def admin_list_plans(db=Depends(get_db), _: User = Depends(admin_user)):
+    plans = db.query(PlanConfig).order_by(PlanConfig.sort_order.asc(), PlanConfig.id.asc()).all()
+    return [{
+        "id": plan.id,
+        "name": plan.name,
+        "description": plan.description,
+        "apps": plan.apps,
+        "symbols": plan.symbols,
+        "daily_movements": plan.daily_movements,
+        "monthly_price_usd": plan.monthly_price_usd,
+        "is_custom": plan.is_custom,
+        "is_active": plan.is_active,
+        "sort_order": plan.sort_order,
+    } for plan in plans]
+
+
+@router.post("/admin/plans")
+def admin_create_plan(payload: AdminPlanConfigPayload, db=Depends(get_db), _: User = Depends(admin_user)):
+    plan = PlanConfig(**payload.model_dump())
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return {"ok": True, "id": plan.id}
+
+
+@router.put("/admin/plans/{plan_id}")
+def admin_update_plan(plan_id: int, payload: AdminPlanConfigPayload, db=Depends(get_db), _: User = Depends(admin_user)):
+    plan = db.query(PlanConfig).filter(PlanConfig.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    for key, value in payload.model_dump().items():
+        setattr(plan, key, value)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/admin/plans/{plan_id}")
+def admin_delete_plan(plan_id: int, db=Depends(get_db), _: User = Depends(admin_user)):
+    plan = db.query(PlanConfig).filter(PlanConfig.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    db.delete(plan)
     db.commit()
     return {"ok": True}
 

@@ -12,7 +12,7 @@
     <div class="brand"><strong class="brand-name">{{ tr('app.name') }}</strong> <small class="brand-cutline">{{ tr('app.tagline') }}</small></div>
     <nav class="nav">
       <a href="/">Inicio</a>
-      <a href="/dashboard">Dashboard</a>
+      {% if user %}<a href="/dashboard">Dashboard</a>{% endif %}
       {% if user and user.is_admin %}<a href="/admin">Admin</a>{% endif %}
       {% if user %}<a href="/auth/logout" id="nav-logout">Salir</a>{% else %}<a href="/auth/login" id="nav-login">Login</a>{% endif %}
     </nav>
