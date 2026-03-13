@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.core import settings
+from sqlalchemy import text
+
 from app.db import Base, SessionLocal, engine
 from app.models import StrategyProfile, User, UserStrategyControl
 from app.routers import api, auth, views
@@ -17,10 +19,21 @@ app.include_router(auth.router)
 app.include_router(api.router)
 
 
+
+
+def ensure_schema_updates(db):
+    db.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
+    db.commit()
+
+
 @app.on_event("startup")
 def bootstrap():
     db = SessionLocal()
     try:
+        try:
+            ensure_schema_updates(db)
+        except Exception:
+            db.rollback()
         seeds = [
             ("ema_rsi", "EMA + RSI", "Cruce de EMAs con filtro RSI", {"ema_fast": 12, "ema_slow": 26, "rsi_buy_max": 68}),
             ("mean_reversion_zscore", "Mean Reversion Z-Score", "Reversión a la media por desviación estadística", {"z_buy": -1.8, "z_sell": 1.8}),

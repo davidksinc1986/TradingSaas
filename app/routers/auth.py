@@ -26,7 +26,8 @@ def base_context(request: Request, **kwargs):
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", base_context(request, title="Login"))
+    error = request.query_params.get("error")
+    return templates.TemplateResponse("login.html", base_context(request, title="Login", error=error))
 
 
 @router.get("/register", response_class=HTMLResponse)
@@ -43,9 +44,22 @@ def register(email: str = Form(...), name: str = Form(...), password: str = Form
 def login(request: Request, email: str = Form(...), password: str = Form(...), db=Depends(get_db)):
     payload = UserLogin(email=email, password=password)
     user = db.query(User).filter(User.email == payload.email).first()
+    accepts_html = "text/html" in (request.headers.get("accept") or "")
     if not user or not verify_password(payload.password, user.hashed_password):
+        if accepts_html:
+            return templates.TemplateResponse(
+                "login.html",
+                base_context(request, title="Login", error="Credenciales inválidas. Revisa usuario/email y contraseña."),
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
+        if accepts_html:
+            return templates.TemplateResponse(
+                "login.html",
+                base_context(request, title="Login", error="Tu cuenta fue deshabilitada por administración."),
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled by admin")
     token = create_access_token(user.email)
     response = RedirectResponse(url="/dashboard", status_code=303)

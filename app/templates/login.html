@@ -7,6 +7,7 @@
     <label>Usuario o email<input type="text" name="email" required></label>
     <label>Contraseña<input type="password" name="password" required></label>
     <button class="btn primary" type="submit">Ingresar al dashboard</button>
+    {% if error %}<div class="field-error">{{ error }}</div>{% endif %}
     <p class="muted">Acceso administrado por tu cuenta principal.</p>
   </form>
 </div>
