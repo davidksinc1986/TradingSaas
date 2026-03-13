@@ -89,3 +89,17 @@ select[multiple]{min-height:120px}
   .hero h1{font-size:34px}
   .hero-gallery{grid-template-columns:1fr}
 }
+
+
+.btn-sm{padding:8px 12px;border-radius:10px;font-size:13px}
+.user-card{width:100%;text-align:left;cursor:pointer;background:#101010}
+.user-card.selected{border-color:rgba(240,185,11,.6);box-shadow:0 0 0 1px rgba(240,185,11,.35) inset}
+
+
+.tabs{display:flex;gap:10px;margin:16px 0 10px;flex-wrap:wrap}
+.tab-btn{border:1px solid var(--line);background:#0f0f0f;color:var(--muted);padding:10px 14px;border-radius:12px;cursor:pointer;font-weight:700}
+.tab-btn.active{background:rgba(240,185,11,.15);border-color:rgba(240,185,11,.5);color:#ffe08a}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+.strategy-card{cursor:pointer;text-align:left;transition:all .2s ease}
+.strategy-card:hover{border-color:rgba(240,185,11,.5);transform:translateY(-1px)}

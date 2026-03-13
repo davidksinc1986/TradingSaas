@@ -22,7 +22,7 @@ from app.services.trading import dashboard_data, run_strategy
 
 router = APIRouter(prefix="/api", tags=["api"])
 ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
-ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]
+ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]
 
 
 def _is_root_admin(user: User) -> bool:
@@ -214,6 +214,9 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     if control.managed_by_admin and payload.strategy_slug not in allowed:
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
 
+    risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+
     result = run_strategy(
         db=db,
         user_id=user.id,
@@ -221,8 +224,8 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         symbols=payload.symbols,
         timeframe=payload.timeframe,
         strategy_slug=payload.strategy_slug,
-        risk_per_trade=payload.risk_per_trade,
-        min_ml_probability=payload.min_ml_probability,
+        risk_per_trade=risk_value,
+        min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
     )
     return {"ok": True, "results": result}
@@ -318,6 +321,38 @@ def tradingview_webhook(payload: TradingViewWebhook, db=Depends(get_db)):
     return {"ok": True, "message": "Webhook processed", "status": status}
 
 
+@router.get("/heartbeat")
+def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
+    connectors = db.query(Connector).filter(Connector.user_id == user.id, Connector.is_enabled.is_(True)).all()
+    checks = []
+    for connector in connectors:
+        client = get_client(connector)
+        try:
+            raw = client.test_connection()
+            checks.append({
+                "id": connector.id,
+                "label": connector.label,
+                "platform": connector.platform,
+                "ok": True,
+                "message": "Conector validado",
+                "raw": raw,
+            })
+        except Exception as exc:
+            checks.append({
+                "id": connector.id,
+                "label": connector.label,
+                "platform": connector.platform,
+                "ok": False,
+                "message": str(exc),
+                "raw": None,
+            })
+    return {
+        "ok": all(item["ok"] for item in checks) if checks else True,
+        "total": len(checks),
+        "checks": checks,
+    }
+
+
 @router.get("/admin/users")
 def admin_list_users(db=Depends(get_db), _: User = Depends(admin_user)):
     users = db.query(User).order_by(User.created_at.desc()).all()
@@ -347,6 +382,9 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         user.is_active = payload.is_active
     if payload.is_admin is not None:
         user.is_admin = payload.is_admin
+
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/admin/users/{user_id}/profile")
@@ -393,7 +431,12 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "display_name": p.display_name,
             "is_enabled_global": p.is_enabled_global,
             "user_enabled": grants_by_platform.get(p.platform).is_enabled if p.platform in grants_by_platform else False,
-        } for p in db.query(PlatformPolicy).order_by(PlatformPolicy.display_name.asc()).all()]
+        } for p in db.query(PlatformPolicy).order_by(PlatformPolicy.display_name.asc()).all()],
+        "strategy_control": {
+            "managed_by_admin": strategy_control.managed_by_admin,
+            "allowed_strategies": (strategy_control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
+            "all_strategies": ALL_STRATEGIES,
+        }
     }
 
 

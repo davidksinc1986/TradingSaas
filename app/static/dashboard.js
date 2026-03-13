@@ -1,188 +1,99 @@
 const PLATFORM_MARKET_TYPES={mt5:['forex','cfd'],ctrader:['forex','cfd','spot','futures'],tradingview:['signals'],binance:['spot','futures'],bybit:['spot','futures'],okx:['spot','futures']};
-const CATEGORY_TITLES = { broker: 'Mercado de valores / Brokers', crypto: 'Cryptos', signals: 'Señales' };
-const PLATFORM_FIELD_MAP = {
-  mt5: [
-    { key: 'login', label: 'Usuario / Login MT5', target: 'secrets', required: true, placeholder: 'Ej: 12345678' },
-    { key: 'password', label: 'Contraseña MT5', target: 'secrets', required: true, placeholder: 'Tu contraseña de trading' },
-    { key: 'server', label: 'Servidor del broker', target: 'secrets', required: true, placeholder: 'Ej: Broker-Server' },
-    { key: 'default_quantity', label: 'Tamaño por operación (lotes)', target: 'config', type: 'number', step: '0.01', placeholder: '0.10' },
-  ],
-  ctrader: [
-    { key: 'client_id', label: 'Client ID', target: 'secrets', required: true, placeholder: 'Pega aquí tu Client ID' },
-    { key: 'client_secret', label: 'Client Secret', target: 'secrets', required: true, placeholder: 'Pega aquí tu Client Secret' },
-    { key: 'access_token', label: 'Access Token', target: 'secrets', required: true, placeholder: 'Pega aquí tu token' },
-    { key: 'account_id', label: 'Account ID', target: 'secrets', required: true, placeholder: 'Ej: 123456' },
-    { key: 'default_quantity', label: 'Tamaño por operación', target: 'config', type: 'number', step: '0.01', placeholder: '1000' },
-  ],
-  tradingview: [
-    { key: 'passphrase', label: 'Clave secreta del webhook', target: 'config', required: true, placeholder: 'Crea una clave fácil de recordar' },
-  ],
-  binance: [
-    { key: 'api_key', label: 'Inserta aquí tu API Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu API Key' },
-    { key: 'secret_key', label: 'Inserta aquí tu Secret Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu Secret Key' },
-    { key: 'default_quantity', label: 'Cantidad fija por operación', target: 'config', type: 'number', step: '0.0001', placeholder: '0.001' },
-  ],
-  bybit: [
-    { key: 'api_key', label: 'Inserta aquí tu API Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu API Key' },
-    { key: 'secret_key', label: 'Inserta aquí tu Secret Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu Secret Key' },
-    { key: 'default_quantity', label: 'Cantidad fija por operación', target: 'config', type: 'number', step: '0.0001', placeholder: '0.001' },
-  ],
-  okx: [
-    { key: 'api_key', label: 'Inserta aquí tu API Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu API Key' },
-    { key: 'secret_key', label: 'Inserta aquí tu Secret Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu Secret Key' },
-    { key: 'passphrase', label: 'Passphrase', target: 'secrets', required: true, placeholder: 'Pega aquí tu passphrase' },
-    { key: 'default_quantity', label: 'Cantidad fija por operación', target: 'config', type: 'number', step: '0.0001', placeholder: '0.001' },
-  ],
+const CATEGORY_TITLES={broker:'Mercado de valores / Brokers',crypto:'Cryptos',signals:'Señales'};
+const STRATEGY_LIBRARY={
+  ema_rsi:{name:'EMA + RSI',summary:'Combina tendencia y momentum para filtrar entradas.',useCase:'Mercados con tendencia definida y retrocesos moderados.',timeframes:'15m, 1h, 4h',tips:['Evita usarla en rangos muy laterales.','Combínala con niveles de soporte/resistencia.']},
+  mean_reversion_zscore:{name:'Mean Reversion Z-Score',summary:'Busca retorno al promedio cuando el precio se aleja demasiado.',useCase:'Mercados en rango o sobre-extensiones puntuales.',timeframes:'5m, 15m, 1h',tips:['Reduce riesgo en tendencias muy fuertes.','Úsala mejor con activos líquidos.']},
+  momentum_breakout:{name:'Momentum Breakout',summary:'Opera rupturas de máximos y mínimos recientes.',useCase:'Fases de expansión de volatilidad y rompimientos.',timeframes:'15m, 1h, 4h',tips:['Confirma volumen o fuerza antes de entrar.','Evita operar justo antes de noticias de alto impacto.']},
+  macd_trend_pullback:{name:'MACD Trend Pullback',summary:'Sigue la tendencia con confirmación MACD y pullback.',useCase:'Tendencias limpias con correcciones controladas.',timeframes:'15m, 1h, 4h',tips:['Mejor cuando el mercado no está en rango.','Gestiona stop por debajo/encima del último swing.']},
+  bollinger_rsi_reversal:{name:'Bollinger + RSI Reversal',summary:'Detecta posible rebote en extremos de bandas.',useCase:'Sobrecompra/sobreventa en mercados con reversión.',timeframes:'5m, 15m, 1h',tips:['No sobreapalancar: puede haber continuaciones.','Confirma con vela de rechazo.']},
+  adx_trend_follow:{name:'ADX Trend Follow',summary:'Filtra entradas cuando la fuerza de tendencia es real.',useCase:'Mercados con direccionalidad clara.',timeframes:'1h, 4h, 1D',tips:['Evita periodos de ADX bajo.','Funciona mejor con stops dinámicos.']},
+  stochastic_rebound:{name:'Stochastic Rebound',summary:'Busca rebotes desde extremos del oscilador estocástico.',useCase:'Pullbacks cortos en tendencia o rangos definidos.',timeframes:'5m, 15m, 1h',tips:['Esperar confirmación evita señales falsas.','No usar aislada en rupturas violentas.']},
+};
+const PLATFORM_FIELD_MAP={
+  mt5:[{key:'login',label:'Usuario / Login MT5',target:'secrets',required:true,placeholder:'Ej: 12345678'},{key:'password',label:'Contraseña MT5',target:'secrets',required:true,placeholder:'Tu contraseña de trading'},{key:'server',label:'Servidor del broker',target:'secrets',required:true,placeholder:'Ej: Broker-Server'},{key:'default_quantity',label:'Tamaño por operación (lotes)',target:'config',type:'number',step:'0.01',placeholder:'0.10'}],
+  ctrader:[{key:'client_id',label:'Client ID',target:'secrets',required:true,placeholder:'Pega aquí tu Client ID'},{key:'client_secret',label:'Client Secret',target:'secrets',required:true,placeholder:'Pega aquí tu Client Secret'},{key:'access_token',label:'Access Token',target:'secrets',required:true,placeholder:'Pega aquí tu token'},{key:'account_id',label:'Account ID',target:'secrets',required:true,placeholder:'Ej: 123456'},{key:'default_quantity',label:'Tamaño por operación (unidades)',target:'config',type:'number',step:'1',placeholder:'1000'}],
+  tradingview:[{key:'passphrase',label:'Clave secreta del webhook',target:'config',required:true,placeholder:'Crea una clave fácil de recordar'}],
+  binance:[{key:'api_key',label:'Inserta aquí tu API Key',target:'secrets',required:true,placeholder:'Pega aquí tu API Key'},{key:'secret_key',label:'Inserta aquí tu Secret Key',target:'secrets',required:true,placeholder:'Pega aquí tu Secret Key'},{key:'default_quantity',label:'Cantidad fija por operación',target:'config',type:'number',step:'0.0001',placeholder:'0.001'}],
+  bybit:[{key:'api_key',label:'Inserta aquí tu API Key',target:'secrets',required:true,placeholder:'Pega aquí tu API Key'},{key:'secret_key',label:'Inserta aquí tu Secret Key',target:'secrets',required:true,placeholder:'Pega aquí tu Secret Key'},{key:'default_quantity',label:'Cantidad fija por operación',target:'config',type:'number',step:'0.0001',placeholder:'0.001'}],
+  okx:[{key:'api_key',label:'Inserta aquí tu API Key',target:'secrets',required:true,placeholder:'Pega aquí tu API Key'},{key:'secret_key',label:'Inserta aquí tu Secret Key',target:'secrets',required:true,placeholder:'Pega aquí tu Secret Key'},{key:'passphrase',label:'Passphrase',target:'secrets',required:true,placeholder:'Pega aquí tu passphrase'},{key:'default_quantity',label:'Cantidad fija por operación',target:'config',type:'number',step:'0.0001',placeholder:'0.001'}],
 };
 let METADATA={platforms:[]};
-let STRATEGY_CONTROL = { managed_by_admin: false, allowed_strategies: [], all_strategies: [] };
-async function api(url,options={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},credentials:'same-origin',...options});if(!res.ok) throw new Error(await res.text());return res.json();}
-function parseCsv(value){return String(value || '').split(',').map(x=>x.trim()).filter(Boolean);}
-function getPlatformMeta(platform){return METADATA.platforms.find(p=>p.platform===platform);}
-function renderMarketTypeSelect(platform){const select=document.getElementById('market-type-select');if(!select) return;const marketTypes=PLATFORM_MARKET_TYPES[platform]||['spot'];select.innerHTML=marketTypes.map(mt=>`<option value="${mt}">${mt}</option>`).join('');}
-function renderFriendlyFields(platform){
-  const container = document.getElementById('connector-friendly-fields');
-  if (!container) return;
-  const fields = PLATFORM_FIELD_MAP[platform] || [];
-  container.innerHTML = fields.map((field) => `
-    <label>${field.label}
-      <input
-        name="field_${field.target}_${field.key}"
-        type="${field.type || 'text'}"
-        ${field.step ? `step="${field.step}"` : ''}
-        ${field.required ? 'required' : ''}
-        placeholder="${field.placeholder || ''}"
-      >
-    </label>
-  `).join('');
-}
-function readFriendlyFields(formEl, platform){
-  const fields = PLATFORM_FIELD_MAP[platform] || [];
-  const config = {};
-  const secrets = {};
-  fields.forEach((field) => {
-    const raw = String(new FormData(formEl).get(`field_${field.target}_${field.key}`) || '').trim();
-    if (!raw) return;
-    const parsed = field.type === 'number' ? Number(raw) : raw;
-    if (field.target === 'secrets') secrets[field.key] = parsed;
-    else config[field.key] = parsed;
-  });
-  config.market_type = new FormData(formEl).get('market_type');
-  return { config, secrets };
-}
-function renderPlatformCatalog(){
-  const container = document.getElementById('platform-catalog');
-  if (!container) return;
-  const grouped = METADATA.platforms.reduce((acc, platform) => {
-    const key = platform.category || 'others';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(platform);
-    return acc;
-  }, {});
+let STRATEGY_CONTROL={managed_by_admin:false,allowed_strategies:[],all_strategies:[]};
 
-  container.innerHTML = Object.entries(grouped).map(([category, platforms]) => `
-    <div class="catalog-card">
-      <h3>${CATEGORY_TITLES[category] || category}</h3>
-      <div class="stack">
-        ${platforms.map(platform => `
-          <div class="connector-item compact">
-            <div class="row-between">
-              <strong>${platform.display_name}</strong>
-              <span class="pill tiny ${platform.is_enabled_global && platform.grant?.is_enabled ? 'pill-on' : 'pill-off'}">
-                ${platform.is_enabled_global && platform.grant?.is_enabled ? 'Disponible' : 'No disponible'}
-              </span>
-            </div>
-            <small class="hint">${platform.guide?.summary || 'Conector configurable para operar.'}</small>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `).join('');
+function parseApiError(error){const raw=String(error?.message||'Error inesperado');try{const payload=JSON.parse(raw);if(payload?.detail){if(Array.isArray(payload.detail)) return payload.detail.map(d=>d.msg||JSON.stringify(d)).join(' | ');return String(payload.detail);}}catch(_e){}return raw;}
+async function api(url,options={}){const res=await fetch(url,{headers:{'Content-Type':'application/json'},credentials:'same-origin',...options});if(!res.ok) throw new Error(await res.text());return res.json();}
+function parseCsv(value){return String(value||'').split(',').map(x=>x.trim()).filter(Boolean);}
+function getPlatformMeta(platform){return METADATA.platforms.find(p=>p.platform===platform);}
+
+function initDashboardTabs(){
+  const buttons=document.querySelectorAll('.tab-btn');
+  const panels=document.querySelectorAll('.tab-panel');
+  buttons.forEach((btn)=>btn.addEventListener('click',()=>{
+    const target=btn.dataset.tab;
+    buttons.forEach((b)=>b.classList.toggle('active',b===btn));
+    panels.forEach((panel)=>panel.classList.toggle('active',panel.id===`tab-${target}`));
+  }));
 }
+
+function renderMarketTypeSelect(platform){const select=document.getElementById('market-type-select');if(!select) return;const marketTypes=PLATFORM_MARKET_TYPES[platform]||['spot'];select.innerHTML=marketTypes.map(mt=>`<option value="${mt}">${mt}</option>`).join('');}
+function renderFriendlyFields(platform){const container=document.getElementById('connector-friendly-fields');if(!container) return;const fields=PLATFORM_FIELD_MAP[platform]||[];container.innerHTML=fields.map(field=>`<label>${field.label}<input name="field_${field.target}_${field.key}" type="${field.type||'text'}" ${field.step?`step="${field.step}"`:''} ${field.required?'required':''} placeholder="${field.placeholder||''}"></label>`).join('');}
+function readFriendlyFields(formEl,platform){const fields=PLATFORM_FIELD_MAP[platform]||[];const config={};const secrets={};fields.forEach((field)=>{const raw=String(new FormData(formEl).get(`field_${field.target}_${field.key}`)||'').trim();if(!raw) return;const parsed=field.type==='number'?Number(raw):raw;if(field.target==='secrets') secrets[field.key]=parsed;else config[field.key]=parsed;});config.market_type=new FormData(formEl).get('market_type');return{config,secrets};}
+function renderPlatformCatalog(){const c=document.getElementById('platform-catalog');if(!c) return;const grouped=METADATA.platforms.reduce((acc,p)=>{const k=p.category||'others';if(!acc[k])acc[k]=[];acc[k].push(p);return acc;},{});c.innerHTML=Object.entries(grouped).map(([category,platforms])=>`<div class="catalog-card"><h3>${CATEGORY_TITLES[category]||category}</h3><div class="stack">${platforms.map(platform=>`<div class="connector-item compact"><div class="row-between"><strong>${platform.display_name}</strong><span class="pill tiny ${platform.is_enabled_global&&platform.grant?.is_enabled?'pill-on':'pill-off'}">${platform.is_enabled_global&&platform.grant?.is_enabled?'Habilitado':'Bloqueado'}</span></div></div>`).join('')}</div></div>`).join('');}
 function setPlatformExample(platform){const meta=getPlatformMeta(platform);renderMarketTypeSelect(platform);renderFriendlyFields(platform);if(meta){document.getElementById('symbol-limit-hint').textContent=`Máx. símbolos permitidos: ${meta.grant.max_symbols}. Manual: ${meta.allow_manual_symbols?'sí':'no'}.`;}renderSymbolPresets(platform);}
-function renderPlatformSelect(){const select=document.getElementById('platform-select');if(!select) return;const enabled=METADATA.platforms.filter(p=>p.is_enabled_global&&p.grant?.is_enabled);select.innerHTML=enabled.map(p=>`<option value="${p.platform}">${p.display_name}</option>`).join('');if (!enabled.length) {select.innerHTML='';document.getElementById('connector-friendly-fields').innerHTML='<p class="hint">No tienes conectores habilitados por el administrador.</p>';return;}setPlatformExample(enabled[0].platform);}
+function renderPlatformSelect(){const select=document.getElementById('platform-select');if(!select) return;const enabled=METADATA.platforms.filter(p=>p.is_enabled_global&&p.grant?.is_enabled);select.innerHTML=enabled.map(p=>`<option value="${p.platform}">${p.display_name}</option>`).join('');if(!enabled.length){select.innerHTML='';document.getElementById('connector-friendly-fields').innerHTML='<p class="hint">No tienes conectores habilitados por el administrador.</p>';return;}setPlatformExample(enabled[0].platform);}
 function renderSymbolPresets(platform){const wrap=document.getElementById('symbol-preset-list');const card=document.getElementById('suggested-symbol-card');if(!wrap||!card) return;const meta=getPlatformMeta(platform);const symbols=meta?.top_symbols||[];card.style.display=symbols.length?'block':'none';wrap.innerHTML=symbols.map(s=>`<button type="button" class="chip" data-symbol="${s}">${s}</button>`).join('');wrap.querySelectorAll('.chip').forEach(btn=>btn.addEventListener('click',()=>addSymbol(btn.dataset.symbol)));}
 function addSymbol(symbol){const input=document.getElementById('symbols-input');const current=new Set(parseCsv(input.value||''));const platform=document.getElementById('platform-select').value;const meta=getPlatformMeta(platform);const limit=meta?.grant?.max_symbols||0;if(limit&&current.size>=limit&&!current.has(symbol)){alert(`Tu límite en ${platform} es de ${limit} símbolos.`);return;}current.add(symbol);input.value=Array.from(current).join(',');}
 function openGuideModal(platform){const meta=getPlatformMeta(platform);if(!meta) return;const guide=meta.guide||{};document.getElementById('guide-title').textContent=guide.title||meta.display_name;document.getElementById('guide-summary').textContent=guide.summary||'';document.getElementById('guide-fields').innerHTML=(guide.fields_needed||[]).map(x=>`<li>${x}</li>`).join('');document.getElementById('guide-steps').innerHTML=(guide.steps||[]).map(x=>`<li>${x}</li>`).join('');document.getElementById('guide-modal').classList.remove('hidden');}
-window.closeGuideModal=function(){document.getElementById('guide-modal').classList.add('hidden');};
+window.closeGuideModal=()=>document.getElementById('guide-modal')?.classList.add('hidden');
 
-function renderRunConnectorSelect(connectors) {
-  const select = document.getElementById('run-connector-select');
-  if (!select) return;
-  select.innerHTML = connectors.map(c => `<option value="${c.id}">#${c.id} · ${c.label} (${c.platform} / ${c.mode})</option>`).join('');
+function renderStrategySelect(){
+  const select=document.querySelector('select[name="strategy_slug"]');
+  if(!select) return;
+  const options=Object.entries(STRATEGY_LIBRARY).map(([slug,meta])=>`<option value="${slug}">${meta.name}</option>`).join('');
+  select.innerHTML=options;
 }
-
-function selectedRunConnectorIds() {
-  const select = document.getElementById('run-connector-select');
-  if (!select) return [];
-  return Array.from(select.selectedOptions).map(option => Number(option.value));
+function renderStrategyLibrary(){
+  const container=document.getElementById('strategy-library');
+  if(!container) return;
+  container.innerHTML=Object.entries(STRATEGY_LIBRARY).map(([slug,meta])=>`<button type="button" class="connector-item strategy-card" data-strategy="${slug}"><div class="row-between"><strong>${meta.name}</strong><span class="pill tiny">Info</span></div><small class="hint">${meta.summary}</small></button>`).join('');
+  container.querySelectorAll('.strategy-card').forEach((btn)=>btn.addEventListener('click',()=>openStrategyInfo(btn.dataset.strategy)));
 }
-
-async function refreshDashboard(){
-  const [connectors,summary,trades]=await Promise.all([api('/api/connectors'),api('/api/dashboard'),api('/api/trades')]);
-  document.getElementById('stat-connectors').textContent=summary.total_connectors;document.getElementById('stat-enabled').textContent=summary.enabled_connectors;document.getElementById('stat-trades').textContent=summary.total_trades;document.getElementById('stat-pnl').textContent=summary.realized_pnl;
-  renderRunConnectorSelect(connectors);
-
-  const limits=document.getElementById('limits-list');
-  limits.innerHTML=(summary.limits||[]).map(l=>`<div class="connector-item"><strong>${l.platform}</strong><div class="connector-meta"><span>Estado: ${l.enabled ? 'Habilitado' : 'Deshabilitado'}</span><span>Máx. símbolos: ${l.max_symbols}</span><span>Máx. mov/día: ${l.max_daily_movements}</span></div><small class="hint">${l.notes||'Sin notas'}</small></div>`).join('');
-
-  const list=document.getElementById('connectors-list');
-  list.innerHTML=connectors.map(c=>`<div class="connector-item"><strong>${c.label}</strong><div class="connector-meta"><span>${c.platform}</span><span>mercado: ${c.market_type||'spot'}</span><span>modo: ${c.mode}</span><span>enabled: ${c.is_enabled}</span><span>symbols: ${(c.symbols||[]).join(', ')||'-'}</span></div><div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="testConnector(${c.id})">Test</button><button class="btn" onclick="deleteConnector(${c.id})">Eliminar</button></div><pre class="mini-pre">${JSON.stringify(c.config||{},null,2)}</pre></div>`).join('');
-
-  const tbody=document.querySelector('#trades-table tbody');tbody.innerHTML=trades.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString()}</td><td>${t.platform}</td><td>${(t.meta&&t.meta.market_type)||'-'}</td><td>${t.symbol}</td><td>${t.side}</td><td>${t.quantity}</td><td>${Number(t.price).toFixed(4)}</td><td>${t.status}</td><td>${t.pnl}</td></tr>`).join('');
-  const labels=Object.keys(summary.platforms||{});const values=Object.values(summary.platforms||{});const canvas=document.getElementById('platform-chart');if(window.platformChart) window.platformChart.destroy();window.platformChart=new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data:values}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}}}});
+function openStrategyInfo(slug){
+  const item=STRATEGY_LIBRARY[slug];
+  if(!item) return;
+  document.getElementById('strategy-modal-title').textContent=item.name;
+  document.getElementById('strategy-modal-summary').textContent=item.summary;
+  document.getElementById('strategy-modal-usecase').textContent=item.useCase;
+  document.getElementById('strategy-modal-timeframes').textContent=item.timeframes;
+  document.getElementById('strategy-modal-tips').innerHTML=item.tips.map((tip)=>`<li>${tip}</li>`).join('');
+  document.getElementById('strategy-info-modal').classList.remove('hidden');
 }
+function closeStrategyInfo(){document.getElementById('strategy-info-modal')?.classList.add('hidden');}
 
-function applyStrategyControlUI() {
-  const select = document.querySelector('select[name="strategy_slug"]');
-  const hint = document.getElementById('strategy-managed-hint');
-  if (!select) return;
+function renderRunConnectorSelect(connectors){const s=document.getElementById('run-connector-select');if(!s) return;s.innerHTML=connectors.filter(c=>c.is_enabled).map(c=>`<option value="${c.id}">#${c.id} · ${c.label} (${c.platform} / ${c.mode})</option>`).join('');}
+function selectedRunConnectorIds(){const select=document.getElementById('run-connector-select');if(!select) return[];return Array.from(select.selectedOptions).map(o=>Number(o.value));}
+function humanNotes(value){if(!value) return 'Configuración personalizada.';if(String(value).toLowerCase().includes('auto-created default grant')) return 'Permiso base creado automáticamente por el sistema.';return value;}
+function connectorSummary(config={}){const parts=[];if(config.market_type) parts.push(`Mercado: ${config.market_type}`);if(config.default_quantity) parts.push(`Tamaño por operación: ${config.default_quantity}`);if(config.allocation_mode&&config.allocation_value){parts.push(config.allocation_mode==='percent'?`Asignación: ${config.allocation_value}%`:`Asignación fija: ${config.allocation_value}`);}return parts.join(' · ')||'Sin configuración adicional';}
 
-  const allowed = STRATEGY_CONTROL.allowed_strategies?.length ? STRATEGY_CONTROL.allowed_strategies : Array.from(select.options).map((o) => o.value);
-  Array.from(select.options).forEach((option) => {
-    option.hidden = !allowed.includes(option.value);
-    option.disabled = !allowed.includes(option.value);
-  });
-  if (!allowed.includes(select.value) && allowed.length) select.value = allowed[0];
+async function refreshDashboard(){const [connectors,summary,trades]=await Promise.all([api('/api/connectors'),api('/api/dashboard'),api('/api/trades')]);document.getElementById('stat-connectors').textContent=summary.total_connectors;document.getElementById('stat-enabled').textContent=summary.enabled_connectors;document.getElementById('stat-trades').textContent=summary.total_trades;document.getElementById('stat-pnl').textContent=summary.realized_pnl;renderRunConnectorSelect(connectors);const limits=document.getElementById('limits-list');limits.innerHTML=(summary.limits||[]).map(l=>`<div class="connector-item"><div class="row-between"><strong>${l.platform}</strong><span class="pill tiny ${l.enabled?'pill-on':'pill-off'}">${l.enabled?'Habilitado':'Deshabilitado'}</span></div><div class="connector-meta"><span>Máx. símbolos: ${l.max_symbols}</span><span>Máx. mov/día: ${l.max_daily_movements}</span></div><small class="hint">${humanNotes(l.notes)}</small></div>`).join('');const list=document.getElementById('connectors-list');list.innerHTML=connectors.map(c=>`<div class="connector-item"><div class="row-between"><strong>${c.label}</strong><span class="pill tiny ${c.is_enabled?'pill-on':'pill-off'}">${c.is_enabled?'Activo':'Inactivo'}</span></div><div class="connector-meta"><span>${c.platform.toUpperCase()}</span><span>Modo: ${c.mode}</span><span>Símbolos: ${(c.symbols||[]).join(', ')||'-'}</span></div><small class="hint">${connectorSummary(c.config||{})}</small><div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="testConnector(${c.id})">Test</button><button class="btn" onclick="deleteConnector(${c.id})">Eliminar</button></div></div>`).join('');const tbody=document.querySelector('#trades-table tbody');tbody.innerHTML=trades.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString()}</td><td>${t.platform}</td><td>${(t.meta&&t.meta.market_type)||'-'}</td><td>${t.symbol}</td><td>${t.side}</td><td>${t.quantity}</td><td>${Number(t.price).toFixed(4)}</td><td>${t.status}</td><td>${t.pnl}</td></tr>`).join('');const labels=Object.keys(summary.platforms||{});const values=Object.values(summary.platforms||{});const canvas=document.getElementById('platform-chart');if(window.platformChart) window.platformChart.destroy();window.platformChart=new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data:values}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}}}});}
 
-  if (STRATEGY_CONTROL.managed_by_admin) {
-    select.disabled = true;
-    if (hint) hint.textContent = 'Estrategia gestionada por administrador para esta cuenta.';
-  } else {
-    select.disabled = false;
-    if (hint) hint.textContent = 'Puedes elegir entre las estrategias habilitadas para tu cuenta.';
-  }
-}
-async function testConnector(id){const out=await api(`/api/connectors/${id}/test`,{method:'POST'});alert(`${out.status}: ${out.message}\n\n${JSON.stringify(out.raw,null,2)}`);}async function deleteConnector(id){await api(`/api/connectors/${id}`,{method:'DELETE'});refreshDashboard();}
-document.getElementById('platform-select')?.addEventListener('change',e=>{setPlatformExample(e.target.value);});
-document.getElementById('market-type-select')?.addEventListener('change',()=>{setPlatformExample(document.getElementById('platform-select').value);});
-document.getElementById('open-guide-btn')?.addEventListener('click',()=>{const platform=document.getElementById('platform-select').value;openGuideModal(platform);});
-document.getElementById('connector-form')?.addEventListener('submit',async e=>{
-  e.preventDefault();
-  const fd=new FormData(e.target);
-  const platform=String(fd.get('platform')||'');
-  const friendly = readFriendlyFields(e.target, platform);
-  await api('/api/connectors',{method:'POST',body:JSON.stringify({platform,label:fd.get('label'),mode:fd.get('mode'),market_type:fd.get('market_type'),symbols:parseCsv(fd.get('symbols')),config:friendly.config,secrets:friendly.secrets})});
-  e.target.reset();
-  renderPlatformSelect();
-  refreshDashboard();
-});
-document.getElementById('run-form')?.addEventListener('submit',async e=>{
-  e.preventDefault();
-  const fd=new FormData(e.target);
-  const connectorIds = selectedRunConnectorIds();
-  if (!connectorIds.length) {
-    document.getElementById('run-output').textContent = 'Selecciona al menos un conector para ejecutar la estrategia.';
-    return;
-  }
-  const result=await api('/api/strategies/run',{method:'POST',body:JSON.stringify({connector_ids:connectorIds,symbols:parseCsv(fd.get('symbols')),timeframe:fd.get('timeframe'),strategy_slug:fd.get('strategy_slug'),risk_per_trade:Number(fd.get('risk_per_trade')),min_ml_probability:Number(fd.get('min_ml_probability')),use_live_if_available:fd.get('use_live_if_available')==='on'})});document.getElementById('run-output').textContent=JSON.stringify(result,null,2);refreshDashboard();
-});
-async function init(){
-  METADATA=await api('/api/platform-metadata');
-  STRATEGY_CONTROL = await api('/api/strategy-control');
-  renderPlatformCatalog();
-  renderPlatformSelect();
-  applyStrategyControlUI();
-  await refreshDashboard();
-}
-init().catch(err=>{console.error(err);const out=document.getElementById('run-output');if(out) out.textContent='Error cargando dashboard: '+err.message;});
+function applyStrategyControlUI(){const select=document.querySelector('select[name="strategy_slug"]');const hint=document.getElementById('strategy-managed-hint');if(!select) return;const allowed=STRATEGY_CONTROL.allowed_strategies?.length?STRATEGY_CONTROL.allowed_strategies:Array.from(select.options).map(o=>o.value);Array.from(select.options).forEach(option=>{option.hidden=!allowed.includes(option.value);option.disabled=!allowed.includes(option.value);});if(!allowed.includes(select.value)&&allowed.length) select.value=allowed[0];if(STRATEGY_CONTROL.managed_by_admin){select.disabled=true;if(hint) hint.textContent='Estrategia gestionada por administrador para esta cuenta.';}else{select.disabled=false;if(hint) hint.textContent='Puedes elegir entre las estrategias habilitadas para tu cuenta.';}}
+
+async function runHeartbeat(){const out=document.getElementById('heartbeat-output');if(!out) return;out.innerHTML='<small class="hint">Validando conectores...</small>';try{const data=await api('/api/heartbeat');if(!data.checks.length){out.innerHTML='<small class="hint">No hay conectores activos para validar.</small>';return;}out.innerHTML=data.checks.map(item=>`<div class="connector-item compact"><div class="row-between"><strong>${item.label} (${item.platform})</strong><span class="pill tiny ${item.ok?'pill-on':'pill-off'}">${item.ok?'OK':'Error'}</span></div><small class="hint">${item.message}</small></div>`).join('');}catch(err){out.innerHTML=`<div class="status-msg status-error">${parseApiError(err)}</div>`;}}
+
+async function testConnector(id){try{const out=await api(`/api/connectors/${id}/test`,{method:'POST'});alert(`${out.status}: ${out.message}`);}catch(err){alert(parseApiError(err));}}
+async function deleteConnector(id){await api(`/api/connectors/${id}`,{method:'DELETE'});refreshDashboard();}
+
+document.getElementById('platform-select')?.addEventListener('change',e=>setPlatformExample(e.target.value));
+document.getElementById('market-type-select')?.addEventListener('change',()=>setPlatformExample(document.getElementById('platform-select').value));
+document.getElementById('open-guide-btn')?.addEventListener('click',()=>openGuideModal(document.getElementById('platform-select').value));
+document.getElementById('heartbeat-btn')?.addEventListener('click',runHeartbeat);
+document.getElementById('strategy-info-close')?.addEventListener('click',closeStrategyInfo);
+document.getElementById('strategy-info-modal')?.addEventListener('click',(e)=>{if(e.target.id==='strategy-info-modal') closeStrategyInfo();});
+
+document.getElementById('connector-form')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.target);const platform=String(fd.get('platform')||'');const friendly=readFriendlyFields(e.target,platform);try{await api('/api/connectors',{method:'POST',body:JSON.stringify({platform,label:fd.get('label'),mode:fd.get('mode'),market_type:fd.get('market_type'),symbols:parseCsv(fd.get('symbols')),config:friendly.config,secrets:friendly.secrets})});e.target.reset();renderPlatformSelect();refreshDashboard();}catch(err){document.getElementById('run-output').textContent=parseApiError(err);}});
+
+document.getElementById('run-form')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.target);const connectorIds=selectedRunConnectorIds();if(!connectorIds.length){document.getElementById('run-output').textContent='Selecciona al menos un conector para ejecutar la estrategia.';return;}const riskPercent=Number(fd.get('risk_per_trade_percent'));const mlPercent=Number(fd.get('min_ml_probability_percent'));try{const result=await api('/api/strategies/run',{method:'POST',body:JSON.stringify({connector_ids:connectorIds,symbols:parseCsv(fd.get('symbols')),timeframe:fd.get('timeframe'),strategy_slug:fd.get('strategy_slug'),risk_per_trade:riskPercent,min_ml_probability:mlPercent,use_live_if_available:fd.get('use_live_if_available')==='on'})});document.getElementById('run-output').textContent=JSON.stringify(result,null,2);refreshDashboard();}catch(err){document.getElementById('run-output').textContent=parseApiError(err);}});
+
+async function init(){METADATA=await api('/api/platform-metadata');STRATEGY_CONTROL=await api('/api/strategy-control');initDashboardTabs();renderStrategySelect();renderStrategyLibrary();renderPlatformCatalog();renderPlatformSelect();applyStrategyControlUI();await refreshDashboard();runHeartbeat();}
+init().catch(err=>{console.error(err);const out=document.getElementById('run-output');if(out) out.textContent='Error cargando dashboard: '+parseApiError(err);});

@@ -42,9 +42,9 @@ class StrategyRequest(BaseModel):
     connector_ids: list[int]
     symbols: list[str]
     timeframe: str = "1h"
-    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"] = "ema_rsi"
-    risk_per_trade: float = Field(default=0.01, gt=0, le=0.1)
-    min_ml_probability: float = Field(default=0.55, ge=0, le=1)
+    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"] = "ema_rsi"
+    risk_per_trade: float = Field(default=1, gt=0, le=100)
+    min_ml_probability: float = Field(default=55, ge=0, le=100)
     use_live_if_available: bool = False
 
 
@@ -90,4 +90,4 @@ class AdminPolicyUpdate(BaseModel):
 
 class AdminStrategyControlUpdate(BaseModel):
     managed_by_admin: bool
-    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]] = Field(default_factory=list)
+    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]] = Field(default_factory=list)

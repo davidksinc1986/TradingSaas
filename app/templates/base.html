@@ -14,8 +14,7 @@
       <a href="/">Inicio</a>
       <a href="/dashboard">Dashboard</a>
       {% if user and user.is_admin %}<a href="/admin">Admin</a>{% endif %}
-      <a href="/auth/login">Login</a>
-      <a href="/auth/logout">Salir</a>
+      {% if user %}<a href="/auth/logout" id="nav-logout">Salir</a>{% else %}<a href="/auth/login" id="nav-login">Login</a>{% endif %}
     </nav>
   </header>
   <main class="page">
