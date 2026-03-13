@@ -9,6 +9,7 @@ from app.models import StrategyProfile, User, UserStrategyControl
 from app.routers import api, auth, views
 from app.security import hash_password
 from app.services.policies import ensure_user_grants, seed_platform_policies
+from app.services.pricing import ensure_pricing_seed
 
 app = FastAPI(title=settings.app_name)
 
@@ -71,6 +72,7 @@ def bootstrap():
             db.add(admin)
             db.flush()
         seed_platform_policies(db)
+        ensure_pricing_seed(db)
         for user in db.query(User).all():
             ensure_user_grants(db, user)
             control = db.query(UserStrategyControl).filter(UserStrategyControl.user_id == user.id).first()

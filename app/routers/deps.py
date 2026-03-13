@@ -27,3 +27,17 @@ def admin_user(user: User = Depends(current_user)) -> User:
     if not user.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
     return user
+
+
+def optional_user(request: Request, db=Depends(get_db)) -> User | None:
+    auth = request.cookies.get("access_token")
+    if not auth or not auth.startswith("Bearer "):
+        return None
+    token = auth.removeprefix("Bearer ")
+    email = decode_access_token(token)
+    if not email:
+        return None
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not user.is_active:
+        return None
+    return user
