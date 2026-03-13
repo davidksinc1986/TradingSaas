@@ -1,27 +1,39 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero">
-  <div>
-    <span class="pill">Trading cuantitativo multi-plataforma</span>
-    <h1>Una sola cuenta de usuario para gestionar MT5, cTrader, TradingView, Binance, Bybit y OKX.</h1>
-    <p>
-      El super usuario centraliza la operación: crea usuarios, configura conectores/plataformas/símbolos y límites.
-      El usuario final inicia sesión y opera con dashboard de lectura, cargando solo credenciales necesarias.
-    </p>
+<section class="hero hero-home">
+  <div class="hero-copy">
+    <span class="pill">{{ tr('home.pill') }}</span>
+    <h1>{{ tr('home.title') }}</h1>
+    <p>{{ tr('home.body') }}</p>
     <div class="actions">
-      <a class="btn primary" href="/auth/login">Iniciar sesión</a>
+      <a class="btn primary" href="/auth/login">{{ tr('home.cta_enter') }}</a>
+      <a class="btn" href="/dashboard">{{ tr('home.cta_dashboard') }}</a>
+    </div>
+    <div class="hero-gallery">
+      <img src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=1400&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1642543492481-44e81e3914a7?auto=format&fit=crop&w=1400&q=80" alt="Gráfico financiero al alza" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1596720426673-e4e14290f0cc?auto=format&fit=crop&w=1400&q=80" alt="Petróleo y monedas internacionales" loading="lazy">
     </div>
   </div>
-  <div class="card panel">
-    <h3>Qué trae esta base</h3>
-    <ul>
-      <li>Multiusuario</li>
-      <li>Selección de varios símbolos por conector</li>
-      <li>Paper trading y live base</li>
-      <li>Dashboard con métricas</li>
-      <li>Webhook TradingView</li>
-      <li>Crypto exchanges con credenciales por usuario</li>
-    </ul>
+
+  <div class="stack">
+    <form class="card auth-card hero-login" method="post" action="/auth/login">
+      <h2>{{ tr('home.login_title') }}</h2>
+      <p class="muted">{{ tr('home.login_hint') }}</p>
+      <label>Usuario o email<input type="text" name="email" required></label>
+      <label>Contraseña<input type="password" name="password" required></label>
+      <button class="btn primary" type="submit">{{ tr('home.cta_enter') }}</button>
+    </form>
+
+    <div class="card panel faq-panel">
+      <h3>{{ tr('home.faq_title') }}</h3>
+      <ul>
+        <li><strong>¿Qué hace?</strong> Unifica conectores, símbolos y ejecución de estrategias en una sola plataforma.</li>
+        <li><strong>¿Sirve para ingresos pasivos?</strong> Te ayuda a sistematizar tu operación para buscar constancia; no promete ganancias garantizadas.</li>
+        <li><strong>¿Mis datos están protegidos?</strong> Cada usuario ve solo sus conectores, movimientos y configuración; el control global queda solo en admin.</li>
+        <li><strong>¿Puedo crecer con esto?</strong> Sí, escalando reglas, riesgo y conectores por cuenta según tu perfil.</li>
+      </ul>
+    </div>
   </div>
 </section>
 {% endblock %}

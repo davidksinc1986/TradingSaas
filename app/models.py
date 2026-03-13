@@ -20,6 +20,20 @@ class User(Base):
     trade_runs = relationship("TradeRun", back_populates="user", cascade="all, delete-orphan")
     trade_logs = relationship("TradeLog", back_populates="user", cascade="all, delete-orphan")
     platform_grants = relationship("UserPlatformGrant", back_populates="user", cascade="all, delete-orphan")
+    strategy_control = relationship("UserStrategyControl", back_populates="user", cascade="all, delete-orphan", uselist=False)
+
+
+class UserStrategyControl(Base):
+    __tablename__ = "user_strategy_controls"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_strategy_control_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    managed_by_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    allowed_strategies_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="strategy_control")
 
 
 class PlatformPolicy(Base):

@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core import settings
 from app.db import Base, SessionLocal, engine
-from app.models import StrategyProfile, User
+from app.models import StrategyProfile, User, UserStrategyControl
 from app.routers import api, auth, views
 from app.security import hash_password
 from app.services.policies import ensure_user_grants, seed_platform_policies
@@ -33,6 +33,15 @@ def bootstrap():
 
         admin = db.query(User).filter(User.email == settings.admin_email).first()
         if not admin:
+            legacy_admin = db.query(User).filter(User.email == "davidksinc").first()
+            if legacy_admin:
+                legacy_admin.email = settings.admin_email
+                legacy_admin.name = settings.admin_name
+                legacy_admin.is_admin = True
+                legacy_admin.is_active = True
+                admin = legacy_admin
+
+        if not admin:
             admin = User(
                 email=settings.admin_email,
                 name=settings.admin_name,
@@ -45,6 +54,9 @@ def bootstrap():
         seed_platform_policies(db)
         for user in db.query(User).all():
             ensure_user_grants(db, user)
+            control = db.query(UserStrategyControl).filter(UserStrategyControl.user_id == user.id).first()
+            if not control:
+                db.add(UserStrategyControl(user_id=user.id, managed_by_admin=False, allowed_strategies_json={"items": ["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]}))
         db.commit()
     finally:
         db.close()

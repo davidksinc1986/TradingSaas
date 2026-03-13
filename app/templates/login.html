@@ -2,11 +2,12 @@
 {% block content %}
 <div class="auth-wrap">
   <form class="card auth-card" method="post" action="/auth/login">
-    <h1>Iniciar sesión</h1>
+    <h1>{{ tr('login.title') }}</h1>
+    <p class="muted">{{ tr('login.subtitle') }}</p>
     <label>Usuario o email<input type="text" name="email" required></label>
     <label>Contraseña<input type="password" name="password" required></label>
-    <button class="btn primary" type="submit">Entrar</button>
-    <p class="muted">Acceso gestionado por el super usuario.</p>
+    <button class="btn primary" type="submit">{{ tr('login.button') }}</button>
+    <p class="muted">Acceso administrado por tu cuenta principal.</p>
   </form>
 </div>
 {% endblock %}
