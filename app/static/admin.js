@@ -8,6 +8,18 @@ async function api(url, options = {}) {
   return res.json();
 }
 
+function parseApiError(error) {
+  const raw = String(error?.message || "Error inesperado");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.detail) {
+      if (Array.isArray(parsed.detail)) return parsed.detail.map((d) => d.msg || JSON.stringify(d)).join(" | ");
+      return String(parsed.detail);
+    }
+  } catch (_e) {}
+  return raw;
+}
+
 function showFeedback(message, kind = "ok") {
   const el = document.getElementById("admin-feedback");
   if (!el) return;
@@ -16,22 +28,73 @@ function showFeedback(message, kind = "ok") {
   el.textContent = message;
 }
 
-let USERS = [];
+function cleanNote(value) {
+  if (!value) return "Sin notas";
+  if (String(value).toLowerCase().includes("auto-created default grant")) return "Permiso base generado automáticamente.";
+  return value;
+}
 
-function renderUserPicker() {
-  const select = document.getElementById("selected-user");
-  if (!select) return;
-  const prev = select.value;
-  select.innerHTML = USERS.map((u) => `<option value="${u.id}">${u.name} (${u.email})</option>`).join("");
-  if (prev && USERS.find((u) => String(u.id) === prev)) select.value = prev;
+const STRATEGY_LABELS = {
+  ema_rsi: "EMA + RSI",
+  mean_reversion_zscore: "Mean Reversion Z-Score",
+  momentum_breakout: "Momentum Breakout",
+  macd_trend_pullback: "MACD Trend Pullback",
+  bollinger_rsi_reversal: "Bollinger + RSI Reversal",
+  adx_trend_follow: "ADX Trend Follow",
+  stochastic_rebound: "Stochastic Rebound",
+};
+
+let USERS = [];
+let SELECTED_USER_ID = null;
+let SELECTED_PROFILE = null;
+
+function renderUserList() {
+  const container = document.getElementById("admin-users");
+  if (!container) return;
+  container.innerHTML = USERS.map((u) => `
+    <button class="connector-item user-card ${Number(SELECTED_USER_ID) === u.id ? "selected" : ""}" data-user-id="${u.id}">
+      <strong>${u.name}</strong>
+      <div class="connector-meta"><span>${u.email}</span><span>ID: ${u.id}</span><span>Admin: ${u.is_admin ? "Sí" : "No"}</span><span>Activo: ${u.is_active ? "Sí" : "No"}</span></div>
+    </button>
+  `).join("");
+  container.querySelectorAll(".user-card").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      SELECTED_USER_ID = Number(btn.dataset.userId);
+      renderUserList();
+      await refreshSelectedUserProfile();
+    });
+  });
+}
+
+function openStrategyModal() {
+  const modal = document.getElementById("strategy-modal");
+  if (!modal || !SELECTED_PROFILE) return;
+  const control = SELECTED_PROFILE.strategy_control || { managed_by_admin: false, all_strategies: [], allowed_strategies: [] };
+  const form = document.getElementById("strategy-control-form");
+  form.innerHTML = `
+    <label class="checkbox"><input type="checkbox" name="managed_by_admin" ${control.managed_by_admin ? "checked" : ""}> Gestionado por admin (el usuario no puede cambiarla)</label>
+    <div class="stack">
+      ${control.all_strategies.map((slug) => `
+        <label class="checkbox">
+          <input type="checkbox" name="allowed_strategies" value="${slug}" ${control.allowed_strategies.includes(slug) ? "checked" : ""}>
+          ${STRATEGY_LABELS[slug] || slug}
+        </label>
+      `).join("")}
+    </div>
+    <button class="btn primary btn-sm" type="submit">Guardar estrategias</button>
+  `;
+  modal.classList.remove("hidden");
+}
+
+function closeStrategyModal() {
+  document.getElementById("strategy-modal")?.classList.add("hidden");
 }
 
 async function refreshSelectedUserProfile() {
-  const select = document.getElementById("selected-user");
   const out = document.getElementById("selected-user-profile");
-  if (!select || !out || !select.value) return;
-
-  const data = await api(`/api/admin/users/${select.value}/profile`);
+  if (!out || !SELECTED_USER_ID) return;
+  const data = await api(`/api/admin/users/${SELECTED_USER_ID}/profile`);
+  SELECTED_PROFILE = data;
   const { user, policies, grants, connectors } = data;
   const grantMap = grants.reduce((acc, g) => ({ ...acc, [g.platform]: g }), {});
 
@@ -42,11 +105,11 @@ async function refreshSelectedUserProfile() {
         <span>${user.email}</span>
         <span>Admin: ${user.is_admin ? "Sí" : "No"}</span>
         <span>Activo: ${user.is_active ? "Sí" : "No"}</span>
-        ${user.is_root ? '<span class="pill tiny pill-on">Jerárquico</span>' : ''}
+        ${user.is_root ? '<span class="pill tiny pill-on">Jerárquico</span>' : ""}
       </div>
       <div class="row-wrap" style="margin-top:10px;">
-        <button class="btn" onclick="toggleUser(${user.id}, ${!user.is_active}, null)">${user.is_active ? "Desactivar" : "Activar"}</button>
-        <button class="btn" onclick="toggleUser(${user.id}, null, ${!user.is_admin})">${user.is_admin ? "Quitar admin" : "Hacer admin"}</button>
+        <button class="btn btn-sm" onclick="toggleUser(${user.id}, ${!user.is_active}, null)">${user.is_active ? "Desactivar" : "Activar"}</button>
+        <button class="btn btn-sm" onclick="toggleUser(${user.id}, null, ${!user.is_admin})">${user.is_admin ? "Quitar admin" : "Hacer admin"}</button>
       </div>
     </div>
 
@@ -70,8 +133,8 @@ async function refreshSelectedUserProfile() {
                 </label>
                 <label>Máx. símbolos<input name="max_symbols" type="number" value="${grant.max_symbols}"></label>
                 <label>Máx. movimientos diarios<input name="max_daily_movements" type="number" value="${grant.max_daily_movements}"></label>
-                <label>Notas<input name="notes" value="${grant.notes || ""}" placeholder="Ej: fixed:10 o percent:75"></label>
-                <button class="btn primary" type="submit">Guardar</button>
+                <label>Notas<input name="notes" value="${cleanNote(grant.notes || "")}" placeholder="Ej: fixed:10 o percent:75"></label>
+                <button class="btn primary btn-sm" type="submit">Guardar</button>
               </div>
             </form>
           `;
@@ -80,7 +143,7 @@ async function refreshSelectedUserProfile() {
     </div>
 
     <div class="connector-item">
-      <strong>Conectores del usuario (editar monto fijo o %)</strong>
+      <strong>Conectores del usuario</strong>
       <div class="stack">
         ${connectors.map((c) => `
           <form class="connector-inline-form" data-id="${c.id}" style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:12px;">
@@ -95,9 +158,9 @@ async function refreshSelectedUserProfile() {
                   <option value="percent" ${c.allocation_mode === "percent" ? "selected" : ""}>Porcentaje disponible</option>
                 </select>
               </label>
-              <label>Valor<input name="allocation_value" type="number" step="0.01" value="${c.allocation_value || 0}"></label>
+              <label>Valor<input name="allocation_value" type="number" step="1" value="${c.allocation_value || 0}"></label>
               <label>Símbolos autorizados<input name="symbols" value="${(c.symbols || []).join(",")}" placeholder="BTC/USDT,ETH/USDT"></label>
-              <button class="btn primary" type="submit">Guardar conector</button>
+              <button class="btn primary btn-sm" type="submit">Guardar conector</button>
             </div>
           </form>
         `).join("") || '<small class="hint">Este usuario aún no tiene conectores.</small>'}
@@ -109,19 +172,23 @@ async function refreshSelectedUserProfile() {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
-      await api("/api/admin/grants", {
-        method: "PUT",
-        body: JSON.stringify({
-          user_id: Number(user.id),
-          platform: form.dataset.platform,
-          is_enabled: fd.get("is_enabled") === "true",
-          max_symbols: Number(fd.get("max_symbols")),
-          max_daily_movements: Number(fd.get("max_daily_movements")),
-          notes: String(fd.get("notes") || ""),
-        }),
-      });
-      showFeedback("Permisos actualizados correctamente.");
-      refreshSelectedUserProfile();
+      try {
+        await api("/api/admin/grants", {
+          method: "PUT",
+          body: JSON.stringify({
+            user_id: Number(user.id),
+            platform: form.dataset.platform,
+            is_enabled: fd.get("is_enabled") === "true",
+            max_symbols: Number(fd.get("max_symbols")),
+            max_daily_movements: Number(fd.get("max_daily_movements")),
+            notes: String(fd.get("notes") || ""),
+          }),
+        });
+        showFeedback("Permisos actualizados correctamente.");
+        refreshSelectedUserProfile();
+      } catch (err) {
+        showFeedback(parseApiError(err), "error");
+      }
     });
   });
 
@@ -129,39 +196,34 @@ async function refreshSelectedUserProfile() {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
-      await api(`/api/connectors/${form.dataset.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          symbols: String(fd.get("symbols") || "").split(",").map((v) => v.trim()).filter(Boolean),
-          config: {
-            allocation_mode: fd.get("allocation_mode"),
-            allocation_value: Number(fd.get("allocation_value")),
-          },
-        }),
-      });
-      showFeedback("Conector actualizado correctamente.");
-      refreshSelectedUserProfile();
+      try {
+        await api(`/api/connectors/${form.dataset.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            symbols: String(fd.get("symbols") || "").split(",").map((v) => v.trim()).filter(Boolean),
+            config: {
+              allocation_mode: fd.get("allocation_mode"),
+              allocation_value: Number(fd.get("allocation_value")),
+            },
+          }),
+        });
+        showFeedback("Conector actualizado correctamente.");
+        refreshSelectedUserProfile();
+      } catch (err) {
+        showFeedback(parseApiError(err), "error");
+      }
     });
   });
 }
 
 async function refreshAdmin() {
-  const [users, policies] = await Promise.all([
-    api("/api/admin/users"),
-    api("/api/admin/policies"),
-  ]);
+  const [users, policies] = await Promise.all([api("/api/admin/users"), api("/api/admin/policies")]);
   USERS = users;
+  if (!SELECTED_USER_ID && USERS.length) SELECTED_USER_ID = USERS[0].id;
+  if (SELECTED_USER_ID && !USERS.find((u) => u.id === SELECTED_USER_ID)) SELECTED_USER_ID = USERS[0]?.id || null;
+  renderUserList();
 
-  renderUserPicker();
-
-  document.getElementById("admin-users").innerHTML = users.map(u => `
-    <div class="connector-item">
-      <strong>${u.name}</strong>
-      <div class="connector-meta"><span>${u.email}</span><span>ID: ${u.id}</span><span>Admin: ${u.is_admin ? "Sí" : "No"}</span><span>Activo: ${u.is_active ? "Sí" : "No"}</span></div>
-    </div>
-  `).join("");
-
-  document.getElementById("admin-policies").innerHTML = policies.map(p => {
+  document.getElementById("admin-policies").innerHTML = policies.map((p) => {
     const globalBadge = p.is_enabled_global ? "Global: Activado" : "Global: Desactivado";
     const manualBadge = p.allow_manual_symbols ? "Carga manual: Permitida" : "Carga manual: Bloqueada";
     return `
@@ -174,8 +236,8 @@ async function refreshAdmin() {
           </div>
         </div>
         <div class="row-wrap" style="margin-top:8px;">
-          <button class="btn" onclick='togglePolicy(${JSON.stringify(p.platform)}, ${!p.is_enabled_global}, null)'>${p.is_enabled_global ? "Desactivar acceso global" : "Activar acceso global"}</button>
-          <button class="btn" onclick='togglePolicy(${JSON.stringify(p.platform)}, null, ${!p.allow_manual_symbols})'>${p.allow_manual_symbols ? "Bloquear carga manual" : "Permitir carga manual"}</button>
+          <button class="btn btn-sm" onclick='togglePolicy(${JSON.stringify(p.platform)}, ${!p.is_enabled_global}, null)'>${p.is_enabled_global ? "Desactivar acceso global" : "Activar acceso global"}</button>
+          <button class="btn btn-sm" onclick='togglePolicy(${JSON.stringify(p.platform)}, null, ${!p.allow_manual_symbols})'>${p.allow_manual_symbols ? "Bloquear carga manual" : "Permitir carga manual"}</button>
         </div>
       </div>
     `;
@@ -189,16 +251,18 @@ async function toggleUser(id, is_active, is_admin) {
     await api(`/api/admin/users/${id}`, { method: "PUT", body: JSON.stringify({ is_active, is_admin }) });
     await refreshAdmin();
   } catch (err) {
-    showFeedback(`No se pudo actualizar el usuario: ${err.message}`, "error");
+    showFeedback(parseApiError(err), "error");
   }
 }
 
 async function togglePolicy(platform, is_enabled_global, allow_manual_symbols) {
-  await api(`/api/admin/policies/${platform}`, { method: "PUT", body: JSON.stringify({ platform, is_enabled_global, allow_manual_symbols }) });
-  refreshAdmin();
+  try {
+    await api(`/api/admin/policies/${platform}`, { method: "PUT", body: JSON.stringify({ platform, is_enabled_global, allow_manual_symbols }) });
+    refreshAdmin();
+  } catch (err) {
+    showFeedback(parseApiError(err), "error");
+  }
 }
-
-document.getElementById("selected-user")?.addEventListener("change", refreshSelectedUserProfile);
 
 document.getElementById("create-user-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -209,7 +273,6 @@ document.getElementById("create-user-form")?.addEventListener("submit", async (e
       showFeedback("La contraseña debe tener al menos 6 caracteres.", "error");
       return;
     }
-
     await api("/api/admin/users", {
       method: "POST",
       body: JSON.stringify({
@@ -222,11 +285,33 @@ document.getElementById("create-user-form")?.addEventListener("submit", async (e
     e.target.reset();
     refreshAdmin();
   } catch (err) {
-    showFeedback(`No se pudo crear el usuario: ${err.message}`, "error");
+    showFeedback(parseApiError(err), "error");
   }
 });
 
-refreshAdmin().catch(err => {
+document.getElementById("open-strategy-modal")?.addEventListener("click", openStrategyModal);
+document.getElementById("close-strategy-modal")?.addEventListener("click", closeStrategyModal);
+document.getElementById("strategy-control-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!SELECTED_USER_ID) return;
+  const fd = new FormData(e.target);
+  try {
+    await api(`/api/admin/users/${SELECTED_USER_ID}/strategy-control`, {
+      method: "PUT",
+      body: JSON.stringify({
+        managed_by_admin: fd.get("managed_by_admin") === "on",
+        allowed_strategies: fd.getAll("allowed_strategies"),
+      }),
+    });
+    showFeedback("Estrategias asignadas correctamente.");
+    closeStrategyModal();
+    refreshSelectedUserProfile();
+  } catch (err) {
+    showFeedback(parseApiError(err), "error");
+  }
+});
+
+refreshAdmin().catch((err) => {
   const output = document.getElementById("selected-user-profile");
-  if (output) output.innerHTML = `<div class="status-msg status-error">${err.message}</div>`;
+  if (output) output.innerHTML = `<div class="status-msg status-error">${parseApiError(err)}</div>`;
 });

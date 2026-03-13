@@ -3,7 +3,7 @@
 <section class="dashboard-header">
   <span class="pill">Admin</span>
   <h1>Panel de control administrativo</h1>
-  <p>Gestiona usuarios, permisos por plataforma y configuración de movimiento por app para el usuario seleccionado.</p>
+  <p>Gestiona usuarios, permisos por plataforma y estrategias asignadas por usuario.</p>
 </section>
 
 <section class="grid-2">
@@ -17,13 +17,13 @@
     </form>
     <small class="hint">La contraseña debe tener al menos 6 caracteres para poder crear el usuario.</small>
     <div id="admin-feedback" class="status-msg hidden"></div>
-    <label style="margin-top:12px;display:block;">Usuario a gestionar
-      <select id="selected-user"></select>
-    </label>
-    <div id="admin-users" class="stack"></div>
+    <div id="admin-users" class="stack" style="margin-top:12px;"></div>
   </div>
   <div class="card">
-    <h2>Perfil del usuario seleccionado</h2>
+    <div class="row-between">
+      <h2>Perfil del usuario seleccionado</h2>
+      <button id="open-strategy-modal" class="btn">Asignar estrategias</button>
+    </div>
     <div id="selected-user-profile" class="stack"></div>
   </div>
 </section>
@@ -32,6 +32,17 @@
   <h2>Políticas globales de plataforma</h2>
   <div id="admin-policies" class="stack"></div>
 </section>
+
+<div id="strategy-modal" class="modal hidden">
+  <div class="modal-card card" style="max-width:620px;">
+    <div class="row-between">
+      <h3>Asignar estrategias al usuario</h3>
+      <button class="btn" id="close-strategy-modal">Cerrar</button>
+    </div>
+    <small class="hint">Úsalo cuando quieras bloquear carga manual y definir exactamente qué estrategias puede correr el usuario.</small>
+    <form id="strategy-control-form" class="form-grid" style="margin-top:12px;"></form>
+  </div>
+</div>
 
 <script src="/static/admin.js"></script>
 {% endblock %}
