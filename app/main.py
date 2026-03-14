@@ -9,12 +9,13 @@ from app.core import settings
 from sqlalchemy import inspect, text
 
 from app.db import Base, SessionLocal, engine
-from app.models import StrategyProfile, User, UserStrategyControl
+from app.models import BotSession, StrategyProfile, User, UserStrategyControl
 from app.routers import api, auth, views
 from app.security import hash_password
 from app.services.alerts import format_failure_message, send_telegram_alert
 from app.services.policies import ensure_user_grants, seed_platform_policies
 from app.services.pricing import ensure_pricing_seed
+from app.services.bot_runner import start_bot_worker, stop_bot_worker
 
 app = FastAPI(title=settings.app_name)
 logger = logging.getLogger("trading_saas")
@@ -104,6 +105,9 @@ def bootstrap():
             db.flush()
         seed_platform_policies(db)
         ensure_pricing_seed(db)
+        if not inspect(engine).has_table("bot_sessions"):
+            BotSession.__table__.create(bind=engine, checkfirst=True)
+
         for user in db.query(User).all():
             ensure_user_grants(db, user)
             control = db.query(UserStrategyControl).filter(UserStrategyControl.user_id == user.id).first()
@@ -126,3 +130,13 @@ def bootstrap():
 @app.get("/health")
 def health():
     return {"ok": True, "app": settings.app_name}
+
+
+@app.on_event("startup")
+def start_background_worker():
+    start_bot_worker()
+
+
+@app.on_event("shutdown")
+def stop_background_worker():
+    stop_bot_worker()

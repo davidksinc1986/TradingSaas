@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import logging
+import threading
+from datetime import datetime, timedelta
+
+from app.db import SessionLocal
+from app.models import BotSession, Connector
+from app.services.trading import run_strategy
+
+logger = logging.getLogger("trading_saas.bot_runner")
+
+_STOP_EVENT = threading.Event()
+_WORKER_THREAD: threading.Thread | None = None
+
+
+def _now_utc() -> datetime:
+    return datetime.utcnow()
+
+
+def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
+    now = now or _now_utc()
+    sessions = db.query(BotSession).filter(BotSession.is_active.is_(True)).order_by(BotSession.id.asc()).all()
+    processed = 0
+
+    for session in sessions:
+        if session.next_run_at and session.next_run_at > now:
+            continue
+
+        connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+        if not connector or not connector.is_enabled:
+            session.last_status = "skipped"
+            session.last_error = "Connector disabled or missing"
+            session.last_run_at = now
+            session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
+            processed += 1
+            continue
+
+        symbols = (session.symbols_json or {}).get("symbols", [])
+        if not symbols:
+            session.last_status = "skipped"
+            session.last_error = "No symbols configured"
+            session.last_run_at = now
+            session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
+            processed += 1
+            continue
+
+        try:
+            run_strategy(
+                db=db,
+                user_id=session.user_id,
+                connector_ids=[session.connector_id],
+                symbols=symbols,
+                timeframe=session.timeframe,
+                strategy_slug=session.strategy_slug,
+                risk_per_trade=session.risk_per_trade,
+                min_ml_probability=session.min_ml_probability,
+                use_live_if_available=session.use_live_if_available,
+                run_source="bot",
+                bot_session_id=session.id,
+            )
+            session.last_status = "ok"
+            session.last_error = None
+        except Exception as exc:
+            logger.exception("Bot session %s failed", session.id)
+            session.last_status = "error"
+            session.last_error = str(exc)
+
+        session.last_run_at = now
+        session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
+        processed += 1
+
+    db.commit()
+    return processed
+
+
+def _worker_loop() -> None:
+    while not _STOP_EVENT.is_set():
+        db = SessionLocal()
+        try:
+            execute_due_bot_sessions(db)
+        except Exception:
+            logger.exception("Background bot runner tick failed")
+            db.rollback()
+        finally:
+            db.close()
+        _STOP_EVENT.wait(30)
+
+
+def start_bot_worker() -> None:
+    global _WORKER_THREAD
+    if _WORKER_THREAD and _WORKER_THREAD.is_alive():
+        return
+    _STOP_EVENT.clear()
+    _WORKER_THREAD = threading.Thread(target=_worker_loop, name="bot-runner", daemon=True)
+    _WORKER_THREAD.start()
+
+
+def stop_bot_worker(timeout: float = 5.0) -> None:
+    global _WORKER_THREAD
+    _STOP_EVENT.set()
+    if _WORKER_THREAD and _WORKER_THREAD.is_alive():
+        _WORKER_THREAD.join(timeout=timeout)
+    _WORKER_THREAD = None

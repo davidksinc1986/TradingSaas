@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
 from app.core import settings
-from app.models import Connector, PlanConfig, PlatformPolicy, PricingConfig, TradeLog, TradeRun, User, UserPlatformGrant, UserStrategyControl
+from app.models import BotSession, Connector, PlanConfig, PlatformPolicy, PricingConfig, TradeLog, TradeRun, User, UserPlatformGrant, UserStrategyControl
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
     AdminUserCreate,
@@ -14,6 +14,8 @@ from app.schemas import (
     AdminPricingConfigUpdate,
     AdminStrategyControlUpdate,
     StrategyControlUpdate,
+    BotSessionCreate,
+    BotSessionUpdate,
     AdminUserUpdate,
     ConnectorCreate,
     ConnectorUpdate,
@@ -25,6 +27,7 @@ from app.services.alerts import format_user_failure_message, normalize_alert_loc
 from app.services.connectors import get_client
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
+from app.services.bot_runner import execute_due_bot_sessions
 from app.services.trading import dashboard_data, run_strategy
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -280,6 +283,7 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         risk_per_trade=risk_value,
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
+        run_source="manual",
     )
     return {"ok": True, "results": result}
 
@@ -310,6 +314,104 @@ def update_strategy_control(payload: StrategyControlUpdate, db=Depends(get_db), 
         "allowed_strategies": (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
         "all_strategies": ALL_STRATEGIES,
     }
+
+
+@router.get("/bot-sessions")
+def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
+    sessions = db.query(BotSession).join(Connector, BotSession.connector_id == Connector.id).filter(
+        BotSession.user_id == user.id
+    ).order_by(BotSession.created_at.desc()).all()
+    payload = []
+    for session in sessions:
+        connector = session.connector
+        symbols = (session.symbols_json or {}).get("symbols", [])
+        config = connector.config_json or {}
+        capital = float(config.get("allocation_value", config.get("default_quantity", 0)) or 0)
+        payload.append({
+            "id": session.id,
+            "connector_id": session.connector_id,
+            "connector_label": connector.label if connector else "-",
+            "platform": connector.platform if connector else "-",
+            "mode": connector.mode if connector else "-",
+            "strategy_slug": session.strategy_slug,
+            "timeframe": session.timeframe,
+            "symbols": symbols,
+            "interval_minutes": session.interval_minutes,
+            "risk_per_trade": session.risk_per_trade,
+            "min_ml_probability": session.min_ml_probability,
+            "is_active": session.is_active,
+            "last_run_at": session.last_run_at.isoformat() if session.last_run_at else None,
+            "next_run_at": session.next_run_at.isoformat() if session.next_run_at else None,
+            "last_status": session.last_status,
+            "last_error": session.last_error,
+            "capital_per_operation": capital,
+            "created_at": session.created_at.isoformat(),
+        })
+    return payload
+
+
+@router.post("/bot-sessions")
+def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depends(current_user)):
+    control = _ensure_strategy_control(db, user.id)
+    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+    if control.managed_by_admin and payload.strategy_slug not in allowed:
+        raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+
+    connector = db.query(Connector).filter(
+        Connector.id == payload.connector_id,
+        Connector.user_id == user.id,
+        Connector.is_enabled.is_(True),
+    ).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
+
+    risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+
+    session = BotSession(
+        user_id=user.id,
+        connector_id=connector.id,
+        strategy_slug=payload.strategy_slug,
+        timeframe=payload.timeframe,
+        symbols_json={"symbols": payload.symbols},
+        interval_minutes=payload.interval_minutes,
+        risk_per_trade=risk_value,
+        min_ml_probability=ml_value,
+        use_live_if_available=payload.use_live_if_available,
+        is_active=True,
+        last_status="scheduled",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    execute_due_bot_sessions(db)
+
+    return {"ok": True, "session_id": session.id}
+
+
+@router.put("/bot-sessions/{session_id}")
+def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(get_db), user=Depends(current_user)):
+    session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Bot session not found")
+
+    if payload.is_active is not None:
+        session.is_active = payload.is_active
+    if payload.interval_minutes is not None:
+        session.interval_minutes = payload.interval_minutes
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/bot-sessions/{session_id}")
+def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current_user)):
+    session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Bot session not found")
+    db.delete(session)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/dashboard")
