@@ -1,8 +1,10 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
 from app.core import settings
-from app.models import Connector, PlanConfig, PlatformPolicy, PricingConfig, TradeLog, User, UserPlatformGrant, UserStrategyControl
+from app.models import Connector, PlanConfig, PlatformPolicy, PricingConfig, TradeLog, TradeRun, User, UserPlatformGrant, UserStrategyControl
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
     AdminUserCreate,
@@ -309,6 +311,33 @@ def list_trades(db=Depends(get_db), user=Depends(current_user)):
         "created_at": t.created_at.isoformat(),
         "meta": t.meta_json,
     } for t in trades]
+
+
+@router.get("/execution-logs")
+def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_user)):
+    target = min(max(limit, 1), 500)
+    runs = db.query(TradeRun).filter(TradeRun.user_id == user.id).order_by(TradeRun.created_at.desc()).limit(target).all()
+    payload = []
+    for run in runs:
+        note = run.notes or ""
+        try:
+            parsed_note = json.loads(note) if note else {}
+        except json.JSONDecodeError:
+            parsed_note = {"raw_notes": note}
+        payload.append({
+            "id": run.id,
+            "connector_id": run.connector_id,
+            "symbol": run.symbol,
+            "strategy_slug": run.strategy_slug,
+            "timeframe": run.timeframe,
+            "signal": run.signal,
+            "status": run.status,
+            "ml_probability": run.ml_probability,
+            "quantity": run.quantity,
+            "created_at": run.created_at.isoformat(),
+            "notes": parsed_note,
+        })
+    return payload
 
 
 @router.post("/webhooks/tradingview")

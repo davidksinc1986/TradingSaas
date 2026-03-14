@@ -166,6 +166,31 @@
       </table>
     </div>
   </section>
+
+  <section class="card">
+    <div class="row-between">
+      <h2>Logs de ejecución (5m / 1h)</h2>
+      <button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button>
+    </div>
+    <small class="hint">Muestra la última vela capturada, decisión (sin acción / compra / venta) y estado de ejecución para validar conexión con Binance u otros conectores.</small>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table id="execution-logs-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Símbolo</th>
+            <th>Timeframe</th>
+            <th>Señal</th>
+            <th>Decisión</th>
+            <th>Estado</th>
+            <th>Prob ML</th>
+            <th>Vela</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
 </section>
 
 <div id="strategy-info-modal" class="modal hidden">
