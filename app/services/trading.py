@@ -63,12 +63,22 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 "close": round(float(last_candle["close"]), 6),
                 "volume": round(float(last_candle["volume"]), 6),
             }
+            connector_balance = connector_balance_hint(connector)
+            stop_pct = float((connector.config_json or {}).get("stop_pct", 0.01))
             qty = position_size(
-                balance=connector_balance_hint(connector),
+                balance=connector_balance,
                 risk_per_trade=risk_per_trade,
                 price=price,
-                stop_pct=float((connector.config_json or {}).get("stop_pct", 0.01)),
+                stop_pct=stop_pct,
             )
+            trade_mode = (getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
+            fixed_amount = max(10.0, float(getattr(user, "fixed_trade_amount_usd", 10) or 10))
+            balance_percent = float(getattr(user, "trade_balance_percent", 10) or 10)
+            if trade_mode == "balance_percent":
+                allocation_usd = max(10.0, connector_balance * max(0.0, min(balance_percent, 100.0)) / 100.0)
+            else:
+                allocation_usd = fixed_amount
+            qty = min(qty, allocation_usd / max(price, 0.0000001))
             max_risk_amount = float((connector.config_json or {}).get("max_risk_amount", 0) or 0)
             if max_risk_amount > 0:
                 qty = min(qty, max_risk_amount / max(price, 0.0000001))
@@ -94,6 +104,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                     "decision": "pending",
                     "run_source": run_source,
                     "bot_session_id": bot_session_id,
+                    "trade_amount_mode": trade_mode,
+                    "allocation_usd": round(allocation_usd, 4),
                 }),
             )
             db.add(trade_run)
@@ -108,6 +120,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                     "reason": "signal_hold_or_low_ml_probability",
                     "run_source": run_source,
                     "bot_session_id": bot_session_id,
+                    "trade_amount_mode": trade_mode,
+                    "allocation_usd": round(allocation_usd, 4),
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -137,6 +151,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                     "execution_message": str(exc),
                     "run_source": run_source,
                     "bot_session_id": bot_session_id,
+                    "trade_amount_mode": trade_mode,
+                    "allocation_usd": round(allocation_usd, 4),
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -183,6 +199,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 "execution_message": result.message,
                 "run_source": run_source,
                 "bot_session_id": bot_session_id,
+                    "trade_amount_mode": trade_mode,
+                    "allocation_usd": round(allocation_usd, 4),
             })
 
             outputs.append({
