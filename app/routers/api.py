@@ -20,6 +20,7 @@ from app.schemas import (
     TradingViewWebhook,
 )
 from app.security import encrypt_payload, hash_password
+from app.services.alerts import format_user_failure_message, normalize_alert_locale, send_user_telegram_alert
 from app.services.connectors import get_client
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
@@ -52,7 +53,17 @@ def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
 @router.get("/me")
 def me(user=Depends(current_user), db=Depends(get_db)):
     ensure_user_grants(db, user)
-    return {"id": user.id, "email": user.email, "name": user.name, "phone": user.phone, "is_admin": user.is_admin}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "phone": user.phone,
+        "is_admin": user.is_admin,
+        "telegram_alerts_enabled": user.telegram_alerts_enabled,
+        "telegram_chat_id": ("****" if user.telegram_chat_id_encrypted else ""),
+        "alert_language": normalize_alert_locale(user.alert_language),
+        "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
+    }
 
 
 @router.put("/me")
@@ -71,8 +82,35 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
             raise HTTPException(status_code=400, detail="Phone must be between 7 and 40 characters")
         user.phone = clean_phone or None
 
+    next_alert_enabled = payload.get("telegram_alerts_enabled")
+    if next_alert_enabled is not None:
+        user.telegram_alerts_enabled = bool(next_alert_enabled)
+
+    next_language = payload.get("alert_language")
+    if next_language is not None:
+        user.alert_language = normalize_alert_locale(str(next_language))
+
+    next_telegram_bot_key = payload.get("telegram_bot_key")
+    if next_telegram_bot_key is not None:
+        clean_bot_key = str(next_telegram_bot_key).strip()
+        user.telegram_bot_token_encrypted = encrypt_payload({"value": clean_bot_key}) if clean_bot_key else None
+
+    next_telegram_chat_id = payload.get("telegram_chat_id")
+    if next_telegram_chat_id is not None:
+        clean_chat_id = str(next_telegram_chat_id).strip()
+        user.telegram_chat_id_encrypted = encrypt_payload({"value": clean_chat_id}) if clean_chat_id else None
+
     db.commit()
-    return {"ok": True, "id": user.id, "name": user.name, "phone": user.phone}
+    return {
+        "ok": True,
+        "id": user.id,
+        "name": user.name,
+        "phone": user.phone,
+        "telegram_alerts_enabled": user.telegram_alerts_enabled,
+        "alert_language": normalize_alert_locale(user.alert_language),
+        "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
+        "has_telegram_chat_id": bool(user.telegram_chat_id_encrypted),
+    }
 
 
 @router.get("/platform-metadata")
@@ -409,6 +447,13 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
                 "message": str(exc),
                 "raw": None,
             })
+            send_user_telegram_alert(user, format_user_failure_message(
+                locale=user.alert_language,
+                scope="heartbeat",
+                detail=str(exc),
+                connector_label=connector.label,
+                platform=connector.platform,
+            ))
     return {
         "ok": all(item["ok"] for item in checks) if checks else True,
         "total": len(checks),

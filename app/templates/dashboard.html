@@ -55,7 +55,23 @@
       <label>Número de teléfono (WhatsApp futuro)
         <input name="phone" id="profile-phone" placeholder="+57 300 000 0000">
       </label>
-      <small class="hint">El email solo puede editarlo el super user.</small>
+      <hr style="border-color:rgba(148,163,184,.2);margin:8px 0;">
+      <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
+      <label>Bot Key de Telegram
+        <input name="telegram_bot_key" id="profile-telegram-bot-key" placeholder="123456:ABC..." autocomplete="off">
+      </label>
+      <label>Telegram ID / Chat ID
+        <input name="telegram_chat_id" id="profile-telegram-chat-id" placeholder="6902163541" autocomplete="off">
+      </label>
+      <label>Idioma de alertas
+        <select name="alert_language" id="profile-alert-language">
+          <option value="es">Español</option>
+          <option value="en">English</option>
+          <option value="pt">Português</option>
+          <option value="fr">Français</option>
+        </select>
+      </label>
+      <small class="hint">El email solo puede editarlo el super user. Si dejas bot key/chat id vacíos, se conservarán los valores actuales.</small>
       <button class="btn primary" type="submit">Guardar perfil</button>
     </form>
     <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
