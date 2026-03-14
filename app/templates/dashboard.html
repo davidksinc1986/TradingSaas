@@ -40,10 +40,10 @@
 </section>
 
 <section class="tabs" id="dashboard-tabs">
-  <button class="tab-btn active" type="button" data-tab="profile">Perfil de usuario</button>
-  <button class="tab-btn" type="button" data-tab="connectors">Conectores</button>
-  <button class="tab-btn" type="button" data-tab="strategies">Estrategias</button>
-  <button class="tab-btn" type="button" data-tab="activity">Actividad</button>
+  <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil">👤</button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores">🔌</button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="strategies" title="Estrategias" aria-label="Estrategias">📈</button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="activity" title="Actividad" aria-label="Actividad">📊</button>
 </section>
 
 <section id="tab-profile" class="tab-panel active">
@@ -162,14 +162,21 @@
           <select name="strategy_slug"></select>
         </label>
         <small class="hint" id="strategy-managed-hint"></small>
+        <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
 
         <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
-        <label>Take Profit fijo
+        <label>Take Win / Take Profit
           <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
+          <small class="hint">Ejemplo: 1.5 (%) o 12 (USDT)</small>
+        </label>
+        <label>Stop Loss
+          <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="1.0"></div>
+          <small class="hint">Ejemplo: 1 (%) o 8 (USDT)</small>
         </label>
         <label>Trailing Stop
           <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
+          <small class="hint">Se activa después de entrar en ganancia y protege beneficio.</small>
         </label>
         <label>Cierre por indicador
           <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
@@ -383,6 +390,23 @@
       <strong>Consejos</strong>
       <ul id="strategy-modal-tips" class="modal-list"></ul>
     </div>
+  </div>
+</div>
+
+
+<div id="strategy-setup-help-modal" class="modal hidden">
+  <div class="modal-card card strategy-modal-card">
+    <div class="modal-head">
+      <h3>Guía rápida del flujo de estrategia</h3>
+      <button class="btn" type="button" id="strategy-setup-help-close">Cerrar</button>
+    </div>
+    <ul class="modal-list">
+      <li><b>Símbolos:</b> usa formato BASE/USDT, separados por coma. Ej: <code>BTC/USDT,ETH/USDT</code>.</li>
+      <li><b>Riesgo por trade (%):</b> número entero o decimal entre 1 y 100. Ej: <code>2</code> = 2%.</li>
+      <li><b>Prob. mínima ML (%):</b> umbral entre 0 y 100. Ej: <code>55</code> significa 55%.</li>
+      <li><b>Take Win / Stop Loss / Trailing:</b> selecciona unidad <code>%</code> o <code>USDT</code> y luego valor numérico.</li>
+      <li><b>Live/Paper:</b> activa “Intentar live…” solo si tu conector está en modo live.</li>
+    </ul>
   </div>
 </div>
 

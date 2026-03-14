@@ -48,6 +48,8 @@ class StrategyRequest(BaseModel):
     use_live_if_available: bool = False
     take_profit_mode: Literal["percent", "usdt"] = "percent"
     take_profit_value: float = Field(default=1.5, gt=0)
+    stop_loss_mode: Literal["percent", "usdt"] = "percent"
+    stop_loss_value: float = Field(default=1.0, gt=0)
     trailing_stop_mode: Literal["percent", "usdt"] = "percent"
     trailing_stop_value: float = Field(default=0.8, gt=0)
     indicator_exit_enabled: bool = False
@@ -65,6 +67,8 @@ class BotSessionCreate(BaseModel):
     interval_minutes: int = Field(default=5, ge=1, le=1440)
     take_profit_mode: Literal["percent", "usdt"] = "percent"
     take_profit_value: float = Field(default=1.5, gt=0)
+    stop_loss_mode: Literal["percent", "usdt"] = "percent"
+    stop_loss_value: float = Field(default=1.0, gt=0)
     trailing_stop_mode: Literal["percent", "usdt"] = "percent"
     trailing_stop_value: float = Field(default=0.8, gt=0)
     indicator_exit_enabled: bool = False
@@ -79,6 +83,8 @@ class BotSessionUpdate(BaseModel):
     strategy_slug: STRATEGY_LITERAL | None = None
     take_profit_mode: Literal["percent", "usdt"] | None = None
     take_profit_value: float | None = Field(default=None, gt=0)
+    stop_loss_mode: Literal["percent", "usdt"] | None = None
+    stop_loss_value: float | None = Field(default=None, gt=0)
     trailing_stop_mode: Literal["percent", "usdt"] | None = None
     trailing_stop_value: float | None = Field(default=None, gt=0)
     indicator_exit_enabled: bool | None = None
