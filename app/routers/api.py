@@ -92,6 +92,24 @@ def _safe_iso(dt_value) -> str | None:
     return dt_value.isoformat() if dt_value else None
 
 
+def _safe_json_object(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _safe_symbols(value) -> list[str]:
+    if isinstance(value, dict):
+        raw = value.get("symbols", [])
+    elif isinstance(value, list):
+        raw = value
+    else:
+        raw = []
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if str(item).strip()]
+
+
 def _is_root_admin(user: User) -> bool:
     # IMPORTANT: root-admin identity must rely on immutable identity only.
     # user.name is editable via /api/me and cannot be used for privilege checks.
@@ -237,17 +255,40 @@ def platform_metadata(db=Depends(get_db), user=Depends(current_user)):
 @router.get("/connectors")
 def list_connectors(db=Depends(get_db), user=Depends(current_user)):
     connectors = db.query(Connector).filter(Connector.user_id == user.id).order_by(Connector.created_at.desc()).all()
-    return [{
-        "id": c.id,
-        "platform": c.platform,
-        "label": c.label,
-        "mode": c.mode,
-        "market_type": getattr(c, "market_type", "spot"),
-        "is_enabled": c.is_enabled,
-        "symbols": c.symbols_json.get("symbols", []),
-        "config": c.config_json,
-        "created_at": c.created_at.isoformat(),
-    } for c in connectors]
+    payload = []
+    serialization_errors = []
+    for connector in connectors:
+        try:
+            payload.append({
+                "id": connector.id,
+                "platform": connector.platform,
+                "label": connector.label,
+                "mode": connector.mode,
+                "market_type": getattr(connector, "market_type", "spot") or "spot",
+                "is_enabled": bool(connector.is_enabled),
+                "symbols": _safe_symbols(getattr(connector, "symbols_json", {})),
+                "config": _safe_json_object(getattr(connector, "config_json", {})),
+                "created_at": _safe_iso(getattr(connector, "created_at", None)),
+            })
+        except Exception as exc:
+            detail = f"user_id={user.id} connector_id={getattr(connector, 'id', '-')}: {exc}"
+            logger.exception("Failed serializing connector: %s", detail)
+            serialization_errors.append(detail)
+            payload.append({
+                "id": getattr(connector, "id", None),
+                "platform": getattr(connector, "platform", "-"),
+                "label": getattr(connector, "label", "Conector inválido"),
+                "mode": getattr(connector, "mode", "paper"),
+                "market_type": getattr(connector, "market_type", "spot") or "spot",
+                "is_enabled": bool(getattr(connector, "is_enabled", False)),
+                "symbols": [],
+                "config": {},
+                "created_at": _safe_iso(getattr(connector, "created_at", None)),
+            })
+
+    if serialization_errors:
+        _alert_admin_failure("API /api/connectors serialization", " | ".join(serialization_errors)[:1500])
+    return payload
 
 
 @router.post("/connectors")
@@ -424,8 +465,8 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
     for session in sessions:
         try:
             connector = session.connector
-            symbols = (session.symbols_json or {}).get("symbols", [])
-            config = (connector.config_json or {}) if connector else {}
+            symbols = _safe_symbols(getattr(session, "symbols_json", {}))
+            config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
             capital = _safe_float(config.get("allocation_value", config.get("default_quantity", 0)) or 0)
             payload.append({
                 "id": session.id,
@@ -608,21 +649,43 @@ def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current
 
 @router.get("/dashboard")
 def dashboard(db=Depends(get_db), user=Depends(current_user)):
-    data = dashboard_data(db, user.id)
-    return {
-        **data,
-        "latest_trades": [{
-            "id": t.id,
-            "platform": t.platform,
-            "symbol": t.symbol,
-            "side": t.side,
-            "quantity": t.quantity,
-            "price": t.price,
-            "status": t.status,
-            "pnl": t.pnl,
-            "created_at": t.created_at.isoformat(),
-        } for t in data["latest_trades"]],
-    }
+    try:
+        data = dashboard_data(db, user.id)
+    except Exception as exc:
+        detail = f"user_id={user.id}: {exc}"
+        logger.exception("Dashboard data build failed: %s", detail)
+        _alert_admin_failure("API /api/dashboard", detail)
+        return {
+            "total_connectors": 0,
+            "enabled_connectors": 0,
+            "total_trades": 0,
+            "realized_pnl": 0.0,
+            "total_invested": 0.0,
+            "realized_pnl_percent": 0.0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "platforms": {},
+            "statuses": {},
+            "latest_trades": [],
+            "limits": [],
+        }
+    safe_trades = []
+    for trade in data.get("latest_trades", []):
+        try:
+            safe_trades.append({
+                "id": trade.id,
+                "platform": trade.platform,
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "quantity": trade.quantity,
+                "price": trade.price,
+                "status": trade.status,
+                "pnl": trade.pnl,
+                "created_at": _safe_iso(getattr(trade, "created_at", None)),
+            })
+        except Exception:
+            continue
+    return {**data, "latest_trades": safe_trades}
 
 
 @router.get("/exchange-symbol-rules")
@@ -793,8 +856,8 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
     connectors = db.query(Connector).filter(Connector.user_id == user.id, Connector.is_enabled.is_(True)).all()
     checks = []
     for connector in connectors:
-        client = get_client(connector)
         try:
+            client = get_client(connector)
             raw = client.test_connection()
             checks.append({
                 "id": connector.id,
