@@ -53,5 +53,35 @@
   </div>
 </div>
 
+<div id="edit-user-modal" class="modal hidden">
+  <div class="modal-card card admin-strategy-modal">
+    <div class="row-between">
+      <h3>Editar usuario</h3>
+      <button class="btn" id="close-edit-user-modal">Cerrar</button>
+    </div>
+    <form id="edit-user-form" class="form-grid" style="margin-top:12px;">
+      <label>Email<input name="email" type="email" required></label>
+      <label>Nombre<input name="name" minlength="2" required></label>
+      <label>Teléfono<input name="phone" minlength="7" maxlength="40" placeholder="Opcional"></label>
+      <label>Activo
+        <select name="is_active">
+          <option value="true">Sí</option>
+          <option value="false">No</option>
+        </select>
+      </label>
+      <label>Administrador
+        <select name="is_admin">
+          <option value="true">Sí</option>
+          <option value="false">No</option>
+        </select>
+      </label>
+      <div class="row-wrap">
+        <button class="btn primary btn-sm" type="submit">Guardar cambios</button>
+        <button id="delete-user-in-modal" class="btn btn-sm" type="button">Borrar usuario</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script src="/static/admin.js?v={{ static_version }}"></script>
 {% endblock %}

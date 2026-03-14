@@ -8,9 +8,35 @@ function showFeedback(message, kind = "ok") { const el=document.getElementById("
 const STRATEGY_LABELS={ema_rsi:"EMA + RSI",mean_reversion_zscore:"Mean Reversion Z-Score",momentum_breakout:"Momentum Breakout",macd_trend_pullback:"MACD Trend Pullback",bollinger_rsi_reversal:"Bollinger + RSI Reversal",adx_trend_follow:"ADX Trend Follow",stochastic_rebound:"Stochastic Rebound"};
 let USERS=[], SELECTED_USER_ID=null, SELECTED_PROFILE=null;
 
+
+function openEditUserModal(userId){
+  const modal=document.getElementById('edit-user-modal');
+  const form=document.getElementById('edit-user-form');
+  if(!modal||!form) return;
+  const user=(SELECTED_PROFILE?.user&&SELECTED_PROFILE.user.id===userId)?SELECTED_PROFILE.user:USERS.find((u)=>u.id===userId);
+  if(!user) return;
+  form.dataset.userId=String(user.id);
+  form.email.value=user.email||'';
+  form.name.value=user.name||'';
+  form.phone.value=user.phone||'';
+  form.is_active.value=String(Boolean(user.is_active));
+  form.is_admin.value=String(Boolean(user.is_admin));
+  const deleteBtn=document.getElementById('delete-user-in-modal');
+  if(deleteBtn){
+    deleteBtn.dataset.userId=String(user.id);
+    deleteBtn.disabled=Boolean(user.is_root);
+    deleteBtn.textContent=user.is_root?'Usuario jerárquico (no eliminable)':'Borrar usuario';
+  }
+  modal.classList.remove('hidden');
+}
+
+function closeEditUserModal(){
+  document.getElementById('edit-user-modal')?.classList.add('hidden');
+}
+
 function renderUserList(){const c=document.getElementById('admin-users'); if(!c) return; c.innerHTML=USERS.map((u)=>`<button class="connector-item user-card ${Number(SELECTED_USER_ID)===u.id?'selected':''}" data-user-id="${u.id}"><strong>${u.name}</strong><div class="connector-meta"><span>${u.email}</span><span>ID: ${u.id}</span><span>Admin: ${u.is_admin?'Sí':'No'}</span><span>Activo: ${u.is_active?'Sí':'No'}</span></div></button>`).join(''); c.querySelectorAll('.user-card').forEach((btn)=>btn.addEventListener('click',async()=>{SELECTED_USER_ID=Number(btn.dataset.userId);renderUserList();await refreshSelectedUserProfile();}));}
 
-function profileHeader(user){return `<div class="connector-item"><strong>${user.name}</strong><div class="connector-meta"><span>${user.email}</span><span>Admin: ${user.is_admin?'Sí':'No'}</span><span>Activo: ${user.is_active?'Sí':'No'}</span>${user.is_root?'<span class="pill tiny pill-on">Jerárquico</span>':''}</div><div class="row-wrap" style="margin-top:10px;"><button class="btn btn-sm" onclick="toggleUser(${user.id}, ${!user.is_active}, null)">${user.is_active?'Desactivar':'Activar'}</button><button class="btn btn-sm" onclick="toggleUser(${user.id}, null, ${!user.is_admin})">${user.is_admin?'Quitar admin':'Hacer admin'}</button>${user.is_root?'':`<button class="btn btn-sm" onclick="deleteUser(${user.id})">Eliminar usuario</button>`}</div></div>`;}
+function profileHeader(user){return `<div class="connector-item"><strong>${user.name}</strong><div class="connector-meta"><span>${user.email}</span><span>Admin: ${user.is_admin?'Sí':'No'}</span><span>Activo: ${user.is_active?'Sí':'No'}</span>${user.phone?`<span>Tel: ${user.phone}</span>`:''}${user.is_root?'<span class="pill tiny pill-on">Jerárquico</span>':''}</div><div class="row-wrap" style="margin-top:10px;"><button class="btn btn-sm" onclick="openEditUserModal(${user.id})">Editar</button><button class="btn btn-sm" onclick="toggleUser(${user.id}, ${!user.is_active}, null)">${user.is_active?'Desactivar':'Activar'}</button><button class="btn btn-sm" onclick="toggleUser(${user.id}, null, ${!user.is_admin})">${user.is_admin?'Quitar admin':'Hacer admin'}</button>${user.is_root?'':`<button class="btn btn-sm" onclick="deleteUser(${user.id})">Eliminar usuario</button>`}</div></div>`;}
 function permissionsPanel(user, policies, grants){const grantMap=grants.reduce((acc,g)=>({...acc,[g.platform]:g}),{}); return `<div class="admin-subpanel active" data-panel="permissions"><div class="stack">${policies.map((p)=>{const g=grantMap[p.platform]||{is_enabled:false,max_symbols:5,max_daily_movements:20,notes:''}; return `<form class="grant-inline-form" data-platform="${p.platform}" style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:12px;"><div class="row-between"><strong>${p.display_name}</strong><span class="pill tiny ${p.is_enabled_global?'pill-on':'pill-off'}">${p.is_enabled_global?'Global activo':'Global bloqueado'}</span></div><div class="form-grid admin-form-grid" style="margin-top:8px;"><label>Habilitado usuario<select name="is_enabled"><option value="true" ${g.is_enabled?'selected':''}>Sí</option><option value="false" ${!g.is_enabled?'selected':''}>No</option></select></label><label>Máx. símbolos<input name="max_symbols" type="number" value="${g.max_symbols}"></label><label>Máx. movimientos diarios<input name="max_daily_movements" type="number" value="${g.max_daily_movements}"></label><label>Notas<input name="notes" value="${g.notes||''}"></label><button class="btn primary btn-sm compact-save-btn" type="submit">Guardar</button></div></form>`;}).join('')}</div></div>`;}
 function connectorsPanel(connectors){return `<div class="admin-subpanel" data-panel="connectors"><div class="stack">${connectors.map((c)=>`<form class="connector-inline-form" data-id="${c.id}" style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:12px;"><div class="row-between"><strong>${c.label} (${c.platform})</strong><span class="pill tiny ${c.is_enabled?'pill-on':'pill-off'}">${c.is_enabled?'Activo':'Desactivado'}</span></div><div class="form-grid admin-form-grid" style="margin-top:8px;"><label>Modo asignación<select name="allocation_mode"><option value="fixed" ${c.allocation_mode==='fixed'?'selected':''}>Monto fijo</option><option value="percent" ${c.allocation_mode==='percent'?'selected':''}>Porcentaje disponible</option></select></label><label>Valor<input name="allocation_value" type="number" step="1" value="${c.allocation_value||0}"></label><label>Símbolos autorizados<input name="symbols" value="${(c.symbols||[]).join(',')}"></label><button class="btn primary btn-sm" type="submit">Guardar conector</button></div></form>`).join('')||'<small class="hint">Este usuario aún no tiene conectores.</small>'}</div></div>`;}
 function bindSubtabs(out){const tabs=out.querySelectorAll('.admin-subtab');const panels=out.querySelectorAll('.admin-subpanel');tabs.forEach((t)=>t.addEventListener('click',()=>{tabs.forEach((x)=>x.classList.toggle('active',x===t));panels.forEach((p)=>p.classList.toggle('active',p.dataset.panel===t.dataset.panel));}));}
@@ -44,12 +70,16 @@ async function refreshAdmin(){const [users,policies,pricing,plans]=await Promise
 async function toggleUser(id,is_active,is_admin){try{await api(`/api/admin/users/${id}`,{method:'PUT',body:JSON.stringify({is_active,is_admin})});await refreshAdmin();}catch(err){showFeedback(parseApiError(err),'error');}}
 async function deleteUser(id){if(!confirm('¿Seguro que deseas eliminar este usuario? Esta acción no se puede deshacer.'))return;try{await api(`/api/admin/users/${id}`,{method:'DELETE'});showFeedback('Usuario eliminado.');if(SELECTED_USER_ID===id)SELECTED_USER_ID=null;await refreshAdmin();}catch(err){showFeedback(parseApiError(err),'error');}}
 async function togglePolicy(platform,is_enabled_global,allow_manual_symbols){try{await api(`/api/admin/policies/${platform}`,{method:'PUT',body:JSON.stringify({platform,is_enabled_global,allow_manual_symbols})});refreshAdmin();}catch(err){showFeedback(parseApiError(err),'error');}}
-window.toggleUser=toggleUser; window.togglePolicy=togglePolicy; window.deleteUser=deleteUser;
+window.toggleUser=toggleUser; window.togglePolicy=togglePolicy; window.deleteUser=deleteUser; window.openEditUserModal=openEditUserModal;
 
 document.getElementById('create-user-form')?.addEventListener('submit',async(e)=>{e.preventDefault();try{const fd=new FormData(e.target);const password=String(fd.get('password')||''); if(password.length<6){showFeedback('La contraseña debe tener al menos 6 caracteres.','error');return;} await api('/api/admin/users',{method:'POST',body:JSON.stringify({email:String(fd.get('email')||'').trim().toLowerCase(),name:String(fd.get('name')||'').trim(),password})});showFeedback('Usuario creado exitosamente.');e.target.reset();refreshAdmin();}catch(err){showFeedback(parseApiError(err),'error');}});
 document.getElementById('open-strategy-modal')?.addEventListener('click',openStrategyModal);
 document.getElementById('close-strategy-modal')?.addEventListener('click',closeStrategyModal);
 document.getElementById('strategy-modal')?.addEventListener('click',(e)=>{if(e.target.id==='strategy-modal') closeStrategyModal();});
+document.getElementById('edit-user-form')?.addEventListener('submit',async(e)=>{e.preventDefault(); const form=e.currentTarget; const userId=Number(form.dataset.userId||0); if(!userId)return; try{const fd=new FormData(form); await api(`/api/admin/users/${userId}`,{method:'PUT',body:JSON.stringify({email:String(fd.get('email')||'').trim().toLowerCase(),name:String(fd.get('name')||'').trim(),phone:String(fd.get('phone')||'').trim(),is_active:fd.get('is_active')==='true',is_admin:fd.get('is_admin')==='true'})}); showFeedback('Usuario actualizado correctamente.'); closeEditUserModal(); await refreshAdmin();}catch(err){showFeedback(parseApiError(err),'error');}});
+document.getElementById('close-edit-user-modal')?.addEventListener('click',closeEditUserModal);
+document.getElementById('edit-user-modal')?.addEventListener('click',(e)=>{if(e.target.id==='edit-user-modal') closeEditUserModal();});
+document.getElementById('delete-user-in-modal')?.addEventListener('click',async(e)=>{const id=Number(e.currentTarget.dataset.userId||0); if(!id) return; await deleteUser(id); closeEditUserModal();});
 document.getElementById('add-plan-btn')?.addEventListener('click',async()=>{try{await api('/api/admin/plans',{method:'POST',body:JSON.stringify({name:'Nuevo plan',description:'Describe este plan',apps:1,symbols:5,daily_movements:10,monthly_price_usd:25,is_custom:false,is_active:true,sort_order:99})});showFeedback('Plan creado.');refreshAdmin();}catch(err){showFeedback(parseApiError(err),'error');}});
 document.getElementById('strategy-control-form')?.addEventListener('submit',async(e)=>{e.preventDefault(); if(!SELECTED_USER_ID)return; const fd=new FormData(e.target); try{await api(`/api/admin/users/${SELECTED_USER_ID}/strategy-control`,{method:'PUT',body:JSON.stringify({managed_by_admin:fd.get('managed_by_admin')==='on',allowed_strategies:fd.getAll('allowed_strategies')})});showFeedback('Estrategias asignadas correctamente.');closeStrategyModal();refreshSelectedUserProfile();}catch(err){showFeedback(parseApiError(err),'error');}});
 
