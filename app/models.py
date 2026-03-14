@@ -19,6 +19,9 @@ class User(Base):
     telegram_chat_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     telegram_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     alert_language: Mapped[str] = mapped_column(String(5), default="es")
+    trade_amount_mode: Mapped[str] = mapped_column(String(20), default="fixed_usd")
+    fixed_trade_amount_usd: Mapped[float] = mapped_column(Float, default=10.0)
+    trade_balance_percent: Mapped[float] = mapped_column(Float, default=10.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     connectors = relationship("Connector", back_populates="user", cascade="all, delete-orphan")

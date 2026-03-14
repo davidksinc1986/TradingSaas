@@ -62,6 +62,12 @@ def ensure_schema_updates(db):
         db.execute(text("ALTER TABLE users ADD COLUMN telegram_alerts_enabled BOOLEAN DEFAULT 0"))
     if "alert_language" not in existing_columns:
         db.execute(text("ALTER TABLE users ADD COLUMN alert_language VARCHAR(5) DEFAULT 'es'"))
+    if "trade_amount_mode" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN trade_amount_mode VARCHAR(20) DEFAULT 'fixed_usd'"))
+    if "fixed_trade_amount_usd" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN fixed_trade_amount_usd FLOAT DEFAULT 10"))
+    if "trade_balance_percent" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN trade_balance_percent FLOAT DEFAULT 10"))
     db.commit()
 
 

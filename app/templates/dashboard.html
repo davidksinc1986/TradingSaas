@@ -78,16 +78,36 @@
       <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
     </section>
 
-    <aside class="card soft-card profile-active-strategies" id="profile-active-strategies">
+    <aside class="card soft-card" id="profile-trade-amount-settings">
       <div class="row-between">
-        <h3>Estrategias activas</h3>
-        <small class="hint">Editables</small>
+        <h3>Monto por operación (Binance)</h3>
+        <small class="hint">Mínimo 10 USDT</small>
       </div>
-      <form id="profile-strategy-form" class="form-grid" style="margin-top:10px;">
-        <div id="profile-strategy-checks" class="strategy-check-grid"></div>
-        <button class="btn primary compact-save-btn" type="submit">Guardar estrategias</button>
+      <p class="hint" style="margin-top:8px;">Configura aquí cómo calcular cada orden para evitar el error de saldo insuficiente.</p>
+      <form id="profile-trade-amount-form" class="form-grid" style="margin-top:10px;">
+        <label>Modo de monto
+          <select name="trade_amount_mode" id="trade-amount-mode">
+            <option value="fixed_usd">Monto fijo en USD/USDT</option>
+            <option value="balance_percent">Porcentaje de balance USDT</option>
+          </select>
+        </label>
+        <label>Monto fijo por orden (USD/USDT)
+          <input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10">
+        </label>
+        <label>Porcentaje del balance USDT (%)
+          <input name="trade_balance_percent" id="trade-balance-percent" type="number" min="1" max="100" step="0.1" value="10">
+        </label>
+        <div class="card soft-card">
+          <strong>Ejemplos rápidos</strong>
+          <ul class="hint" style="margin:8px 0 0 18px;">
+            <li>Si eliges <b>monto fijo 12</b>, cada orden intentará usar 12 USDT.</li>
+            <li>Si eliges <b>25%</b> y tu balance disponible es 80 USDT, la orden intentará usar 20 USDT.</li>
+            <li>Si el cálculo da menos de 10 USDT, se ajusta automáticamente a 10 USDT.</li>
+          </ul>
+        </div>
+        <button class="btn primary compact-save-btn" type="submit">Guardar monto</button>
       </form>
-      <div id="profile-strategy-feedback" class="hint" style="margin-top:8px;"></div>
+      <div id="profile-trade-amount-feedback" class="hint" style="margin-top:8px;"></div>
     </aside>
   </div>
 </section>
@@ -128,26 +148,34 @@
     </div>
 
     <div class="stack" style="gap:14px;">
-      <div class="card">
+      <section class="card" id="market-movers-board">
         <div class="row-between">
-          <h2>Estrategias en ejecución ahora</h2>
-          <small class="hint" id="strategies-live-count">0 activas</small>
-        </div>
-        <p class="hint">Resumen por aplicación/cuenta y símbolos que se están ejecutando en este momento.</p>
-        <div id="strategies-live-panel" class="stack" style="margin-top:10px;"></div>
-      </div>
-
-      <section class="card" id="admin-market-board" style="display:none;">
-        <div class="row-between">
-          <h2>Dashboard interactivo de mercado (Top 10)</h2>
+          <h2>Monedas con mayor movimiento / ganancia</h2>
           <button class="btn" id="refresh-market-btn" type="button">Actualizar ahora</button>
         </div>
-        <small class="hint" id="market-board-context">Mostrando símbolos más fuertes de tu aplicación activa.</small>
-        <div class="market-board" style="margin-top:10px;">
-          <div>
-            <canvas id="market-strength-chart" height="240"></canvas>
-          </div>
-          <div id="market-ticker-list" class="ticker-list"></div>
+        <div class="row-between" style="margin-top:8px;gap:12px;flex-wrap:wrap;">
+          <small class="hint" id="market-board-context">Top movimientos del día en pares USDT.</small>
+          <label>Histórico
+            <select id="market-history-range">
+              <option value="day" selected>Día</option>
+              <option value="week">Semana</option>
+              <option value="month">Mes</option>
+            </select>
+          </label>
+        </div>
+        <div class="table-wrap" style="margin-top:10px;">
+          <table id="market-movers-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Moneda</th>
+                <th>Precio</th>
+                <th>Variación</th>
+                <th>Volumen</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </section>
 

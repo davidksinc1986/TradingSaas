@@ -67,6 +67,9 @@ def me(user=Depends(current_user), db=Depends(get_db)):
         "telegram_chat_id": ("****" if user.telegram_chat_id_encrypted else ""),
         "alert_language": normalize_alert_locale(user.alert_language),
         "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
+        "trade_amount_mode": user.trade_amount_mode or "fixed_usd",
+        "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
+        "trade_balance_percent": float(user.trade_balance_percent or 10),
     }
 
 
@@ -104,6 +107,33 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         clean_chat_id = str(next_telegram_chat_id).strip()
         user.telegram_chat_id_encrypted = encrypt_payload({"value": clean_chat_id}) if clean_chat_id else None
 
+    next_trade_mode = payload.get("trade_amount_mode")
+    if next_trade_mode is not None:
+        mode = str(next_trade_mode).strip().lower()
+        if mode not in {"fixed_usd", "balance_percent"}:
+            raise HTTPException(status_code=400, detail="trade_amount_mode must be fixed_usd or balance_percent")
+        user.trade_amount_mode = mode
+
+    next_fixed_amount = payload.get("fixed_trade_amount_usd")
+    if next_fixed_amount is not None:
+        try:
+            amount = float(next_fixed_amount)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="fixed_trade_amount_usd must be numeric")
+        if amount < 10:
+            raise HTTPException(status_code=400, detail="El monto fijo mínimo para Binance es 10 USD")
+        user.fixed_trade_amount_usd = amount
+
+    next_balance_percent = payload.get("trade_balance_percent")
+    if next_balance_percent is not None:
+        try:
+            percent = float(next_balance_percent)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="trade_balance_percent must be numeric")
+        if percent <= 0 or percent > 100:
+            raise HTTPException(status_code=400, detail="trade_balance_percent debe estar entre 0 y 100")
+        user.trade_balance_percent = percent
+
     db.commit()
     return {
         "ok": True,
@@ -114,6 +144,9 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         "alert_language": normalize_alert_locale(user.alert_language),
         "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
         "has_telegram_chat_id": bool(user.telegram_chat_id_encrypted),
+        "trade_amount_mode": user.trade_amount_mode,
+        "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
+        "trade_balance_percent": float(user.trade_balance_percent or 10),
     }
 
 
@@ -434,7 +467,7 @@ def dashboard(db=Depends(get_db), user=Depends(current_user)):
 
 
 @router.get("/market/top-strength")
-async def market_top_strength(limit: int = 10, platform: str | None = None, symbols: str | None = None, user=Depends(current_user)):
+async def market_top_strength(limit: int = 10, platform: str | None = None, symbols: str | None = None, range: str = "day", user=Depends(current_user)):
     _ = user
     import httpx
 
@@ -454,7 +487,14 @@ async def market_top_strength(limit: int = 10, platform: str | None = None, symb
         if wanted:
             wanted_set = set(wanted)
             ranked_source = [item for item in ranked_source if str(item.get("symbol", "")).upper() in wanted_set]
-        ranked = sorted(ranked_source, key=lambda item: float(item.get("priceChangePercent", 0) or 0), reverse=True)[:target]
+        
+        metric_by_range = {
+            "day": "priceChangePercent",
+            "week": "priceChangePercent",
+            "month": "priceChangePercent",
+        }
+        metric = metric_by_range.get((range or "day").lower(), "priceChangePercent")
+        ranked = sorted(ranked_source, key=lambda item: float(item.get(metric, 0) or 0), reverse=True)[:target]
         return [{
             "symbol": item.get("symbol"),
             "price": float(item.get("lastPrice", 0) or 0),
