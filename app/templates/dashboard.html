@@ -48,70 +48,90 @@
 
 <section id="tab-profile" class="tab-panel active">
   <div class="card profile-strategy-layout">
-    <section>
+    <section class="profile-main-flow">
       <h2 id="profile-title">Perfil de usuario</h2>
-      <form id="profile-form" class="form-grid profile-grid">
-      <label>Nombre
-        <input name="name" id="profile-name" required>
-      </label>
-      <label>Email
-        <input name="email" id="profile-email" disabled>
-      </label>
-      <label>Número de teléfono (WhatsApp futuro)
-        <input name="phone" id="profile-phone" placeholder="+57 300 000 0000">
-      </label>
-      <hr style="border-color:rgba(148,163,184,.2);margin:8px 0;">
-      <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
-      <label>Bot Key de Telegram
-        <input name="telegram_bot_key" id="profile-telegram-bot-key" placeholder="123456:ABC..." autocomplete="off">
-      </label>
-      <label>Telegram ID / Chat ID
-        <input name="telegram_chat_id" id="profile-telegram-chat-id" placeholder="6902163541" autocomplete="off">
-      </label>
-      <label>Idioma de alertas
-        <select name="alert_language" id="profile-alert-language">
-          <option value="es">Español</option>
-          <option value="en">English</option>
-          <option value="pt">Português</option>
-          <option value="fr">Français</option>
-        </select>
-      </label>
+      <p class="hint">Ajusta tu cuenta por bloques para mantener un flujo claro: identidad, contacto y alertas automatizadas.</p>
+      <form id="profile-form" class="form-grid profile-grid profile-cascade-form">
+      <div class="profile-form-group">
+        <h3>Identidad</h3>
+        <label>Nombre
+          <input name="name" id="profile-name" required>
+        </label>
+        <label>Email
+          <input name="email" id="profile-email" disabled>
+        </label>
+      </div>
+      <div class="profile-form-group">
+        <h3>Contacto</h3>
+        <label>Número de teléfono (WhatsApp futuro)
+          <input name="phone" id="profile-phone" placeholder="+57 300 000 0000">
+        </label>
+      </div>
+      <div class="profile-form-group">
+        <h3>Alertas y notificaciones</h3>
+        <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
+        <label>Bot Key de Telegram
+          <input name="telegram_bot_key" id="profile-telegram-bot-key" placeholder="123456:ABC..." autocomplete="off">
+        </label>
+        <label>Telegram ID / Chat ID
+          <input name="telegram_chat_id" id="profile-telegram-chat-id" placeholder="6902163541" autocomplete="off">
+        </label>
+        <label>Idioma de alertas
+          <select name="alert_language" id="profile-alert-language">
+            <option value="es">Español</option>
+            <option value="en">English</option>
+            <option value="pt">Português</option>
+            <option value="fr">Français</option>
+          </select>
+        </label>
+      </div>
       <small class="hint">El email solo puede editarlo el super user. Si dejas bot key/chat id vacíos, se conservarán los valores actuales.</small>
       <button class="btn primary" type="submit">Guardar perfil</button>
       </form>
       <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
     </section>
 
-    <aside class="card soft-card" id="profile-trade-amount-settings">
-      <div class="row-between">
-        <h3>Monto por operación (Binance)</h3>
-        <small class="hint">Mínimo 10 USDT</small>
-      </div>
-      <p class="hint" style="margin-top:8px;">Configura aquí cómo calcular cada orden para evitar el error de saldo insuficiente.</p>
-      <form id="profile-trade-amount-form" class="form-grid" style="margin-top:10px;">
-        <label>Modo de monto
-          <select name="trade_amount_mode" id="trade-amount-mode">
-            <option value="fixed_usd">Monto fijo en USD/USDT</option>
-            <option value="balance_percent">Porcentaje de balance USDT</option>
-          </select>
-        </label>
-        <label>Monto fijo por orden (USD/USDT)
-          <input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10">
-        </label>
-        <label>Porcentaje del balance USDT (%)
-          <input name="trade_balance_percent" id="trade-balance-percent" type="number" min="1" max="100" step="0.1" value="10">
-        </label>
-        <div class="card soft-card">
-          <strong>Ejemplos rápidos</strong>
-          <ul class="hint" style="margin:8px 0 0 18px;">
-            <li>Si eliges <b>monto fijo 12</b>, cada orden intentará usar 12 USDT.</li>
-            <li>Si eliges <b>25%</b> y tu balance disponible es 80 USDT, la orden intentará usar 20 USDT.</li>
-            <li>Si el cálculo da menos de 10 USDT, se ajusta automáticamente a 10 USDT.</li>
-          </ul>
+    <aside class="profile-side-stack">
+      <section class="card soft-card" id="profile-trade-amount-settings">
+        <div class="row-between">
+          <h3>Monto por operación (Binance)</h3>
+          <small class="hint">Mínimo 10 USDT</small>
         </div>
-        <button class="btn primary compact-save-btn" type="submit">Guardar monto</button>
-      </form>
-      <div id="profile-trade-amount-feedback" class="hint" style="margin-top:8px;"></div>
+        <p class="hint" style="margin-top:8px;">Configura aquí cómo calcular cada orden para evitar el error de saldo insuficiente.</p>
+        <form id="profile-trade-amount-form" class="form-grid" style="margin-top:10px;">
+          <label>Modo de monto
+            <select name="trade_amount_mode" id="trade-amount-mode">
+              <option value="fixed_usd">Monto fijo en USD/USDT</option>
+              <option value="balance_percent">Porcentaje de balance USDT</option>
+            </select>
+          </label>
+          <label>Monto fijo por orden (USD/USDT)
+            <input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10">
+          </label>
+          <label>Porcentaje del balance USDT (%)
+            <input name="trade_balance_percent" id="trade-balance-percent" type="number" min="1" max="100" step="0.1" value="10">
+          </label>
+          <div class="card soft-card">
+            <strong>Ejemplos rápidos</strong>
+            <ul class="hint" style="margin:8px 0 0 18px;">
+              <li>Si eliges <b>monto fijo 12</b>, cada orden intentará usar 12 USDT.</li>
+              <li>Si eliges <b>25%</b> y tu balance disponible es 80 USDT, la orden intentará usar 20 USDT.</li>
+              <li>Si el cálculo da menos de 10 USDT, se ajusta automáticamente a 10 USDT.</li>
+            </ul>
+          </div>
+          <button class="btn primary compact-save-btn" type="submit">Guardar monto</button>
+        </form>
+        <div id="profile-trade-amount-feedback" class="hint" style="margin-top:8px;"></div>
+      </section>
+
+      <section class="card soft-card profile-active-strategies">
+        <div class="row-between">
+          <h3>Estrategias creadas y funcionando</h3>
+          <small class="hint" id="strategies-live-count">0 activas</small>
+        </div>
+        <p class="hint">Resumen agrupado por app y tipo de mercado (spot/futures) para revisar rápidamente tu estado productivo.</p>
+        <div id="strategies-live-panel" class="strategy-live-grid"></div>
+      </section>
     </aside>
   </div>
 </section>
