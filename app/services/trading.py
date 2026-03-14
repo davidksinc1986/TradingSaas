@@ -4,12 +4,13 @@ from collections import Counter
 from datetime import date
 import json
 
-from app.models import Connector, TradeLog, TradeRun, UserPlatformGrant
+from app.models import Connector, TradeLog, TradeRun, User, UserPlatformGrant
 from app.services.connectors import get_client
 from app.services.market import synthetic_ohlcv
 from app.services.ml import train_and_score
 from app.services.risk import position_size
 from app.services.strategies import STRATEGY_MAP
+from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
 
 
 def connector_balance_hint(connector: Connector) -> float:
@@ -38,6 +39,7 @@ def enforce_daily_limit(db, connector: Connector):
 def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str], timeframe: str,
                  strategy_slug: str, risk_per_trade: float, min_ml_probability: float, use_live_if_available: bool):
     strategy_fn = STRATEGY_MAP[strategy_slug]
+    user = db.query(User).filter(User.id == user_id).first()
     connectors = db.query(Connector).filter(
         Connector.user_id == user_id,
         Connector.id.in_(connector_ids),
@@ -118,6 +120,36 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
             try:
                 enforce_daily_limit(db, connector)
                 result = client.execute_market(symbol=symbol, side=signal, quantity=qty, price_hint=price)
+            except Exception as exc:
+                trade_run.status = "failed"
+                trade_run.notes = json.dumps({
+                    "mode": effective_mode,
+                    "timeframe": timeframe,
+                    "strategy": strategy_slug,
+                    "candle": candle_snapshot,
+                    "decision": signal,
+                    "order_status": "error",
+                    "execution_message": str(exc),
+                })
+                outputs.append({
+                    "connector": connector.label,
+                    "platform": connector.platform,
+                    "symbol": symbol,
+                    "signal": signal,
+                    "ml_probability": round(prob, 4),
+                    "status": "error",
+                    "message": str(exc),
+                })
+                if user:
+                    send_user_telegram_alert(user, format_user_failure_message(
+                        locale=user.alert_language,
+                        scope="trade_execution",
+                        detail=str(exc),
+                        connector_label=connector.label,
+                        platform=connector.platform,
+                        symbol=symbol,
+                    ))
+                continue
             finally:
                 connector.mode = original_mode
 
@@ -155,6 +187,19 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 "status": result.status,
                 "message": result.message,
             })
+            if user:
+                send_user_telegram_alert(user, format_user_execution_message(
+                    locale=user.alert_language,
+                    connector_label=connector.label,
+                    platform=connector.platform,
+                    symbol=symbol,
+                    side=signal,
+                    quantity=result.quantity,
+                    fill_price=result.fill_price,
+                    status=result.status,
+                    strategy_slug=strategy_slug,
+                    message=result.message,
+                ))
 
     db.commit()
     return outputs

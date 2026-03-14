@@ -15,6 +15,10 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    telegram_bot_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_chat_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    alert_language: Mapped[str] = mapped_column(String(5), default="es")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     connectors = relationship("Connector", back_populates="user", cascade="all, delete-orphan")

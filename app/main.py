@@ -53,7 +53,15 @@ def ensure_schema_updates(db):
     existing_columns = {column["name"] for column in inspector.get_columns("users")}
     if "phone" not in existing_columns:
         db.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
-        db.commit()
+    if "telegram_bot_token_encrypted" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN telegram_bot_token_encrypted TEXT"))
+    if "telegram_chat_id_encrypted" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN telegram_chat_id_encrypted TEXT"))
+    if "telegram_alerts_enabled" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN telegram_alerts_enabled BOOLEAN DEFAULT 0"))
+    if "alert_language" not in existing_columns:
+        db.execute(text("ALTER TABLE users ADD COLUMN alert_language VARCHAR(5) DEFAULT 'es'"))
+    db.commit()
 
 
 @app.on_event("startup")
