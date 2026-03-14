@@ -56,6 +56,12 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
                 risk_per_trade=session.risk_per_trade,
                 min_ml_probability=session.min_ml_probability,
                 use_live_if_available=session.use_live_if_available,
+                take_profit_mode=session.take_profit_mode,
+                take_profit_value=session.take_profit_value,
+                trailing_stop_mode=session.trailing_stop_mode,
+                trailing_stop_value=session.trailing_stop_value,
+                indicator_exit_enabled=session.indicator_exit_enabled,
+                indicator_exit_rule=session.indicator_exit_rule,
                 run_source="bot",
                 bot_session_id=session.id,
             )

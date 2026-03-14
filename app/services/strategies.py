@@ -71,6 +71,56 @@ def stochastic_rebound(df):
     return "hold"
 
 
+def supertrend_volatility(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    if row["adx"] > 25 and row["ret_1"] > 0 and row["close"] > row["ema_fast"]:
+        return "buy"
+    if row["adx"] > 25 and row["ret_1"] < 0 and row["close"] < row["ema_fast"]:
+        return "sell"
+    return "hold"
+
+
+def kalman_trend_filter(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    if row["ema_fast"] > row["mean_20"] and row["macd"] > 0 and row["rsi"] < 70:
+        return "buy"
+    if row["ema_fast"] < row["mean_20"] and row["macd"] < 0 and row["rsi"] > 30:
+        return "sell"
+    return "hold"
+
+
+def atr_channel_breakout(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    if row["close"] > row["bb_high"] and row["adx"] > 20:
+        return "buy"
+    if row["close"] < row["bb_low"] and row["adx"] > 20:
+        return "sell"
+    return "hold"
+
+
+def volatility_parity_rebalance(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    if row["vol_10"] < 0.018 and row["ema_fast"] > row["ema_slow"]:
+        return "buy"
+    if row["vol_10"] > 0.03 and row["ema_fast"] < row["ema_slow"]:
+        return "sell"
+    return "hold"
+
+
+def pairs_spread_proxy(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    if row["zscore"] < -2.2 and row["stoch_k"] < 25:
+        return "buy"
+    if row["zscore"] > 2.2 and row["stoch_k"] > 75:
+        return "sell"
+    return "hold"
+
+
 STRATEGY_MAP = {
     "ema_rsi": ema_rsi,
     "mean_reversion_zscore": mean_reversion_zscore,
@@ -79,4 +129,29 @@ STRATEGY_MAP = {
     "bollinger_rsi_reversal": bollinger_rsi_reversal,
     "adx_trend_follow": adx_trend_follow,
     "stochastic_rebound": stochastic_rebound,
+    "supertrend_volatility": supertrend_volatility,
+    "kalman_trend_filter": kalman_trend_filter,
+    "atr_channel_breakout": atr_channel_breakout,
+    "volatility_parity_rebalance": volatility_parity_rebalance,
+    "pairs_spread_proxy": pairs_spread_proxy,
 }
+
+SPOT_TOP_STRATEGIES = [
+    "ema_rsi",
+    "mean_reversion_zscore",
+    "bollinger_rsi_reversal",
+    "stochastic_rebound",
+    "volatility_parity_rebalance",
+    "pairs_spread_proxy",
+]
+
+FUTURES_TOP_STRATEGIES = [
+    "momentum_breakout",
+    "macd_trend_pullback",
+    "adx_trend_follow",
+    "supertrend_volatility",
+    "kalman_trend_filter",
+    "atr_channel_breakout",
+]
+
+ALL_STRATEGIES = list(STRATEGY_MAP.keys())

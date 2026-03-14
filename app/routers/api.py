@@ -29,10 +29,10 @@ from app.services.policies import ensure_user_grants, get_user_grant, validate_c
 from app.services.pricing import estimate_monthly_cost
 from app.services.bot_runner import execute_due_bot_sessions
 from app.services.trading import dashboard_data, run_strategy
+from app.services.strategies import ALL_STRATEGIES
 
 router = APIRouter(prefix="/api", tags=["api"])
 ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
-ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]
 TIMEFRAME_TO_MINUTES = {
     "1m": 1,
     "3m": 3,
@@ -342,6 +342,12 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         risk_per_trade=risk_value,
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
+        take_profit_mode=payload.take_profit_mode,
+        take_profit_value=payload.take_profit_value,
+        trailing_stop_mode=payload.trailing_stop_mode,
+        trailing_stop_value=payload.trailing_stop_value,
+        indicator_exit_enabled=payload.indicator_exit_enabled,
+        indicator_exit_rule=payload.indicator_exit_rule,
         run_source="manual",
     )
     return {"ok": True, "results": result}
@@ -398,6 +404,12 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             "interval_minutes": session.interval_minutes,
             "risk_per_trade": session.risk_per_trade,
             "min_ml_probability": session.min_ml_probability,
+            "take_profit_mode": session.take_profit_mode,
+            "take_profit_value": session.take_profit_value,
+            "trailing_stop_mode": session.trailing_stop_mode,
+            "trailing_stop_value": session.trailing_stop_value,
+            "indicator_exit_enabled": session.indicator_exit_enabled,
+            "indicator_exit_rule": session.indicator_exit_rule,
             "is_active": session.is_active,
             "last_run_at": session.last_run_at.isoformat() if session.last_run_at else None,
             "next_run_at": session.next_run_at.isoformat() if session.next_run_at else None,
@@ -438,6 +450,12 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         risk_per_trade=risk_value,
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
+        take_profit_mode=payload.take_profit_mode,
+        take_profit_value=payload.take_profit_value,
+        trailing_stop_mode=payload.trailing_stop_mode,
+        trailing_stop_value=payload.trailing_stop_value,
+        indicator_exit_enabled=payload.indicator_exit_enabled,
+        indicator_exit_rule=payload.indicator_exit_rule,
         is_active=True,
         last_status="scheduled",
     )
@@ -480,6 +498,18 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:
         session.use_live_if_available = payload.use_live_if_available
+    if payload.take_profit_mode is not None:
+        session.take_profit_mode = payload.take_profit_mode
+    if payload.take_profit_value is not None:
+        session.take_profit_value = payload.take_profit_value
+    if payload.trailing_stop_mode is not None:
+        session.trailing_stop_mode = payload.trailing_stop_mode
+    if payload.trailing_stop_value is not None:
+        session.trailing_stop_value = payload.trailing_stop_value
+    if payload.indicator_exit_enabled is not None:
+        session.indicator_exit_enabled = payload.indicator_exit_enabled
+    if payload.indicator_exit_rule is not None:
+        session.indicator_exit_rule = payload.indicator_exit_rule
 
     db.commit()
     return {"ok": True}

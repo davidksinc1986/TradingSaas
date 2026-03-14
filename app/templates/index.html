@@ -100,6 +100,19 @@
 </section>
 {% endif %}
 
+<section class="card">
+  <h3>Calculadora de ganancia promedio</h3>
+  <form id="public-profit-calculator" class="form-grid admin-form-grid">
+    <label>Monto de inversión (USDT)<input type="number" name="investment" min="1" value="1000"></label>
+    <label>Cantidad de apps<input type="number" name="apps" min="1" value="3"></label>
+    <label>Estrategias funcionando<input type="number" name="strategies" min="1" value="4"></label>
+    <button class="btn primary btn-sm public-calc-btn" type="submit">Calcular promedio</button>
+  </form>
+  <div id="public-profit-result" class="status-msg" style="margin-top:10px;">
+    Inserta tus valores para estimar una ganancia promedio mensual.
+  </div>
+</section>
+
 <section class="card panel faq-panel faq-bottom">
   <h3>Preguntas frecuentes</h3>
   <details open>
@@ -159,5 +172,26 @@
     }
   });
 })();
+
+(function(){
+  const form=document.getElementById('public-profit-calculator');
+  const output=document.getElementById('public-profit-result');
+  if(!form||!output) return;
+  form.addEventListener('submit',(e)=>{
+    e.preventDefault();
+    const fd=new FormData(form);
+    const investment=Math.max(0,Number(fd.get('investment')||0));
+    const apps=Math.max(1,Number(fd.get('apps')||1));
+    const strategies=Math.max(1,Number(fd.get('strategies')||1));
+    const conservativeMonthlyYield=0.018;
+    const efficiencyFactor=Math.min(1.8,(apps*0.08)+(strategies*0.06));
+    const avgProfit=investment*conservativeMonthlyYield*efficiencyFactor;
+    const pct=(investment>0)?(avgProfit/investment*100):0;
+    output.classList.add('status-ok');
+    output.classList.remove('status-error');
+    output.innerHTML=`Ganancia promedio estimada: <strong>${avgProfit.toFixed(2)} USDT/mes</strong> · rendimiento aproximado <strong>${pct.toFixed(2)}%</strong> mensual.`;
+  });
+})();
+
 </script>
 {% endblock %}

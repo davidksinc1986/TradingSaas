@@ -2,8 +2,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
-
 PLATFORMS = Literal["mt5", "ctrader", "tradingview", "binance", "bybit", "okx"]
+STRATEGY_LITERAL = str
 
 
 class UserCreate(BaseModel):
@@ -42,23 +42,33 @@ class StrategyRequest(BaseModel):
     connector_ids: list[int]
     symbols: list[str]
     timeframe: str = "1h"
-    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"] = "ema_rsi"
+    strategy_slug: STRATEGY_LITERAL = "ema_rsi"
     risk_per_trade: float = Field(default=1, gt=0, le=100)
     min_ml_probability: float = Field(default=55, ge=0, le=100)
     use_live_if_available: bool = False
-
-
+    take_profit_mode: Literal["percent", "usdt"] = "percent"
+    take_profit_value: float = Field(default=1.5, gt=0)
+    trailing_stop_mode: Literal["percent", "usdt"] = "percent"
+    trailing_stop_value: float = Field(default=0.8, gt=0)
+    indicator_exit_enabled: bool = False
+    indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
 
 
 class BotSessionCreate(BaseModel):
     connector_id: int
     symbols: list[str]
     timeframe: str = "5m"
-    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"] = "ema_rsi"
+    strategy_slug: STRATEGY_LITERAL = "ema_rsi"
     risk_per_trade: float = Field(default=1, gt=0, le=100)
     min_ml_probability: float = Field(default=55, ge=0, le=100)
     use_live_if_available: bool = False
     interval_minutes: int = Field(default=5, ge=1, le=1440)
+    take_profit_mode: Literal["percent", "usdt"] = "percent"
+    take_profit_value: float = Field(default=1.5, gt=0)
+    trailing_stop_mode: Literal["percent", "usdt"] = "percent"
+    trailing_stop_value: float = Field(default=0.8, gt=0)
+    indicator_exit_enabled: bool = False
+    indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
 
 
 class BotSessionUpdate(BaseModel):
@@ -66,7 +76,13 @@ class BotSessionUpdate(BaseModel):
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None
     timeframe: str | None = None
-    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"] | None = None
+    strategy_slug: STRATEGY_LITERAL | None = None
+    take_profit_mode: Literal["percent", "usdt"] | None = None
+    take_profit_value: float | None = Field(default=None, gt=0)
+    trailing_stop_mode: Literal["percent", "usdt"] | None = None
+    trailing_stop_value: float | None = Field(default=None, gt=0)
+    indicator_exit_enabled: bool | None = None
+    indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] | None = None
     risk_per_trade: float | None = Field(default=None, gt=0, le=100)
     min_ml_probability: float | None = Field(default=None, ge=0, le=100)
     use_live_if_available: bool | None = None
@@ -113,11 +129,11 @@ class AdminPolicyUpdate(BaseModel):
 
 class AdminStrategyControlUpdate(BaseModel):
     managed_by_admin: bool
-    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]] = Field(default_factory=list)
+    allowed_strategies: list[STRATEGY_LITERAL] = Field(default_factory=list)
 
 
 class StrategyControlUpdate(BaseModel):
-    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]] = Field(default_factory=list)
+    allowed_strategies: list[STRATEGY_LITERAL] = Field(default_factory=list)
 
 
 class AdminPricingConfigUpdate(BaseModel):

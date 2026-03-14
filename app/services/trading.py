@@ -35,10 +35,25 @@ def enforce_daily_limit(db, connector: Connector):
         raise RuntimeError(f"Daily movement limit reached for {connector.platform}: {grant.max_daily_movements}")
 
 
-
-def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str], timeframe: str,
-                 strategy_slug: str, risk_per_trade: float, min_ml_probability: float, use_live_if_available: bool,
-                 run_source: str = "manual", bot_session_id: int | None = None):
+def run_strategy(
+    db,
+    user_id: int,
+    connector_ids: list[int],
+    symbols: list[str],
+    timeframe: str,
+    strategy_slug: str,
+    risk_per_trade: float,
+    min_ml_probability: float,
+    use_live_if_available: bool,
+    take_profit_mode: str = "percent",
+    take_profit_value: float = 1.5,
+    trailing_stop_mode: str = "percent",
+    trailing_stop_value: float = 0.8,
+    indicator_exit_enabled: bool = False,
+    indicator_exit_rule: str = "macd_cross",
+    run_source: str = "manual",
+    bot_session_id: int | None = None,
+):
     strategy_fn = STRATEGY_MAP[strategy_slug]
     user = db.query(User).filter(User.id == user_id).first()
     connectors = db.query(Connector).filter(
@@ -86,6 +101,23 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
             should_execute = signal != "hold" and prob >= min_ml_probability
             effective_mode = "live" if (use_live_if_available and connector.mode == "live") else connector.mode
 
+            common_note = {
+                "mode": effective_mode,
+                "timeframe": timeframe,
+                "strategy": strategy_slug,
+                "candle": candle_snapshot,
+                "run_source": run_source,
+                "bot_session_id": bot_session_id,
+                "trade_amount_mode": trade_mode,
+                "allocation_usd": round(allocation_usd, 4),
+                "take_profit_mode": take_profit_mode,
+                "take_profit_value": take_profit_value,
+                "trailing_stop_mode": trailing_stop_mode,
+                "trailing_stop_value": trailing_stop_value,
+                "indicator_exit_enabled": bool(indicator_exit_enabled),
+                "indicator_exit_rule": indicator_exit_rule,
+            }
+
             trade_run = TradeRun(
                 user_id=user_id,
                 connector_id=connector.id,
@@ -96,32 +128,15 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 ml_probability=prob,
                 quantity=qty,
                 status="ready" if should_execute else "skipped",
-                notes=json.dumps({
-                    "mode": effective_mode,
-                    "timeframe": timeframe,
-                    "strategy": strategy_slug,
-                    "candle": candle_snapshot,
-                    "decision": "pending",
-                    "run_source": run_source,
-                    "bot_session_id": bot_session_id,
-                    "trade_amount_mode": trade_mode,
-                    "allocation_usd": round(allocation_usd, 4),
-                }),
+                notes=json.dumps({**common_note, "decision": "pending"}),
             )
             db.add(trade_run)
 
             if not should_execute:
                 trade_run.notes = json.dumps({
-                    "mode": effective_mode,
-                    "timeframe": timeframe,
-                    "strategy": strategy_slug,
-                    "candle": candle_snapshot,
+                    **common_note,
                     "decision": "no_action",
                     "reason": "signal_hold_or_low_ml_probability",
-                    "run_source": run_source,
-                    "bot_session_id": bot_session_id,
-                    "trade_amount_mode": trade_mode,
-                    "allocation_usd": round(allocation_usd, 4),
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -142,17 +157,10 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
             except Exception as exc:
                 trade_run.status = "failed"
                 trade_run.notes = json.dumps({
-                    "mode": effective_mode,
-                    "timeframe": timeframe,
-                    "strategy": strategy_slug,
-                    "candle": candle_snapshot,
+                    **common_note,
                     "decision": signal,
                     "order_status": "error",
                     "execution_message": str(exc),
-                    "run_source": run_source,
-                    "bot_session_id": bot_session_id,
-                    "trade_amount_mode": trade_mode,
-                    "allocation_usd": round(allocation_usd, 4),
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -186,21 +194,24 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 price=result.fill_price,
                 status=result.status,
                 pnl=0.0,
-                meta_json={"message": result.message, "raw": result.raw, "strategy_slug": strategy_slug},
+                meta_json={
+                    "message": result.message,
+                    "raw": result.raw,
+                    "strategy_slug": strategy_slug,
+                    "take_profit_mode": take_profit_mode,
+                    "take_profit_value": take_profit_value,
+                    "trailing_stop_mode": trailing_stop_mode,
+                    "trailing_stop_value": trailing_stop_value,
+                    "indicator_exit_enabled": bool(indicator_exit_enabled),
+                    "indicator_exit_rule": indicator_exit_rule,
+                },
             ))
             trade_run.status = "executed"
             trade_run.notes = json.dumps({
-                "mode": effective_mode,
-                "timeframe": timeframe,
-                "strategy": strategy_slug,
-                "candle": candle_snapshot,
+                **common_note,
                 "decision": signal,
                 "order_status": result.status,
                 "execution_message": result.message,
-                "run_source": run_source,
-                "bot_session_id": bot_session_id,
-                    "trade_amount_mode": trade_mode,
-                    "allocation_usd": round(allocation_usd, 4),
             })
 
             outputs.append({
@@ -232,13 +243,16 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
     return outputs
 
 
-
 def dashboard_data(db, user_id: int):
     connectors = db.query(Connector).filter(Connector.user_id == user_id).all()
     trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.desc()).limit(20).all()
     all_trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).all()
     grants = db.query(UserPlatformGrant).filter(UserPlatformGrant.user_id == user_id).all()
     pnl = sum(t.pnl for t in all_trades)
+    total_invested = sum((t.quantity or 0) * (t.price or 0) for t in all_trades)
+    pnl_percent = (pnl / total_invested * 100) if total_invested > 0 else 0.0
+    wins = sum(1 for t in all_trades if (t.pnl or 0) > 0)
+    losses = sum(1 for t in all_trades if (t.pnl or 0) < 0)
     platform_counts = Counter(c.platform for c in connectors)
     status_counts = Counter(t.status for t in all_trades)
 
@@ -247,6 +261,10 @@ def dashboard_data(db, user_id: int):
         "enabled_connectors": sum(1 for c in connectors if c.is_enabled),
         "total_trades": len(all_trades),
         "realized_pnl": round(pnl, 2),
+        "total_invested": round(total_invested, 2),
+        "realized_pnl_percent": round(pnl_percent, 2),
+        "winning_trades": wins,
+        "losing_trades": losses,
         "platforms": dict(platform_counts),
         "statuses": dict(status_counts),
         "latest_trades": trades,

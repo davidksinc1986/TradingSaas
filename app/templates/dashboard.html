@@ -20,9 +20,13 @@
         <small>Ventas</small>
         <strong id="eco-sell">0.00</strong>
       </div>
-      <div class="economic-item economic-item-wide">
+      <div class="economic-item">
         <small>Generado este mes</small>
         <strong id="eco-monthly-pnl">0.00</strong>
+      </div>
+      <div class="economic-item">
+        <small>Rentabilidad real</small>
+        <strong id="eco-real-pnl-percent">0.00%</strong>
       </div>
     </div>
   </aside>
@@ -141,6 +145,15 @@
 
         <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
+        <label>Take Profit fijo
+          <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
+        </label>
+        <label>Trailing Stop
+          <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
+        </label>
+        <label>Cierre por indicador
+          <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
+        </label>
         <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
         <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
       </form>
@@ -216,19 +229,29 @@
 <section id="tab-activity" class="tab-panel">
   <div class="grid-2">
     <div class="card">
-      <h2>Distribución por plataforma</h2>
-      <canvas id="platform-chart" height="220"></canvas>
+      <h2>PNL por plataforma</h2>
+      <canvas id="pnl-platform-chart" height="220"></canvas>
     </div>
     <div class="card">
-      <h2>Webhook de TradingView explicado fácil</h2>
-      <ul class="hint">
-        <li>1) TradingView envía una alerta a una URL segura de tu cuenta.</li>
-        <li>2) La app valida tu clave secreta (passphrase).</li>
-        <li>3) Si indicas <code>target_connector_id</code>, reenvía la orden a Binance/Bybit/OKX/MT5.</li>
-      </ul>
-      <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
+      <h2>Distribución por resultado</h2>
+      <canvas id="win-loss-chart" height="220"></canvas>
     </div>
   </div>
+
+  <section class="card">
+    <h2>Evolución acumulada del PNL</h2>
+    <canvas id="pnl-cumulative-chart" height="120"></canvas>
+  </section>
+
+  <section class="card">
+    <h2>Webhook de TradingView explicado fácil</h2>
+    <ul class="hint">
+      <li>1) TradingView envía una alerta a una URL segura de tu cuenta.</li>
+      <li>2) La app valida tu clave secreta (passphrase).</li>
+      <li>3) Si indicas <code>target_connector_id</code>, reenvía la orden a Binance/Bybit/OKX/MT5.</li>
+    </ul>
+    <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
+  </section>
 
 <section class="card">
     <div class="row-between">
@@ -311,6 +334,11 @@
         <tbody></tbody>
       </table>
     </div>
+  </section>
+
+  <section class="card">
+    <h2>Distribución por plataforma</h2>
+    <canvas id="platform-chart" height="220"></canvas>
   </section>
 </section>
 
