@@ -106,6 +106,9 @@ class TradingViewWebhook(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
+    email: EmailStr | None = None
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    phone: str | None = Field(default=None, max_length=40)
     is_active: bool | None = None
     is_admin: bool | None = None
 

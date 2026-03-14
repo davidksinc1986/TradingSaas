@@ -895,6 +895,22 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
     if payload.is_admin is not None and not _is_root_admin(actor):
         raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
 
+    if payload.email is not None:
+        next_email = str(payload.email).strip().lower()
+        existing = db.query(User).filter(User.email == next_email, User.id != user.id).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already exists")
+        user.email = next_email
+
+    if payload.name is not None:
+        user.name = str(payload.name).strip()
+
+    if payload.phone is not None:
+        clean_phone = str(payload.phone).strip()
+        if clean_phone and (len(clean_phone) < 7 or len(clean_phone) > 40):
+            raise HTTPException(status_code=400, detail="Phone must be between 7 and 40 characters")
+        user.phone = clean_phone or None
+
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.is_admin is not None:
