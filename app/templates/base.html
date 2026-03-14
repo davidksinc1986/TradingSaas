@@ -9,7 +9,9 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><strong class="brand-name">{{ tr('app.name') }}</strong> <small class="brand-cutline">{{ tr('app.tagline') }}</small></div>
+    <a class="brand" href="/" aria-label="{{ tr('app.name') }}">
+      <img class="brand-logo" src="/static/snake_mafia_trading_transparent_v2.svg" alt="{{ tr('app.name') }}" loading="eager" />
+    </a>
     <nav class="nav">
       <a href="/">Inicio</a>
       {% if user %}<a href="/dashboard">Dashboard</a>{% endif %}
