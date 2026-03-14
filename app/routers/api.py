@@ -33,6 +33,32 @@ from app.services.trading import dashboard_data, run_strategy
 router = APIRouter(prefix="/api", tags=["api"])
 ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
 ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]
+TIMEFRAME_TO_MINUTES = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+    "2h": 120,
+    "4h": 240,
+    "6h": 360,
+    "8h": 480,
+    "12h": 720,
+    "1d": 1440,
+}
+
+
+def _normalize_timeframe(value: str) -> str:
+    clean = str(value or "").strip().lower()
+    if not clean:
+        return "5m"
+    return clean
+
+
+def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
+    clean = _normalize_timeframe(timeframe)
+    return TIMEFRAME_TO_MINUTES.get(clean, max(int(fallback or 5), 1))
 
 
 def _is_root_admin(user: User) -> bool:
@@ -401,13 +427,14 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
 
+    normalized_timeframe = _normalize_timeframe(payload.timeframe)
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
         strategy_slug=payload.strategy_slug,
-        timeframe=payload.timeframe,
+        timeframe=normalized_timeframe,
         symbols_json={"symbols": payload.symbols},
-        interval_minutes=payload.interval_minutes,
+        interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
         risk_per_trade=risk_value,
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
@@ -429,10 +456,31 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
     if not session:
         raise HTTPException(status_code=404, detail="Bot session not found")
 
+    control = _ensure_strategy_control(db, user.id)
+    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+
     if payload.is_active is not None:
         session.is_active = payload.is_active
-    if payload.interval_minutes is not None:
+    if payload.symbols is not None:
+        session.symbols_json = {"symbols": payload.symbols}
+    if payload.strategy_slug is not None:
+        if control.managed_by_admin and payload.strategy_slug not in allowed:
+            raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+        session.strategy_slug = payload.strategy_slug
+    if payload.timeframe is not None:
+        normalized_timeframe = _normalize_timeframe(payload.timeframe)
+        session.timeframe = normalized_timeframe
+        session.interval_minutes = _interval_from_timeframe(normalized_timeframe, payload.interval_minutes or session.interval_minutes)
+    elif payload.interval_minutes is not None:
         session.interval_minutes = payload.interval_minutes
+
+    if payload.risk_per_trade is not None:
+        session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    if payload.min_ml_probability is not None:
+        session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+    if payload.use_live_if_available is not None:
+        session.use_live_if_available = payload.use_live_if_available
+
     db.commit()
     return {"ok": True}
 
@@ -463,6 +511,31 @@ def dashboard(db=Depends(get_db), user=Depends(current_user)):
             "pnl": t.pnl,
             "created_at": t.created_at.isoformat(),
         } for t in data["latest_trades"]],
+    }
+
+
+@router.get("/exchange-symbol-rules")
+def exchange_symbol_rules(connector_id: int, symbols: str | None = None, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+    if connector.platform not in {"binance", "bybit", "okx"}:
+        raise HTTPException(status_code=400, detail="Exchange symbol rules are only available for Binance/Bybit/OKX")
+
+    selected_symbols = [item.strip().upper() for item in (symbols or "").split(",") if item.strip()]
+    if not selected_symbols:
+        selected_symbols = [str(item).upper() for item in ((connector.symbols_json or {}).get("symbols") or [])]
+
+    client = get_client(connector)
+    if not hasattr(client, "min_requirements"):
+        raise HTTPException(status_code=400, detail="Connector does not provide symbol filters")
+
+    rows = [client.min_requirements(symbol) for symbol in selected_symbols]
+    return {
+        "connector_id": connector.id,
+        "connector_label": connector.label,
+        "platform": connector.platform,
+        "rows": rows,
     }
 
 

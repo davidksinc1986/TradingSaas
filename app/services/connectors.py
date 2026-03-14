@@ -47,6 +47,10 @@ class BaseConnectorClient:
 
 
 class CCXTConnectorClient(BaseConnectorClient):
+    def __init__(self, connector):
+        super().__init__(connector)
+        self._markets_cache: dict[str, Any] | None = None
+
     def build_exchange(self):
         if ccxt is None:
             raise RuntimeError("ccxt is not installed")
@@ -73,11 +77,65 @@ class CCXTConnectorClient(BaseConnectorClient):
             exchange.set_sandbox_mode(True)
         return exchange
 
+    def _load_markets(self, exchange) -> dict[str, Any]:
+        if self._markets_cache is None:
+            self._markets_cache = exchange.load_markets()
+        return self._markets_cache
+
+    def _market(self, exchange, symbol: str) -> dict[str, Any] | None:
+        markets = self._load_markets(exchange)
+        return markets.get(symbol)
+
     def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
         try:
             return float(exchange.amount_to_precision(symbol, quantity))
         except Exception:
             return float(quantity)
+
+    def _normalize_price(self, exchange, symbol: str, price: float) -> float:
+        try:
+            return float(exchange.price_to_precision(symbol, price))
+        except Exception:
+            return float(price)
+
+    def _min_notional(self, market: dict[str, Any] | None) -> float:
+        if not market:
+            return 0.0
+        limits = market.get("limits") or {}
+        cost = limits.get("cost") or {}
+        min_cost = cost.get("min")
+        try:
+            return float(min_cost or 0.0)
+        except Exception:
+            return 0.0
+
+    def _apply_exchange_filters(self, exchange, symbol: str, quantity: float, price_hint: float) -> tuple[float, float, float]:
+        market = self._market(exchange, symbol)
+        quantity = self._normalize_amount(exchange, symbol, quantity)
+        normalized_price = self._normalize_price(exchange, symbol, price_hint)
+        min_notional = self._min_notional(market)
+        if min_notional > 0 and quantity * normalized_price < min_notional:
+            min_quantity = min_notional / max(normalized_price, 0.0000001)
+            quantity = self._normalize_amount(exchange, symbol, min_quantity)
+        return quantity, normalized_price, min_notional
+
+    def min_requirements(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        if not market:
+            return {"symbol": symbol, "found": False}
+        limits = market.get("limits") or {}
+        amount_limits = limits.get("amount") or {}
+        price_limits = limits.get("price") or {}
+        return {
+            "symbol": symbol,
+            "found": True,
+            "base": market.get("base"),
+            "quote": market.get("quote"),
+            "min_qty": float(amount_limits.get("min") or 0.0),
+            "min_price": float(price_limits.get("min") or 0.0),
+            "min_notional": self._min_notional(market),
+        }
 
     def _resolve_fill_price(self, order: dict[str, Any], price_hint: float) -> float:
         return float(order.get("average") or order.get("price") or order.get("cost") or price_hint)
@@ -86,8 +144,9 @@ class CCXTConnectorClient(BaseConnectorClient):
         if self.connector.mode != "live":
             return super().execute_market(symbol, side, quantity, price_hint)
         exchange = self.build_exchange()
-        exchange.load_markets()
-        quantity = self._normalize_amount(exchange, symbol, quantity)
+        quantity, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
+        if quantity <= 0:
+            raise RuntimeError(f"Quantity for {symbol} resolved to 0 after exchange precision filters")
         order = exchange.create_order(symbol=symbol, type="market", side=side, amount=quantity)
         fill_price = self._resolve_fill_price(order, price_hint)
         return ExecutionResult(
@@ -95,7 +154,7 @@ class CCXTConnectorClient(BaseConnectorClient):
             message="Live order submitted via CCXT",
             fill_price=fill_price,
             quantity=float(order.get("amount") or quantity),
-            raw=order,
+            raw={**order, "normalized_price": normalized_price, "min_notional": min_notional},
         )
 
     def test_connection(self) -> dict[str, Any]:
