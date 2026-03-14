@@ -43,9 +43,10 @@
 </section>
 
 <section id="tab-profile" class="tab-panel active">
-  <div class="card">
-    <h2 id="profile-title">Perfil de usuario</h2>
-    <form id="profile-form" class="form-grid profile-grid">
+  <div class="card profile-strategy-layout">
+    <section>
+      <h2 id="profile-title">Perfil de usuario</h2>
+      <form id="profile-form" class="form-grid profile-grid">
       <label>Nombre
         <input name="name" id="profile-name" required>
       </label>
@@ -73,8 +74,21 @@
       </label>
       <small class="hint">El email solo puede editarlo el super user. Si dejas bot key/chat id vacíos, se conservarán los valores actuales.</small>
       <button class="btn primary" type="submit">Guardar perfil</button>
-    </form>
-    <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
+      </form>
+      <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
+    </section>
+
+    <aside class="card soft-card profile-active-strategies" id="profile-active-strategies">
+      <div class="row-between">
+        <h3>Estrategias activas</h3>
+        <small class="hint">Editables</small>
+      </div>
+      <form id="profile-strategy-form" class="form-grid" style="margin-top:10px;">
+        <div id="profile-strategy-checks" class="strategy-check-grid"></div>
+        <button class="btn primary compact-save-btn" type="submit">Guardar estrategias</button>
+      </form>
+      <div id="profile-strategy-feedback" class="hint" style="margin-top:8px;"></div>
+    </aside>
   </div>
 </section>
 
@@ -84,6 +98,55 @@
 </section>
 
 <section id="tab-strategies" class="tab-panel">
+  <div class="card strategy-bottom-controls">
+    <div class="profile-strategy-layout strategy-bottom-layout">
+      <section>
+        <h3>Cuenta administrativa</h3>
+        <p class="hint">Este panel replica la configuración principal para que ajustes tus datos sin salir de la zona de estrategias.</p>
+        <form id="profile-form-bottom" class="form-grid profile-grid profile-grid-compact">
+          <label>Nombre
+            <input name="name" id="profile-name-bottom" required>
+          </label>
+          <label>Email
+            <input name="email" id="profile-email-bottom" disabled>
+          </label>
+          <label>Número de teléfono (WhatsApp futuro)
+            <input name="phone" id="profile-phone-bottom" placeholder="+57 300 000 0000">
+          </label>
+          <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled-bottom" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
+          <label>Bot Key de Telegram
+            <input name="telegram_bot_key" id="profile-telegram-bot-key-bottom" placeholder="123456:ABC..." autocomplete="off">
+          </label>
+          <label>Telegram ID / Chat ID
+            <input name="telegram_chat_id" id="profile-telegram-chat-id-bottom" placeholder="6902163541" autocomplete="off">
+          </label>
+          <label>Idioma de alertas
+            <select name="alert_language" id="profile-alert-language-bottom">
+              <option value="es">Español</option>
+              <option value="en">English</option>
+              <option value="pt">Português</option>
+              <option value="fr">Français</option>
+            </select>
+          </label>
+          <button class="btn primary compact-save-btn" type="submit">Guardar perfil</button>
+        </form>
+        <div id="profile-feedback-bottom" class="hint" style="margin-top:8px;"></div>
+      </section>
+
+      <aside class="card soft-card profile-active-strategies">
+        <div class="row-between">
+          <h3>Estrategias activas</h3>
+          <small class="hint">Misma configuración</small>
+        </div>
+        <form id="profile-strategy-form-bottom" class="form-grid" style="margin-top:10px;">
+          <div id="profile-strategy-checks-bottom" class="strategy-check-grid"></div>
+          <button class="btn primary compact-save-btn" type="submit">Guardar estrategias</button>
+        </form>
+        <div id="profile-strategy-feedback-bottom" class="hint" style="margin-top:8px;"></div>
+      </aside>
+    </div>
+  </div>
+
   <div class="grid-2">
     <div class="card">
       <div class="row-between">

@@ -168,7 +168,7 @@ select[multiple]{min-height:120px}
 @media (max-width:980px){
   .hero-login{position:static}
   .trade-metrics{grid-template-columns:1fr 1fr}
-  .connector-layout,.market-board{grid-template-columns:1fr}
+  .connector-layout,.market-board,.profile-strategy-layout{grid-template-columns:1fr}
   .term-box{position:static}
   .plan-grid{grid-template-columns:1fr}
   .dashboard-header-grid{grid-template-columns:1fr}
@@ -188,3 +188,10 @@ select[multiple]{min-height:120px}
 .ticker-row:last-child{border-bottom:none}
 .ticker-up{color:#86efac}
 .ticker-down{color:#fca5a5}
+
+
+.profile-strategy-layout{display:grid;grid-template-columns:1.35fr .85fr;gap:16px;align-items:start}
+.profile-active-strategies h3{margin:0}
+.strategy-bottom-controls{margin-bottom:14px}
+.strategy-bottom-layout h3{margin-top:0}
+.profile-grid-compact{max-width:none}
