@@ -78,3 +78,54 @@ def test_safe_float_uses_fallback_for_invalid_values():
     assert api._safe_float("abc", fallback=2.5) == 2.5
     assert api._safe_float(float("nan"), fallback=1.0) == 1.0
     assert api._safe_float("3.25", fallback=0.0) == 3.25
+
+
+class _ExplosiveConnectorRow:
+    def __init__(self):
+        self.id = 555
+        self.platform = "binance"
+        self.label = "B-1"
+        self.mode = "paper"
+        self.market_type = "spot"
+        self.is_enabled = True
+        self.created_at = None
+
+    @property
+    def symbols_json(self):
+        raise RuntimeError("symbols unreadable")
+
+
+def test_list_connectors_never_returns_500_when_connector_is_corrupted(monkeypatch):
+    class _ConnectorQuery:
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [_ExplosiveConnectorRow()]
+
+    class _ConnectorDB:
+        def query(self, *_args, **_kwargs):
+            return self
+
+        def filter(self, *_args, **_kwargs):
+            return _ConnectorQuery()
+
+    alerts = []
+    monkeypatch.setattr(api, "_alert_admin_failure", lambda scope, detail: alerts.append((scope, detail)))
+
+    rows = api.list_connectors(db=_ConnectorDB(), user=SimpleNamespace(id=9))
+    assert len(rows) == 1
+    assert rows[0]["id"] == 555
+    assert rows[0]["symbols"] == []
+    assert alerts and alerts[0][0] == "API /api/connectors serialization"
+
+
+def test_dashboard_returns_safe_payload_when_aggregation_fails(monkeypatch):
+    monkeypatch.setattr(api, "dashboard_data", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    alerts = []
+    monkeypatch.setattr(api, "_alert_admin_failure", lambda scope, detail: alerts.append((scope, detail)))
+
+    payload = api.dashboard(db=object(), user=SimpleNamespace(id=12))
+    assert payload["total_connectors"] == 0
+    assert payload["latest_trades"] == []
+    assert alerts and alerts[0][0] == "API /api/dashboard"
