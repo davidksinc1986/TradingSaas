@@ -93,6 +93,10 @@ class AdminStrategyControlUpdate(BaseModel):
     allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]] = Field(default_factory=list)
 
 
+class StrategyControlUpdate(BaseModel):
+    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"]] = Field(default_factory=list)
+
+
 class AdminPricingConfigUpdate(BaseModel):
     base_commission_usd: float = Field(ge=0)
     cost_per_app_usd: float = Field(ge=0)

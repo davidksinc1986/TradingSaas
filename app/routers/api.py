@@ -13,6 +13,7 @@ from app.schemas import (
     AdminPolicyUpdate,
     AdminPricingConfigUpdate,
     AdminStrategyControlUpdate,
+    StrategyControlUpdate,
     AdminUserUpdate,
     ConnectorCreate,
     ConnectorUpdate,
@@ -287,6 +288,24 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
 def get_strategy_control(db=Depends(get_db), user=Depends(current_user)):
     control = _ensure_strategy_control(db, user.id)
     return {
+        "managed_by_admin": control.managed_by_admin,
+        "allowed_strategies": (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
+        "all_strategies": ALL_STRATEGIES,
+    }
+
+
+@router.put("/strategy-control")
+def update_strategy_control(payload: StrategyControlUpdate, db=Depends(get_db), user=Depends(current_user)):
+    control = _ensure_strategy_control(db, user.id)
+    if control.managed_by_admin:
+        raise HTTPException(status_code=403, detail="Strategy selection is managed by admin for this user")
+
+    allowed = [s for s in payload.allowed_strategies if s in ALL_STRATEGIES]
+    control.allowed_strategies_json = {"items": allowed or ALL_STRATEGIES}
+    db.add(control)
+    db.commit()
+    return {
+        "ok": True,
         "managed_by_admin": control.managed_by_admin,
         "allowed_strategies": (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
         "all_strategies": ALL_STRATEGIES,
