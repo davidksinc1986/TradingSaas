@@ -37,7 +37,8 @@ def enforce_daily_limit(db, connector: Connector):
 
 
 def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str], timeframe: str,
-                 strategy_slug: str, risk_per_trade: float, min_ml_probability: float, use_live_if_available: bool):
+                 strategy_slug: str, risk_per_trade: float, min_ml_probability: float, use_live_if_available: bool,
+                 run_source: str = "manual", bot_session_id: int | None = None):
     strategy_fn = STRATEGY_MAP[strategy_slug]
     user = db.query(User).filter(User.id == user_id).first()
     connectors = db.query(Connector).filter(
@@ -91,6 +92,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                     "strategy": strategy_slug,
                     "candle": candle_snapshot,
                     "decision": "pending",
+                    "run_source": run_source,
+                    "bot_session_id": bot_session_id,
                 }),
             )
             db.add(trade_run)
@@ -103,6 +106,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                     "candle": candle_snapshot,
                     "decision": "no_action",
                     "reason": "signal_hold_or_low_ml_probability",
+                    "run_source": run_source,
+                    "bot_session_id": bot_session_id,
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -130,6 +135,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                     "decision": signal,
                     "order_status": "error",
                     "execution_message": str(exc),
+                    "run_source": run_source,
+                    "bot_session_id": bot_session_id,
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -174,6 +181,8 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 "decision": signal,
                 "order_status": result.status,
                 "execution_message": result.message,
+                "run_source": run_source,
+                "bot_session_id": bot_session_id,
             })
 
             outputs.append({

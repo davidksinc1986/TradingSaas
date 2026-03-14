@@ -48,6 +48,23 @@ class StrategyRequest(BaseModel):
     use_live_if_available: bool = False
 
 
+
+
+class BotSessionCreate(BaseModel):
+    connector_id: int
+    symbols: list[str]
+    timeframe: str = "5m"
+    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout", "macd_trend_pullback", "bollinger_rsi_reversal", "adx_trend_follow", "stochastic_rebound"] = "ema_rsi"
+    risk_per_trade: float = Field(default=1, gt=0, le=100)
+    min_ml_probability: float = Field(default=55, ge=0, le=100)
+    use_live_if_available: bool = False
+    interval_minutes: int = Field(default=5, ge=1, le=1440)
+
+
+class BotSessionUpdate(BaseModel):
+    is_active: bool | None = None
+    interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+
 class TradingViewWebhook(BaseModel):
     connector_id: int
     symbol: str

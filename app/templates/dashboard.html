@@ -171,7 +171,7 @@
         <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
         <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
-        <button class="btn primary" type="submit">Ejecutar</button>
+        <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
       </form>
       <pre id="run-output" class="prebox"></pre>
     </div>
@@ -246,7 +246,35 @@
     </div>
   </section>
 
+  
+
   <section class="card">
+    <div class="row-between">
+      <h2>Bots activos (24/7)</h2>
+      <button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button>
+    </div>
+    <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación.</small>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table id="bot-sessions-table">
+        <thead>
+          <tr>
+            <th>Conector</th>
+            <th>Plataforma</th>
+            <th>Símbolos</th>
+            <th>Estrategia</th>
+            <th>Capital/op</th>
+            <th>Frecuencia</th>
+            <th>Estado</th>
+            <th>Última corrida</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+<section class="card">
     <div class="row-between">
       <h2>Logs de ejecución (5m / 1h)</h2>
       <button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button>

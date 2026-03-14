@@ -24,6 +24,7 @@ class User(Base):
     connectors = relationship("Connector", back_populates="user", cascade="all, delete-orphan")
     trade_runs = relationship("TradeRun", back_populates="user", cascade="all, delete-orphan")
     trade_logs = relationship("TradeLog", back_populates="user", cascade="all, delete-orphan")
+    bot_sessions = relationship("BotSession", back_populates="user", cascade="all, delete-orphan")
     platform_grants = relationship("UserPlatformGrant", back_populates="user", cascade="all, delete-orphan")
     strategy_control = relationship("UserStrategyControl", back_populates="user", cascade="all, delete-orphan", uselist=False)
 
@@ -125,6 +126,32 @@ class Connector(Base):
     user = relationship("User", back_populates="connectors")
     trade_runs = relationship("TradeRun", back_populates="connector", cascade="all, delete-orphan")
     trade_logs = relationship("TradeLog", back_populates="connector", cascade="all, delete-orphan")
+    bot_sessions = relationship("BotSession", back_populates="connector", cascade="all, delete-orphan")
+
+
+class BotSession(Base):
+    __tablename__ = "bot_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    connector_id: Mapped[int] = mapped_column(ForeignKey("connectors.id"), index=True)
+    strategy_slug: Mapped[str] = mapped_column(String(100))
+    timeframe: Mapped[str] = mapped_column(String(20), default="5m")
+    symbols_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    risk_per_trade: Mapped[float] = mapped_column(Float, default=0.01)
+    min_ml_probability: Mapped[float] = mapped_column(Float, default=0.55)
+    use_live_if_available: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(String(30), default="idle")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="bot_sessions")
+    connector = relationship("Connector", back_populates="bot_sessions")
 
 
 class StrategyProfile(Base):
