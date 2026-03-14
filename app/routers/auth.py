@@ -6,6 +6,7 @@ from app.core import settings
 from app.db import get_db
 from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
 from app.models import User
+from app.services.alerts import format_failure_message, send_telegram_alert_sync
 from app.schemas import UserLogin
 from app.security import create_access_token, hash_password, verify_password
 
@@ -44,25 +45,29 @@ def register(email: str = Form(...), name: str = Form(...), password: str = Form
 
 @router.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...), db=Depends(get_db)):
-    payload = UserLogin(email=email, password=password)
+    payload = UserLogin(email=email.strip().lower(), password=password)
     user = db.query(User).filter(User.email == payload.email).first()
     accepts_html = "text/html" in (request.headers.get("accept") or "")
-    if not user or not verify_password(payload.password, user.hashed_password):
+
+    def _fail(detail_html: str, detail_api: str, code: int):
+        send_telegram_alert_sync(format_failure_message("Login", f"email={payload.email} reason={detail_api}"))
         if accepts_html:
             return templates.TemplateResponse(
                 "login.html",
-                base_context(request, title="Login", error="Credenciales inválidas. Revisa usuario/email y contraseña."),
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                base_context(request, title="Login", error=detail_html),
+                status_code=code,
             )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        raise HTTPException(status_code=code, detail=detail_api)
+
+    if not user:
+        return _fail("Cannot find user", "cannot find user", status.HTTP_401_UNAUTHORIZED)
+
+    if not verify_password(payload.password, user.hashed_password):
+        return _fail("Incorrect password", "incorrect password", status.HTTP_401_UNAUTHORIZED)
+
     if not user.is_active:
-        if accepts_html:
-            return templates.TemplateResponse(
-                "login.html",
-                base_context(request, title="Login", error="Tu cuenta fue deshabilitada por administración."),
-                status_code=status.HTTP_403_FORBIDDEN,
-            )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled by admin")
+        return _fail("Unable to login: account disabled by admin", "unable to login: account disabled", status.HTTP_403_FORBIDDEN)
+
     token = create_access_token(user.email)
     response = RedirectResponse(url="/dashboard", status_code=303)
     response.set_cookie(

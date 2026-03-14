@@ -23,7 +23,7 @@ from app.schemas import (
     TradingViewWebhook,
 )
 from app.security import encrypt_payload, hash_password
-from app.services.alerts import format_user_failure_message, normalize_alert_locale, send_user_telegram_alert
+from app.services.alerts import format_failure_message, format_user_failure_message, normalize_alert_locale, send_telegram_alert_sync, send_user_telegram_alert
 from app.services.connectors import get_client
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
@@ -47,6 +47,21 @@ TIMEFRAME_TO_MINUTES = {
     "12h": 720,
     "1d": 1440,
 }
+
+
+
+
+def _alert_admin_failure(scope: str, detail: str) -> None:
+    try:
+        send_telegram_alert_sync(format_failure_message(scope, detail))
+    except Exception:
+        pass
+
+
+def _extract_http_error_detail(exc: HTTPException) -> str:
+    if isinstance(exc.detail, str):
+        return exc.detail
+    return json.dumps(exc.detail, ensure_ascii=False)
 
 
 def _normalize_timeframe(value: str) -> str:
@@ -385,14 +400,14 @@ def update_strategy_control(payload: StrategyControlUpdate, db=Depends(get_db), 
 
 @router.get("/bot-sessions")
 def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
-    sessions = db.query(BotSession).join(Connector, BotSession.connector_id == Connector.id).filter(
+    sessions = db.query(BotSession).outerjoin(Connector, BotSession.connector_id == Connector.id).filter(
         BotSession.user_id == user.id
     ).order_by(BotSession.created_at.desc()).all()
     payload = []
     for session in sessions:
         connector = session.connector
         symbols = (session.symbols_json or {}).get("symbols", [])
-        config = connector.config_json or {}
+        config = (connector.config_json or {}) if connector else {}
         capital = float(config.get("allocation_value", config.get("default_quantity", 0)) or 0)
         payload.append({
             "id": session.id,
@@ -833,6 +848,28 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
     return {"ok": True}
 
 
+
+
+@router.delete("/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db=Depends(get_db), actor: User = Depends(admin_user)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Cannot find user")
+
+    if _is_root_admin(user):
+        raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be deleted")
+
+    if user.id == actor.id:
+        raise HTTPException(status_code=403, detail="You cannot delete your own account")
+
+    try:
+        db.delete(user)
+        db.commit()
+        return {"ok": True}
+    except Exception as exc:
+        db.rollback()
+        _alert_admin_failure("Admin User Delete", f"actor_id={actor.id} user_id={user_id} error={exc}")
+        raise HTTPException(status_code=500, detail="Unable to delete user at this time")
 @router.get("/admin/users/{user_id}/profile")
 def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin_user)):
     user = db.query(User).filter(User.id == user_id).first()
@@ -888,22 +925,38 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
 
 
 @router.post("/admin/users")
-def admin_create_user(payload: AdminUserCreate, db=Depends(get_db), _: User = Depends(admin_user)):
-    exists = db.query(User).filter(User.email == payload.email).first()
+def admin_create_user(payload: AdminUserCreate, db=Depends(get_db), actor: User = Depends(admin_user)):
+    clean_email = payload.email.strip().lower()
+    clean_name = payload.name.strip()
+
+    exists = db.query(User).filter(User.email == clean_email).first()
     if exists:
-        raise HTTPException(status_code=400, detail="User already exists")
-    user = User(
-        email=payload.email,
-        name=payload.name,
-        hashed_password=hash_password(payload.password),
-        is_active=True,
-        is_admin=False,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    ensure_user_grants(db, user)
-    return {"ok": True, "user_id": user.id}
+        detail = f"admin_create_user duplicate email={clean_email} actor_id={actor.id}"
+        _alert_admin_failure("Admin User Creation", detail)
+        raise HTTPException(status_code=400, detail="Cannot create user: email already exists")
+
+    try:
+        user = User(
+            email=clean_email,
+            name=clean_name,
+            hashed_password=hash_password(payload.password),
+            is_active=True,
+            is_admin=False,
+        )
+        db.add(user)
+        db.flush()
+        ensure_user_grants(db, user)
+        db.commit()
+        db.refresh(user)
+        return {"ok": True, "user_id": user.id}
+    except HTTPException as exc:
+        db.rollback()
+        _alert_admin_failure("Admin User Creation", f"actor_id={actor.id} email={clean_email} detail={_extract_http_error_detail(exc)}")
+        raise
+    except Exception as exc:
+        db.rollback()
+        _alert_admin_failure("Admin User Creation", f"actor_id={actor.id} email={clean_email} error={exc}")
+        raise HTTPException(status_code=500, detail="Unable to create user at this time")
 
 
 @router.get("/admin/policies")

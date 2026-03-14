@@ -49,6 +49,27 @@ async def send_telegram_alert(message: str) -> bool:
         return False
 
 
+def send_telegram_alert_sync(message: str) -> bool:
+    token = (settings.telegram_admin_bot_token or "").strip()
+    chat_id = (settings.telegram_admin_chat_id or "").strip()
+    if not token or not chat_id:
+        return False
+
+    payload = {
+        "chat_id": chat_id,
+        "text": _safe_telegram_text(message),
+        "disable_web_page_preview": True,
+    }
+    try:
+        with httpx.Client(timeout=6.0) as client:
+            response = client.post(_compose_telegram_url(token), json=payload)
+            response.raise_for_status()
+        return True
+    except Exception:
+        logger.exception("Failed sending sync Telegram alert")
+        return False
+
+
 def send_user_telegram_alert(user: User, message: str) -> bool:
     if not user.telegram_alerts_enabled:
         return False
