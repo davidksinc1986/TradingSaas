@@ -98,55 +98,6 @@
 </section>
 
 <section id="tab-strategies" class="tab-panel">
-  <div class="card strategy-bottom-controls">
-    <div class="profile-strategy-layout strategy-bottom-layout">
-      <section>
-        <h3>Cuenta administrativa</h3>
-        <p class="hint">Este panel replica la configuración principal para que ajustes tus datos sin salir de la zona de estrategias.</p>
-        <form id="profile-form-bottom" class="form-grid profile-grid profile-grid-compact">
-          <label>Nombre
-            <input name="name" id="profile-name-bottom" required>
-          </label>
-          <label>Email
-            <input name="email" id="profile-email-bottom" disabled>
-          </label>
-          <label>Número de teléfono (WhatsApp futuro)
-            <input name="phone" id="profile-phone-bottom" placeholder="+57 300 000 0000">
-          </label>
-          <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled-bottom" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
-          <label>Bot Key de Telegram
-            <input name="telegram_bot_key" id="profile-telegram-bot-key-bottom" placeholder="123456:ABC..." autocomplete="off">
-          </label>
-          <label>Telegram ID / Chat ID
-            <input name="telegram_chat_id" id="profile-telegram-chat-id-bottom" placeholder="6902163541" autocomplete="off">
-          </label>
-          <label>Idioma de alertas
-            <select name="alert_language" id="profile-alert-language-bottom">
-              <option value="es">Español</option>
-              <option value="en">English</option>
-              <option value="pt">Português</option>
-              <option value="fr">Français</option>
-            </select>
-          </label>
-          <button class="btn primary compact-save-btn" type="submit">Guardar perfil</button>
-        </form>
-        <div id="profile-feedback-bottom" class="hint" style="margin-top:8px;"></div>
-      </section>
-
-      <aside class="card soft-card profile-active-strategies">
-        <div class="row-between">
-          <h3>Estrategias activas</h3>
-          <small class="hint">Misma configuración</small>
-        </div>
-        <form id="profile-strategy-form-bottom" class="form-grid" style="margin-top:10px;">
-          <div id="profile-strategy-checks-bottom" class="strategy-check-grid"></div>
-          <button class="btn primary compact-save-btn" type="submit">Guardar estrategias</button>
-        </form>
-        <div id="profile-strategy-feedback-bottom" class="hint" style="margin-top:8px;"></div>
-      </aside>
-    </div>
-  </div>
-
   <div class="grid-2">
     <div class="card">
       <div class="row-between">
@@ -176,12 +127,37 @@
       <pre id="run-output" class="prebox"></pre>
     </div>
 
-    <div class="card">
+    <div class="stack" style="gap:14px;">
+      <div class="card">
+        <div class="row-between">
+          <h2>Estrategias en ejecución ahora</h2>
+          <small class="hint" id="strategies-live-count">0 activas</small>
+        </div>
+        <p class="hint">Resumen por aplicación/cuenta y símbolos que se están ejecutando en este momento.</p>
+        <div id="strategies-live-panel" class="stack" style="margin-top:10px;"></div>
+      </div>
+
+      <section class="card" id="admin-market-board" style="display:none;">
+        <div class="row-between">
+          <h2>Dashboard interactivo de mercado (Top 10)</h2>
+          <button class="btn" id="refresh-market-btn" type="button">Actualizar ahora</button>
+        </div>
+        <small class="hint" id="market-board-context">Mostrando símbolos más fuertes de tu aplicación activa.</small>
+        <div class="market-board" style="margin-top:10px;">
+          <div>
+            <canvas id="market-strength-chart" height="240"></canvas>
+          </div>
+          <div id="market-ticker-list" class="ticker-list"></div>
+        </div>
+      </section>
+
+      <div class="card">
       <div class="row-between">
         <h2>Estrategias disponibles</h2>
         <small class="hint">Click para ver explicación rápida</small>
       </div>
       <div id="strategy-library" class="stack"></div>
+      </div>
     </div>
   </div>
 </section>
@@ -202,20 +178,6 @@
       <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
     </div>
   </div>
-
-  
-  <section class="card" id="admin-market-board" style="display:none;">
-    <div class="row-between">
-      <h2>Dashboard interactivo de mercado (Top 10)</h2>
-      <button class="btn" id="refresh-market-btn" type="button">Actualizar ahora</button>
-    </div>
-    <div class="market-board">
-      <div>
-        <canvas id="market-strength-chart" height="240"></canvas>
-      </div>
-      <div id="market-ticker-list" class="ticker-list"></div>
-    </div>
-  </section>
 
 <section class="card">
     <div class="row-between">
