@@ -48,26 +48,39 @@ app.add_middleware(FailureAlertMiddleware)
 
 def ensure_schema_updates(db):
     inspector = inspect(engine)
-    if not inspector.has_table("users"):
-        return
 
-    existing_columns = {column["name"] for column in inspector.get_columns("users")}
-    if "phone" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
-    if "telegram_bot_token_encrypted" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN telegram_bot_token_encrypted TEXT"))
-    if "telegram_chat_id_encrypted" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN telegram_chat_id_encrypted TEXT"))
-    if "telegram_alerts_enabled" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN telegram_alerts_enabled BOOLEAN DEFAULT 0"))
-    if "alert_language" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN alert_language VARCHAR(5) DEFAULT 'es'"))
-    if "trade_amount_mode" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN trade_amount_mode VARCHAR(20) DEFAULT 'fixed_usd'"))
-    if "fixed_trade_amount_usd" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN fixed_trade_amount_usd FLOAT DEFAULT 10"))
-    if "trade_balance_percent" not in existing_columns:
-        db.execute(text("ALTER TABLE users ADD COLUMN trade_balance_percent FLOAT DEFAULT 10"))
+    def add_missing_columns(table_name: str, statements: dict[str, str]):
+        if not inspector.has_table(table_name):
+            return
+        existing = {column["name"] for column in inspector.get_columns(table_name)}
+        for column_name, statement in statements.items():
+            if column_name not in existing:
+                db.execute(text(statement))
+
+    add_missing_columns("users", {
+        "phone": "ALTER TABLE users ADD COLUMN phone VARCHAR(40)",
+        "telegram_bot_token_encrypted": "ALTER TABLE users ADD COLUMN telegram_bot_token_encrypted TEXT",
+        "telegram_chat_id_encrypted": "ALTER TABLE users ADD COLUMN telegram_chat_id_encrypted TEXT",
+        "telegram_alerts_enabled": "ALTER TABLE users ADD COLUMN telegram_alerts_enabled BOOLEAN DEFAULT 0",
+        "alert_language": "ALTER TABLE users ADD COLUMN alert_language VARCHAR(5) DEFAULT 'es'",
+        "trade_amount_mode": "ALTER TABLE users ADD COLUMN trade_amount_mode VARCHAR(20) DEFAULT 'fixed_usd'",
+        "fixed_trade_amount_usd": "ALTER TABLE users ADD COLUMN fixed_trade_amount_usd FLOAT DEFAULT 10",
+        "trade_balance_percent": "ALTER TABLE users ADD COLUMN trade_balance_percent FLOAT DEFAULT 10",
+    })
+
+    add_missing_columns("connectors", {
+        "market_type": "ALTER TABLE connectors ADD COLUMN market_type VARCHAR(20) DEFAULT 'spot'",
+    })
+
+    add_missing_columns("bot_sessions", {
+        "take_profit_mode": "ALTER TABLE bot_sessions ADD COLUMN take_profit_mode VARCHAR(20) DEFAULT 'percent'",
+        "take_profit_value": "ALTER TABLE bot_sessions ADD COLUMN take_profit_value FLOAT DEFAULT 1.5",
+        "trailing_stop_mode": "ALTER TABLE bot_sessions ADD COLUMN trailing_stop_mode VARCHAR(20) DEFAULT 'percent'",
+        "trailing_stop_value": "ALTER TABLE bot_sessions ADD COLUMN trailing_stop_value FLOAT DEFAULT 0.8",
+        "indicator_exit_enabled": "ALTER TABLE bot_sessions ADD COLUMN indicator_exit_enabled BOOLEAN DEFAULT 0",
+        "indicator_exit_rule": "ALTER TABLE bot_sessions ADD COLUMN indicator_exit_rule VARCHAR(30) DEFAULT 'macd_cross'",
+    })
+
     db.commit()
 
 
