@@ -73,6 +73,8 @@ def ensure_schema_updates(db):
     })
 
     add_missing_columns("bot_sessions", {
+        "stop_loss_mode": "ALTER TABLE bot_sessions ADD COLUMN stop_loss_mode VARCHAR(20) DEFAULT 'percent'",
+        "stop_loss_value": "ALTER TABLE bot_sessions ADD COLUMN stop_loss_value FLOAT DEFAULT 1.0",
         "take_profit_mode": "ALTER TABLE bot_sessions ADD COLUMN take_profit_mode VARCHAR(20) DEFAULT 'percent'",
         "take_profit_value": "ALTER TABLE bot_sessions ADD COLUMN take_profit_value FLOAT DEFAULT 1.5",
         "trailing_stop_mode": "ALTER TABLE bot_sessions ADD COLUMN trailing_stop_mode VARCHAR(20) DEFAULT 'percent'",
