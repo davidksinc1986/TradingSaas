@@ -179,6 +179,29 @@
         </div>
       </section>
 
+
+      <section class="card" style="margin-top:14px;">
+        <div class="row-between">
+          <h2>Filtros mínimos por moneda (Binance/Bybit/OKX)</h2>
+          <button class="btn" id="refresh-symbol-rules-btn" type="button">Validar mínimos</button>
+        </div>
+        <small class="hint">Consulta min notional, min quantity y min price para evitar errores de Binance como <code>1013 FILTER_FAILURE_NOTIONAL</code>.</small>
+        <div class="table-wrap" style="margin-top:10px;">
+          <table id="symbol-rules-table">
+            <thead>
+              <tr>
+                <th>Símbolo</th>
+                <th>Disponible</th>
+                <th>Min qty</th>
+                <th>Min notional</th>
+                <th>Min price</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
       <div class="card">
       <div class="row-between">
         <h2>Estrategias disponibles</h2>
