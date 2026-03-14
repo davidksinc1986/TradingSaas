@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1536 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Serpiente dorada sobre gráfica alcista</title>
+  <desc id="desc">Ilustración oscura con línea de crecimiento dorada y cabeza de serpiente.</desc>
+  <defs>
+    <radialGradient id="bgGlow" cx="45%" cy="62%" r="52%">
+      <stop offset="0%" stop-color="#f8b80a" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lineGold" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#e29b03"/>
+      <stop offset="50%" stop-color="#ffcb2f"/>
+      <stop offset="100%" stop-color="#ffd967"/>
+    </linearGradient>
+    <filter id="lineGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1536" height="1024" fill="#07090f"/>
+  <rect width="1536" height="1024" fill="url(#bgGlow)"/>
+
+  <g opacity="0.15" stroke="#f5b31f" fill="none" stroke-width="8">
+    <circle cx="410" cy="240" r="95"/>
+    <circle cx="670" cy="265" r="95"/>
+    <circle cx="935" cy="252" r="95"/>
+    <circle cx="600" cy="455" r="95"/>
+  </g>
+  <g opacity="0.18" fill="#f5b31f" font-family="Arial, sans-serif" font-size="86" font-weight="700" text-anchor="middle" dominant-baseline="middle">
+    <text x="410" y="240">₿</text>
+    <text x="670" y="265">Ξ</text>
+    <text x="935" y="252">◈</text>
+    <text x="600" y="455">≡</text>
+  </g>
+
+  <g stroke="#3a2a0d" stroke-width="10" opacity="0.22">
+    <line x1="220" y1="900" x2="220" y2="740"/>
+    <line x1="390" y1="900" x2="390" y2="690"/>
+    <line x1="560" y1="900" x2="560" y2="720"/>
+    <line x1="730" y1="900" x2="730" y2="640"/>
+    <line x1="900" y1="900" x2="900" y2="570"/>
+    <line x1="1070" y1="900" x2="1070" y2="520"/>
+  </g>
+
+  <polyline points="48,910 160,860 255,810 320,828 398,768 520,764 655,620 865,722 980,588 1090,404 1188,515 1280,368"
+            fill="none" stroke="url(#lineGold)" stroke-width="56" stroke-linejoin="round" stroke-linecap="round" filter="url(#lineGlow)"/>
+
+  <g transform="translate(1240 160)">
+    <path d="M72 208 C 120 218, 168 246, 205 298 C 216 313, 238 315, 252 302 C 268 287, 266 261, 248 248 C 224 231, 202 208, 189 182 C 174 151, 160 122, 136 98 C 98 61, 36 56, 8 88 C -11 110, -7 146, 18 165 C 36 179, 57 194, 72 208 Z"
+          fill="#c68b1f"/>
+    <path d="M23 87 C 53 66, 105 74, 134 100 C 160 124, 172 157, 184 188 C 156 172, 118 170, 82 177 C 54 182, 30 192, 8 206 C -4 186, -7 165, -2 145 C 3 121, 10 101, 23 87 Z"
+          fill="#f1c24c"/>
+    <ellipse cx="120" cy="120" rx="21" ry="21" fill="#101317"/>
+    <circle cx="123" cy="120" r="10" fill="#f6c741"/>
+    <circle cx="127" cy="118" r="4" fill="#111"/>
+    <path d="M176 177 C 198 174, 222 183, 243 198" stroke="#5d3b0c" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <path d="M248 198 C 282 205, 315 217, 336 231" stroke="#b06d16" stroke-width="8" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>
