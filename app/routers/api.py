@@ -41,7 +41,8 @@ def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
         db.add(control)
         db.commit()
         db.refresh(control)
-    if not (control.allowed_strategies_json or {}).get("items"):
+    allowed = (control.allowed_strategies_json or {}).get("items")
+    if not allowed or (not control.managed_by_admin and set(allowed) != set(ALL_STRATEGIES)):
         control.allowed_strategies_json = {"items": ALL_STRATEGIES}
         db.commit()
     return control
