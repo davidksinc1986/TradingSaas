@@ -227,3 +227,19 @@ select[multiple]{min-height:120px}
 @media (max-width:980px){
   .strategy-live-market-grid{grid-template-columns:1fr}
 }
+
+
+.tab-icon-btn{font-size:20px;min-width:56px;text-align:center;padding:10px 12px}
+
+@media (max-width:680px){
+  .page{padding:14px}
+  .card{padding:14px;border-radius:16px}
+  .tabs{gap:8px;overflow:auto;padding-bottom:4px}
+  .tab-icon-btn{font-size:18px;min-width:48px;padding:8px 10px}
+  .row-between{align-items:flex-start}
+  .strategy-card strong{font-size:19px}
+  .strategy-card .hint{font-size:14px}
+  .table-wrap{font-size:13px}
+  #bot-sessions-table td,#bot-sessions-table th,#execution-logs-table td,#execution-logs-table th{white-space:nowrap}
+  .profile-main-flow .btn.primary,.profile-side-stack .btn.primary{width:100%}
+}

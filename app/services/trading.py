@@ -47,6 +47,8 @@ def run_strategy(
     use_live_if_available: bool,
     take_profit_mode: str = "percent",
     take_profit_value: float = 1.5,
+    stop_loss_mode: str = "percent",
+    stop_loss_value: float = 1.0,
     trailing_stop_mode: str = "percent",
     trailing_stop_value: float = 0.8,
     indicator_exit_enabled: bool = False,
@@ -98,7 +100,7 @@ def run_strategy(
             if max_risk_amount > 0:
                 qty = min(qty, max_risk_amount / max(price, 0.0000001))
 
-            should_execute = signal != "hold" and prob >= min_ml_probability
+            should_execute = signal != "hold" and (signal == "sell" or prob >= min_ml_probability)
             effective_mode = "live" if (use_live_if_available and connector.mode == "live") else connector.mode
 
             common_note = {
@@ -112,6 +114,8 @@ def run_strategy(
                 "allocation_usd": round(allocation_usd, 4),
                 "take_profit_mode": take_profit_mode,
                 "take_profit_value": take_profit_value,
+                "stop_loss_mode": stop_loss_mode,
+                "stop_loss_value": stop_loss_value,
                 "trailing_stop_mode": trailing_stop_mode,
                 "trailing_stop_value": trailing_stop_value,
                 "indicator_exit_enabled": bool(indicator_exit_enabled),
@@ -137,6 +141,7 @@ def run_strategy(
                     **common_note,
                     "decision": "no_action",
                     "reason": "signal_hold_or_low_ml_probability",
+                    "sell_priority_enabled": True,
                 })
                 outputs.append({
                     "connector": connector.label,
@@ -200,6 +205,8 @@ def run_strategy(
                     "strategy_slug": strategy_slug,
                     "take_profit_mode": take_profit_mode,
                     "take_profit_value": take_profit_value,
+                    "stop_loss_mode": stop_loss_mode,
+                    "stop_loss_value": stop_loss_value,
                     "trailing_stop_mode": trailing_stop_mode,
                     "trailing_stop_value": trailing_stop_value,
                     "indicator_exit_enabled": bool(indicator_exit_enabled),

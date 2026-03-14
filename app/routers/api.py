@@ -344,6 +344,8 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         use_live_if_available=payload.use_live_if_available,
         take_profit_mode=payload.take_profit_mode,
         take_profit_value=payload.take_profit_value,
+        stop_loss_mode=payload.stop_loss_mode,
+        stop_loss_value=payload.stop_loss_value,
         trailing_stop_mode=payload.trailing_stop_mode,
         trailing_stop_value=payload.trailing_stop_value,
         indicator_exit_enabled=payload.indicator_exit_enabled,
@@ -406,6 +408,8 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             "min_ml_probability": session.min_ml_probability,
             "take_profit_mode": session.take_profit_mode,
             "take_profit_value": session.take_profit_value,
+            "stop_loss_mode": session.stop_loss_mode,
+            "stop_loss_value": session.stop_loss_value,
             "trailing_stop_mode": session.trailing_stop_mode,
             "trailing_stop_value": session.trailing_stop_value,
             "indicator_exit_enabled": session.indicator_exit_enabled,
@@ -452,6 +456,8 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         use_live_if_available=payload.use_live_if_available,
         take_profit_mode=payload.take_profit_mode,
         take_profit_value=payload.take_profit_value,
+        stop_loss_mode=payload.stop_loss_mode,
+        stop_loss_value=payload.stop_loss_value,
         trailing_stop_mode=payload.trailing_stop_mode,
         trailing_stop_value=payload.trailing_stop_value,
         indicator_exit_enabled=payload.indicator_exit_enabled,
@@ -502,6 +508,10 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.take_profit_mode = payload.take_profit_mode
     if payload.take_profit_value is not None:
         session.take_profit_value = payload.take_profit_value
+    if payload.stop_loss_mode is not None:
+        session.stop_loss_mode = payload.stop_loss_mode
+    if payload.stop_loss_value is not None:
+        session.stop_loss_value = payload.stop_loss_value
     if payload.trailing_stop_mode is not None:
         session.trailing_stop_mode = payload.trailing_stop_mode
     if payload.trailing_stop_value is not None:

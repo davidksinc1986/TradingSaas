@@ -147,6 +147,8 @@ class BotSession(Base):
     use_live_if_available: Mapped[bool] = mapped_column(Boolean, default=False)
     take_profit_mode: Mapped[str] = mapped_column(String(20), default="percent")
     take_profit_value: Mapped[float] = mapped_column(Float, default=1.5)
+    stop_loss_mode: Mapped[str] = mapped_column(String(20), default="percent")
+    stop_loss_value: Mapped[float] = mapped_column(Float, default=1.0)
     trailing_stop_mode: Mapped[str] = mapped_column(String(20), default="percent")
     trailing_stop_value: Mapped[float] = mapped_column(Float, default=0.8)
     indicator_exit_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
