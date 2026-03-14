@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date
+import json
 
 from app.models import Connector, TradeLog, TradeRun, UserPlatformGrant
 from app.services.connectors import get_client
@@ -51,6 +52,14 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
             signal = strategy_fn(df)
             price = float(df.iloc[-1]["close"])
             prob = train_and_score(df)
+            last_candle = df.iloc[-1]
+            candle_snapshot = {
+                "open": round(float(last_candle["open"]), 6),
+                "high": round(float(last_candle["high"]), 6),
+                "low": round(float(last_candle["low"]), 6),
+                "close": round(float(last_candle["close"]), 6),
+                "volume": round(float(last_candle["volume"]), 6),
+            }
             qty = position_size(
                 balance=connector_balance_hint(connector),
                 risk_per_trade=risk_per_trade,
@@ -74,11 +83,25 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 ml_probability=prob,
                 quantity=qty,
                 status="ready" if should_execute else "skipped",
-                notes=f"mode={effective_mode}",
+                notes=json.dumps({
+                    "mode": effective_mode,
+                    "timeframe": timeframe,
+                    "strategy": strategy_slug,
+                    "candle": candle_snapshot,
+                    "decision": "pending",
+                }),
             )
             db.add(trade_run)
 
             if not should_execute:
+                trade_run.notes = json.dumps({
+                    "mode": effective_mode,
+                    "timeframe": timeframe,
+                    "strategy": strategy_slug,
+                    "candle": candle_snapshot,
+                    "decision": "no_action",
+                    "reason": "signal_hold_or_low_ml_probability",
+                })
                 outputs.append({
                     "connector": connector.label,
                     "platform": connector.platform,
@@ -110,6 +133,16 @@ def run_strategy(db, user_id: int, connector_ids: list[int], symbols: list[str],
                 pnl=0.0,
                 meta_json={"message": result.message, "raw": result.raw, "strategy_slug": strategy_slug},
             ))
+            trade_run.status = "executed"
+            trade_run.notes = json.dumps({
+                "mode": effective_mode,
+                "timeframe": timeframe,
+                "strategy": strategy_slug,
+                "candle": candle_snapshot,
+                "decision": signal,
+                "order_status": result.status,
+                "execution_message": result.message,
+            })
 
             outputs.append({
                 "connector": connector.label,
