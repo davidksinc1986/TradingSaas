@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -32,6 +33,7 @@ from app.services.trading import dashboard_data, run_strategy
 from app.services.strategies import ALL_STRATEGIES
 
 router = APIRouter(prefix="/api", tags=["api"])
+logger = logging.getLogger(__name__)
 ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
 TIMEFRAME_TO_MINUTES = {
     "1m": 1,
@@ -74,6 +76,20 @@ def _normalize_timeframe(value: str) -> str:
 def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
     clean = _normalize_timeframe(timeframe)
     return TIMEFRAME_TO_MINUTES.get(clean, max(int(fallback or 5), 1))
+
+
+def _safe_float(value, fallback: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+        if parsed != parsed:  # NaN guard
+            return fallback
+        return parsed
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _safe_iso(dt_value) -> str | None:
+    return dt_value.isoformat() if dt_value else None
 
 
 def _is_root_admin(user: User) -> bool:
@@ -404,39 +420,79 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
         BotSession.user_id == user.id
     ).order_by(BotSession.created_at.desc()).all()
     payload = []
+    serialization_errors = []
     for session in sessions:
-        connector = session.connector
-        symbols = (session.symbols_json or {}).get("symbols", [])
-        config = (connector.config_json or {}) if connector else {}
-        capital = float(config.get("allocation_value", config.get("default_quantity", 0)) or 0)
-        payload.append({
-            "id": session.id,
-            "connector_id": session.connector_id,
-            "connector_label": connector.label if connector else "-",
-            "platform": connector.platform if connector else "-",
-            "mode": connector.mode if connector else "-",
-            "strategy_slug": session.strategy_slug,
-            "timeframe": session.timeframe,
-            "symbols": symbols,
-            "interval_minutes": session.interval_minutes,
-            "risk_per_trade": session.risk_per_trade,
-            "min_ml_probability": session.min_ml_probability,
-            "take_profit_mode": session.take_profit_mode,
-            "take_profit_value": session.take_profit_value,
-            "stop_loss_mode": session.stop_loss_mode,
-            "stop_loss_value": session.stop_loss_value,
-            "trailing_stop_mode": session.trailing_stop_mode,
-            "trailing_stop_value": session.trailing_stop_value,
-            "indicator_exit_enabled": session.indicator_exit_enabled,
-            "indicator_exit_rule": session.indicator_exit_rule,
-            "is_active": session.is_active,
-            "last_run_at": session.last_run_at.isoformat() if session.last_run_at else None,
-            "next_run_at": session.next_run_at.isoformat() if session.next_run_at else None,
-            "last_status": session.last_status,
-            "last_error": session.last_error,
-            "capital_per_operation": capital,
-            "created_at": session.created_at.isoformat(),
-        })
+        try:
+            connector = session.connector
+            symbols = (session.symbols_json or {}).get("symbols", [])
+            config = (connector.config_json or {}) if connector else {}
+            capital = _safe_float(config.get("allocation_value", config.get("default_quantity", 0)) or 0)
+            payload.append({
+                "id": session.id,
+                "connector_id": session.connector_id,
+                "connector_label": connector.label if connector else "-",
+                "platform": connector.platform if connector else "-",
+                "mode": connector.mode if connector else "-",
+                "strategy_slug": session.strategy_slug,
+                "timeframe": session.timeframe,
+                "symbols": symbols,
+                "interval_minutes": session.interval_minutes,
+                "risk_per_trade": session.risk_per_trade,
+                "min_ml_probability": session.min_ml_probability,
+                "take_profit_mode": session.take_profit_mode,
+                "take_profit_value": session.take_profit_value,
+                "stop_loss_mode": session.stop_loss_mode,
+                "stop_loss_value": session.stop_loss_value,
+                "trailing_stop_mode": session.trailing_stop_mode,
+                "trailing_stop_value": session.trailing_stop_value,
+                "indicator_exit_enabled": session.indicator_exit_enabled,
+                "indicator_exit_rule": session.indicator_exit_rule,
+                "is_active": session.is_active,
+                "last_run_at": _safe_iso(session.last_run_at),
+                "next_run_at": _safe_iso(session.next_run_at),
+                "last_status": session.last_status,
+                "last_error": session.last_error,
+                "capital_per_operation": capital,
+                "created_at": _safe_iso(session.created_at),
+            })
+        except Exception as exc:
+            detail = f"user_id={user.id} session_id={getattr(session, 'id', '-')}: {exc}"
+            logger.exception("Failed serializing bot session: %s", detail)
+            serialization_errors.append(detail)
+            payload.append({
+                "id": getattr(session, "id", None),
+                "connector_id": getattr(session, "connector_id", None),
+                "connector_label": "-",
+                "platform": "-",
+                "mode": "-",
+                "strategy_slug": getattr(session, "strategy_slug", "-"),
+                "timeframe": getattr(session, "timeframe", "5m"),
+                "symbols": [],
+                "interval_minutes": getattr(session, "interval_minutes", 5),
+                "risk_per_trade": _safe_float(getattr(session, "risk_per_trade", 0.0)),
+                "min_ml_probability": _safe_float(getattr(session, "min_ml_probability", 0.0)),
+                "take_profit_mode": "percent",
+                "take_profit_value": 1.5,
+                "stop_loss_mode": "percent",
+                "stop_loss_value": 1.0,
+                "trailing_stop_mode": "percent",
+                "trailing_stop_value": 0.8,
+                "indicator_exit_enabled": False,
+                "indicator_exit_rule": "macd_cross",
+                "is_active": bool(getattr(session, "is_active", False)),
+                "last_run_at": _safe_iso(getattr(session, "last_run_at", None)),
+                "next_run_at": _safe_iso(getattr(session, "next_run_at", None)),
+                "last_status": "error",
+                "last_error": "No se pudo serializar esta sesión. Revisa configuración y logs.",
+                "capital_per_operation": 0.0,
+                "created_at": _safe_iso(getattr(session, "created_at", None)),
+            })
+
+    if serialization_errors:
+        _alert_admin_failure(
+            "API /api/bot-sessions serialization",
+            " | ".join(serialization_errors)[:1500],
+        )
     return payload
 
 
