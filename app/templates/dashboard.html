@@ -8,27 +8,24 @@
   </div>
   <aside class="card economic-summary" id="economic-summary">
     <div class="row-between">
-      <h3>Resumen económico</h3>
-      <small class="hint">Inversiones registradas</small>
+      <h3>Panel de apps y estrategias</h3>
+      <small class="hint">Estado actual</small>
     </div>
-    <div class="economic-grid">
+    <div class="economic-grid economic-grid-compact">
       <div class="economic-item">
-        <small>Compras</small>
-        <strong id="eco-buy">0.00</strong>
+        <small>Apps activas</small>
+        <strong id="eco-active-apps">0</strong>
       </div>
       <div class="economic-item">
-        <small>Ventas</small>
-        <strong id="eco-sell">0.00</strong>
+        <small>Símbolos por app (prom.)</small>
+        <strong id="eco-symbols-per-app">0.0</strong>
       </div>
       <div class="economic-item">
-        <small>Generado este mes</small>
-        <strong id="eco-monthly-pnl">0.00</strong>
-      </div>
-      <div class="economic-item">
-        <small>Rentabilidad real</small>
-        <strong id="eco-real-pnl-percent">0.00%</strong>
+        <small>Estrategias activas</small>
+        <strong id="eco-active-strategies">0</strong>
       </div>
     </div>
+    <div id="strategy-performance-list" class="strategy-performance-list"></div>
   </aside>
 </section>
 
@@ -40,10 +37,10 @@
 </section>
 
 <section class="tabs" id="dashboard-tabs">
-  <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil">👤</button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores">🔌</button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="strategies" title="Estrategias" aria-label="Estrategias">📈</button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="activity" title="Actividad" aria-label="Actividad">📊</button>
+  <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil"><span class="tab-glyph">◈</span><span class="tab-label">Perfil</span></button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores"><span class="tab-glyph">◇</span><span class="tab-label">Apps</span></button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="strategies" title="Estrategias" aria-label="Estrategias"><span class="tab-glyph">◆</span><span class="tab-label">Estrategias</span></button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="activity" title="Actividad" aria-label="Actividad"><span class="tab-glyph">◉</span><span class="tab-label">Actividad</span></button>
 </section>
 
 <section id="tab-profile" class="tab-panel active">
@@ -183,8 +180,8 @@
         </label>
         <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
         <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
+        <div id="run-feedback" class="status-msg" hidden></div>
       </form>
-      <pre id="run-output" class="prebox"></pre>
     </div>
 
     <div class="stack" style="gap:14px;">
@@ -218,30 +215,6 @@
           </table>
         </div>
       </section>
-
-
-      <section class="card" style="margin-top:14px;">
-        <div class="row-between">
-          <h2>Filtros mínimos por moneda (Binance/Bybit/OKX)</h2>
-          <button class="btn" id="refresh-symbol-rules-btn" type="button">Validar mínimos</button>
-        </div>
-        <small class="hint">Consulta min notional, min quantity y min price para evitar errores de Binance como <code>1013 FILTER_FAILURE_NOTIONAL</code>.</small>
-        <div class="table-wrap" style="margin-top:10px;">
-          <table id="symbol-rules-table">
-            <thead>
-              <tr>
-                <th>Símbolo</th>
-                <th>Disponible</th>
-                <th>Min qty</th>
-                <th>Min notional</th>
-                <th>Min price</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-
       <div class="card">
       <div class="row-between">
         <h2>Estrategias disponibles</h2>
@@ -249,25 +222,61 @@
       </div>
       <div id="strategy-library" class="stack"></div>
       </div>
+
+      <section class="card">
+        <div class="row-between">
+          <h2>Bots activos (24/7)</h2>
+          <button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button>
+        </div>
+        <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación.</small>
+        <div class="table-wrap" style="margin-top:10px;">
+          <table id="bot-sessions-table">
+            <thead>
+              <tr>
+                <th>Conector</th>
+                <th>Plataforma</th>
+                <th>Símbolos</th>
+                <th>Estrategia</th>
+                <th>Capital/op</th>
+                <th>Frecuencia</th>
+                <th>Estado</th>
+                <th>Última corrida</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
     </div>
   </div>
 </section>
 
 <section id="tab-activity" class="tab-panel">
-  <div class="grid-2">
-    <div class="card">
-      <h2>PNL por plataforma</h2>
-      <canvas id="pnl-platform-chart" height="220"></canvas>
-    </div>
-    <div class="card">
-      <h2>Distribución por resultado</h2>
-      <canvas id="win-loss-chart" height="220"></canvas>
-    </div>
-  </div>
-
   <section class="card">
-    <h2>Evolución acumulada del PNL</h2>
-    <canvas id="pnl-cumulative-chart" height="120"></canvas>
+    <div class="row-between">
+      <h2>Logs de ejecución (5m / 1h)</h2>
+      <button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button>
+    </div>
+    <small class="hint">Muestra la última vela capturada, decisión (sin acción / compra / venta) y estado de ejecución para validar conexión con Binance u otros conectores.</small>
+    <small class="hint" id="execution-logs-refresh-meta">Auto-refresh cada 5 minutos · Mostrando últimos 50 logs.</small>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table id="execution-logs-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Símbolo</th>
+            <th>Timeframe</th>
+            <th>Señal</th>
+            <th>Decisión</th>
+            <th>Estado</th>
+            <th>Prob ML</th>
+            <th>Vela</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
   <section class="card">
@@ -310,62 +319,19 @@
   </section>
 
   
-
   <section class="card">
-    <div class="row-between">
-      <h2>Bots activos (24/7)</h2>
-      <button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button>
+    <div class="grid-2">
+      <div>
+        <h2>PNL por plataforma</h2>
+        <canvas id="pnl-platform-chart" height="220"></canvas>
+      </div>
+      <div>
+        <h2>Distribución por resultado</h2>
+        <canvas id="win-loss-chart" height="220"></canvas>
+      </div>
     </div>
-    <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación.</small>
-    <div class="table-wrap" style="margin-top:10px;">
-      <table id="bot-sessions-table">
-        <thead>
-          <tr>
-            <th>Conector</th>
-            <th>Plataforma</th>
-            <th>Símbolos</th>
-            <th>Estrategia</th>
-            <th>Capital/op</th>
-            <th>Frecuencia</th>
-            <th>Estado</th>
-            <th>Última corrida</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-<section class="card">
-    <div class="row-between">
-      <h2>Logs de ejecución (5m / 1h)</h2>
-      <button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button>
-    </div>
-    <small class="hint">Muestra la última vela capturada, decisión (sin acción / compra / venta) y estado de ejecución para validar conexión con Binance u otros conectores.</small>
-    <small class="hint" id="execution-logs-refresh-meta">Auto-refresh cada 5 minutos · Mostrando últimos 50 logs.</small>
-    <div class="table-wrap" style="margin-top:10px;">
-      <table id="execution-logs-table">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th>Símbolo</th>
-            <th>Timeframe</th>
-            <th>Señal</th>
-            <th>Decisión</th>
-            <th>Estado</th>
-            <th>Prob ML</th>
-            <th>Vela</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2>Distribución por plataforma</h2>
-    <canvas id="platform-chart" height="220"></canvas>
+    <h2>Evolución acumulada del PNL</h2>
+    <canvas id="pnl-cumulative-chart" height="120"></canvas>
   </section>
 </section>
 
