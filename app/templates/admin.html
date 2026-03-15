@@ -1,54 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="dashboard-header">
-  <span class="pill">Admin</span>
-  <h1>Panel de control administrativo</h1>
-  <p>Gestiona usuarios con una vista más clara por pestañas de perfil, permisos y conectores.</p>
+<section class="dashboard-header admin-lux-header">
+  <span class="pill">Admin Studio</span>
+  <h1>Control rápido, limpio y elegante</h1>
+  <p>Gestión integral en tarjetas compactas con tabs y acciones on/off para ejecutar todo en menos clics.</p>
 </section>
 
-<section class="grid-2">
-  <div class="card">
-    <h2>Usuarios</h2>
-    <form id="create-user-form" class="form-grid admin-form-grid" style="margin-bottom:12px;">
-      <label>Email de acceso<input name="email" type="email" placeholder="usuario@dominio.com" required></label>
+<section class="admin-layout-v2">
+  <aside class="card admin-sidebar">
+    <div class="row-between">
+      <h2>Usuarios</h2>
+      <span id="admin-total-users" class="pill tiny">0</span>
+    </div>
+    <form id="create-user-form" class="form-grid" style="margin-top:10px;">
+      <label>Email<input name="email" type="email" placeholder="usuario@dominio.com" required></label>
       <label>Nombre<input name="name" minlength="2" required></label>
       <label>Contraseña<input name="password" type="password" minlength="6" required></label>
-      <button class="btn primary" type="submit">Crear usuario</button>
+      <button class="btn primary btn-sm" type="submit">+ Crear</button>
     </form>
-    <small class="hint">La contraseña debe tener al menos 6 caracteres para poder crear el usuario.</small>
     <div id="admin-feedback" class="status-msg hidden"></div>
-    <div id="admin-users" class="stack" style="margin-top:12px;"></div>
-  </div>
-  <div class="card">
-    <div class="row-between">
-      <h2>Perfil del usuario seleccionado</h2>
-      <button id="open-strategy-modal" class="btn">Asignar estrategias</button>
-    </div>
-    <div id="selected-user-profile" class="stack"></div>
-  </div>
-</section>
+    <div id="admin-users" class="stack" style="margin-top:10px;"></div>
+  </aside>
 
-<section class="card">
-  <h2>Políticas globales de plataforma</h2>
-  <div id="admin-policies" class="stack"></div>
-</section>
+  <main class="admin-main-stack">
+    <section class="card">
+      <div id="selected-user-profile"></div>
+    </section>
 
-<section class="card">
-  <h2>Configuración de planes</h2>
-  <p class="hint">Edita costos base de servidor/comisión y administra cards de planes visibles en home público.</p>
-  <form id="pricing-config-form" class="form-grid admin-form-grid"></form>
-  <h3 style="margin-top:14px;">Planes editables</h3>
-  <div id="admin-plans" class="plan-grid"></div>
-  <button id="add-plan-btn" class="btn btn-sm" type="button">+ Agregar plan</button>
+    <section class="card">
+      <div class="row-between">
+        <h2>Políticas globales</h2>
+        <small class="hint">Switches rápidos por plataforma</small>
+      </div>
+      <div id="admin-policies" class="admin-compact-grid" style="margin-top:10px;"></div>
+    </section>
+
+    <section class="card">
+      <div class="row-between">
+        <h2>Pricing & planes</h2>
+        <button id="add-plan-btn" class="btn btn-sm" type="button">+ Plan</button>
+      </div>
+      <div class="admin-tabs" id="settings-tabs" style="margin-top:10px;">
+        <button class="admin-tab active" data-tab="pricing">Pricing</button>
+        <button class="admin-tab" data-tab="plans">Planes</button>
+      </div>
+      <div class="admin-tab-panel active" data-panel="pricing">
+        <form id="pricing-config-form" class="form-grid admin-form-grid" style="margin-top:10px;"></form>
+      </div>
+      <div class="admin-tab-panel" data-panel="plans">
+        <div id="admin-plans" class="plan-grid" style="margin-top:10px;"></div>
+      </div>
+    </section>
+  </main>
 </section>
 
 <div id="strategy-modal" class="modal hidden">
   <div class="modal-card card admin-strategy-modal">
     <div class="row-between">
-      <h3>Asignar estrategias al usuario</h3>
-      <button class="btn" id="close-strategy-modal">Cerrar</button>
+      <h3>Estrategias permitidas</h3>
+      <button class="btn btn-sm" id="close-strategy-modal">Cerrar</button>
     </div>
-    <small class="hint">Úsalo cuando quieras bloquear carga manual y definir exactamente qué estrategias puede correr el usuario.</small>
     <form id="strategy-control-form" class="form-grid" style="margin-top:12px;"></form>
   </div>
 </div>
@@ -57,27 +68,21 @@
   <div class="modal-card card admin-strategy-modal">
     <div class="row-between">
       <h3>Editar usuario</h3>
-      <button class="btn" id="close-edit-user-modal">Cerrar</button>
+      <button class="btn btn-sm" id="close-edit-user-modal">Cerrar</button>
     </div>
     <form id="edit-user-form" class="form-grid" style="margin-top:12px;">
       <label>Email<input name="email" type="email" required></label>
       <label>Nombre<input name="name" minlength="2" required></label>
       <label>Teléfono<input name="phone" minlength="7" maxlength="40" placeholder="Opcional"></label>
       <label>Activo
-        <select name="is_active">
-          <option value="true">Sí</option>
-          <option value="false">No</option>
-        </select>
+        <select name="is_active"><option value="true">Sí</option><option value="false">No</option></select>
       </label>
       <label>Administrador
-        <select name="is_admin">
-          <option value="true">Sí</option>
-          <option value="false">No</option>
-        </select>
+        <select name="is_admin"><option value="true">Sí</option><option value="false">No</option></select>
       </label>
       <div class="row-wrap">
-        <button class="btn primary btn-sm" type="submit">Guardar cambios</button>
-        <button id="delete-user-in-modal" class="btn btn-sm" type="button">Borrar usuario</button>
+        <button class="btn primary btn-sm" type="submit">Guardar</button>
+        <button id="delete-user-in-modal" class="btn btn-sm" type="button">Eliminar</button>
       </div>
     </form>
   </div>
