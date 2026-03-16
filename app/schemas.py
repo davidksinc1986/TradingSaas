@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 PLATFORMS = Literal["mt5", "ctrader", "tradingview", "binance", "bybit", "okx"]
 STRATEGY_LITERAL = str
@@ -38,7 +38,22 @@ class ConnectorUpdate(BaseModel):
     is_enabled: bool | None = None
 
 
-class StrategyRequest(BaseModel):
+class StrategyRiskMixin(BaseModel):
+    @model_validator(mode="after")
+    def validate_tp_sl_rules(self):
+        tp_mode = getattr(self, "take_profit_mode", "percent")
+        sl_mode = getattr(self, "stop_loss_mode", "percent")
+        tp_value = float(getattr(self, "take_profit_value", 0) or 0)
+        sl_value = float(getattr(self, "stop_loss_value", 0) or 0)
+
+        if sl_mode == "percent" and sl_value > 1.5:
+            raise ValueError("Stop loss porcentual no puede superar 1.5%")
+        if tp_mode == sl_mode and tp_value > 0 and sl_value >= tp_value:
+            raise ValueError("Stop loss debe ser menor al take profit cuando usan la misma unidad")
+        return self
+
+
+class StrategyRequest(StrategyRiskMixin):
     connector_ids: list[int]
     symbols: list[str]
     timeframe: str = "1h"
@@ -54,9 +69,13 @@ class StrategyRequest(BaseModel):
     trailing_stop_value: float = Field(default=0.8, gt=0)
     indicator_exit_enabled: bool = False
     indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
+    leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] = "none"
+    max_open_positions: int = Field(default=1, ge=1, le=20)
+    compound_growth_enabled: bool = False
+    atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionCreate(BaseModel):
+class BotSessionCreate(StrategyRiskMixin):
     connector_id: int
     symbols: list[str]
     timeframe: str = "5m"
@@ -73,9 +92,13 @@ class BotSessionCreate(BaseModel):
     trailing_stop_value: float = Field(default=0.8, gt=0)
     indicator_exit_enabled: bool = False
     indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
+    leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] = "none"
+    max_open_positions: int = Field(default=1, ge=1, le=20)
+    compound_growth_enabled: bool = False
+    atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionUpdate(BaseModel):
+class BotSessionUpdate(StrategyRiskMixin):
     is_active: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None
@@ -89,6 +112,10 @@ class BotSessionUpdate(BaseModel):
     trailing_stop_value: float | None = Field(default=None, gt=0)
     indicator_exit_enabled: bool | None = None
     indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] | None = None
+    leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] | None = None
+    max_open_positions: int | None = Field(default=None, ge=1, le=20)
+    compound_growth_enabled: bool | None = None
+    atr_volatility_filter_enabled: bool | None = None
     risk_per_trade: float | None = Field(default=None, gt=0, le=100)
     min_ml_probability: float | None = Field(default=None, ge=0, le=100)
     use_live_if_available: bool | None = None

@@ -121,6 +121,42 @@ def pairs_spread_proxy(df):
     return "hold"
 
 
+def volatility_breakout(df):
+    data = add_indicators(df)
+    if len(data) < 2:
+        return "hold"
+    prev = data.iloc[-2]
+    row = data.iloc[-1]
+    k = 0.5
+    breakout = row["open"] + k * (prev["high"] - prev["low"])
+    if row["close"] > breakout and row["atr"] > row["atr_mean_20"]:
+        return "buy"
+    if row["close"] < row["open"] - k * (prev["high"] - prev["low"]) and row["atr"] > row["atr_mean_20"]:
+        return "sell"
+    return "hold"
+
+
+def ema_rsi_adx_stack(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    if row["ema_fast"] > row["ema_slow"] and row["rsi"] > 55 and row["adx"] > 20:
+        return "buy"
+    if row["ema_fast"] < row["ema_slow"] and row["rsi"] < 45 and row["adx"] > 20:
+        return "sell"
+    return "hold"
+
+
+def volatility_compression_breakout(df):
+    data = add_indicators(df)
+    row = data.iloc[-1]
+    squeeze = row["bb_high"] < row["kc_high"] and row["bb_low"] > row["kc_low"] and row["atr_contraction"] < 0.9
+    if squeeze and row["close"] > row["hh_20"] * 0.998:
+        return "buy"
+    if squeeze and row["close"] < row["ll_20"] * 1.002:
+        return "sell"
+    return "hold"
+
+
 STRATEGY_MAP = {
     "ema_rsi": ema_rsi,
     "mean_reversion_zscore": mean_reversion_zscore,
@@ -134,6 +170,9 @@ STRATEGY_MAP = {
     "atr_channel_breakout": atr_channel_breakout,
     "volatility_parity_rebalance": volatility_parity_rebalance,
     "pairs_spread_proxy": pairs_spread_proxy,
+    "volatility_breakout": volatility_breakout,
+    "ema_rsi_adx_stack": ema_rsi_adx_stack,
+    "volatility_compression_breakout": volatility_compression_breakout,
 }
 
 SPOT_TOP_STRATEGIES = [
@@ -143,6 +182,8 @@ SPOT_TOP_STRATEGIES = [
     "stochastic_rebound",
     "volatility_parity_rebalance",
     "pairs_spread_proxy",
+    "ema_rsi_adx_stack",
+    "volatility_compression_breakout",
 ]
 
 FUTURES_TOP_STRATEGIES = [
@@ -152,6 +193,8 @@ FUTURES_TOP_STRATEGIES = [
     "supertrend_volatility",
     "kalman_trend_filter",
     "atr_channel_breakout",
+    "volatility_breakout",
+    "volatility_compression_breakout",
 ]
 
 ALL_STRATEGIES = list(STRATEGY_MAP.keys())

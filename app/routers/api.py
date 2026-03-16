@@ -422,6 +422,10 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         trailing_stop_value=payload.trailing_stop_value,
         indicator_exit_enabled=payload.indicator_exit_enabled,
         indicator_exit_rule=payload.indicator_exit_rule,
+        leverage_profile=payload.leverage_profile,
+        max_open_positions=payload.max_open_positions,
+        compound_growth_enabled=payload.compound_growth_enabled,
+        atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
         run_source="manual",
     )
     return {"ok": True, "results": result}

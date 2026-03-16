@@ -159,7 +159,10 @@
           <select name="strategy_slug"></select>
         </label>
         <small class="hint" id="strategy-managed-hint"></small>
-        <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
+        <div class="row-wrap">
+          <button class="btn btn-sm" type="button" id="open-strategy-wizard">Wizard de configuración</button>
+          <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
+        </div>
 
         <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
@@ -179,6 +182,10 @@
           <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
         </label>
         <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
+<input type="hidden" name="leverage_profile" value="none">
+        <input type="hidden" name="max_open_positions" value="1">
+        <input type="hidden" name="compound_growth_enabled" value="false">
+        <input type="hidden" name="atr_volatility_filter_enabled" value="true">
         <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
         <div id="run-feedback" class="status-msg" hidden></div>
       </form>
@@ -376,5 +383,21 @@
   </div>
 </div>
 
+
+<div id="strategy-wizard-modal" class="modal hidden">
+  <div class="modal-card card strategy-modal-card strategy-wizard-card">
+    <div class="modal-head">
+      <h3 id="strategy-wizard-title">Wizard · Configuración profesional</h3>
+      <button class="btn" type="button" id="strategy-wizard-close">Cerrar</button>
+    </div>
+    <div id="strategy-wizard-content" class="stack" style="gap:10px;"></div>
+    <div class="row-between" style="margin-top:12px;">
+      <button class="btn" type="button" id="strategy-wizard-prev">Atrás</button>
+      <button class="btn primary" type="button" id="strategy-wizard-next">Siguiente</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/dashboard.js?v={{ static_version }}"></script>
+<script src="/static/strategy_wizard.js?v={{ static_version }}"></script>
 {% endblock %}

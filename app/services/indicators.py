@@ -41,11 +41,19 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         (out["low"] - out["close"].shift()).abs(),
     ], axis=1).max(axis=1)
     atr = tr.rolling(14).mean()
+    out["atr"] = atr
+    out["atr_mean_20"] = atr.rolling(20).mean()
     plus_dm = (out["high"].diff()).clip(lower=0)
     minus_dm = (-out["low"].diff()).clip(lower=0)
     plus_di = 100 * (plus_dm.rolling(14).mean() / atr.replace(0, np.nan))
     minus_di = 100 * (minus_dm.rolling(14).mean() / atr.replace(0, np.nan))
     dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)) * 100
     out["adx"] = dx.rolling(14).mean()
+
+    out["kc_mid"] = out["mean_20"]
+    out["kc_high"] = out["kc_mid"] + 1.5 * out["atr"]
+    out["kc_low"] = out["kc_mid"] - 1.5 * out["atr"]
+    out["bb_width"] = (out["bb_high"] - out["bb_low"]) / out["mean_20"].replace(0, np.nan)
+    out["atr_contraction"] = out["atr"] / out["atr_mean_20"].replace(0, np.nan)
 
     return out.dropna().reset_index(drop=True)

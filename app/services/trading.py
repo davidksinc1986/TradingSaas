@@ -53,6 +53,10 @@ def run_strategy(
     trailing_stop_value: float = 0.8,
     indicator_exit_enabled: bool = False,
     indicator_exit_rule: str = "macd_cross",
+    leverage_profile: str = "none",
+    max_open_positions: int = 1,
+    compound_growth_enabled: bool = False,
+    atr_volatility_filter_enabled: bool = True,
     run_source: str = "manual",
     bot_session_id: int | None = None,
 ):
@@ -100,7 +104,13 @@ def run_strategy(
             if max_risk_amount > 0:
                 qty = min(qty, max_risk_amount / max(price, 0.0000001))
 
-            should_execute = signal != "hold" and (signal == "sell" or prob >= min_ml_probability)
+            volatility_ok = True
+            if atr_volatility_filter_enabled:
+                atr_now = float(last_candle.get("atr", 0) or 0)
+                atr_avg = float(last_candle.get("atr_mean_20", 0) or 0)
+                volatility_ok = atr_now > atr_avg if atr_avg > 0 else True
+
+            should_execute = signal != "hold" and (signal == "sell" or prob >= min_ml_probability) and volatility_ok
             effective_mode = "live" if (use_live_if_available and connector.mode == "live") else connector.mode
 
             common_note = {
@@ -120,6 +130,10 @@ def run_strategy(
                 "trailing_stop_value": trailing_stop_value,
                 "indicator_exit_enabled": bool(indicator_exit_enabled),
                 "indicator_exit_rule": indicator_exit_rule,
+                "leverage_profile": leverage_profile,
+                "max_open_positions": max_open_positions,
+                "compound_growth_enabled": bool(compound_growth_enabled),
+                "atr_volatility_filter_enabled": bool(atr_volatility_filter_enabled),
             }
 
             trade_run = TradeRun(
@@ -140,7 +154,7 @@ def run_strategy(
                 trade_run.notes = json.dumps({
                     **common_note,
                     "decision": "no_action",
-                    "reason": "signal_hold_or_low_ml_probability",
+                    "reason": "signal_hold_low_ml_or_volatility_filter",
                     "sell_priority_enabled": True,
                 })
                 outputs.append({
