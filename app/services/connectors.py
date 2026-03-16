@@ -42,6 +42,24 @@ class BaseConnectorClient:
             raw={"mode": self.connector.mode, "platform": self.connector.platform, "market_type": getattr(self.connector, "market_type", "spot")},
         )
 
+    def normalize_symbol(self, symbol: str) -> dict[str, Any]:
+        clean = (symbol or "").strip().upper()
+        return {
+            "input_symbol": symbol,
+            "normalized_symbol": clean,
+            "exchange_symbol": clean.replace("/", ""),
+            "found": True,
+        }
+
+    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
+        return {
+            "ok": quantity > 0,
+            "normalized_quantity": float(quantity),
+            "normalized_price": float(price_hint),
+            "reason_code": "ok" if quantity > 0 else "rejected_invalid_quantity",
+            "exchange_filters": {},
+        }
+
     def test_connection(self) -> dict[str, Any]:
         return {"ok": True, "platform": self.connector.platform, "mode": self.connector.mode, "market_type": getattr(self.connector, "market_type", "spot")}
 
@@ -85,6 +103,78 @@ class CCXTConnectorClient(BaseConnectorClient):
     def _market(self, exchange, symbol: str) -> dict[str, Any] | None:
         markets = self._load_markets(exchange)
         return markets.get(symbol)
+
+    def normalize_symbol(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        markets = self._load_markets(exchange)
+        candidate = (symbol or "").strip().upper()
+        if candidate in markets:
+            market = markets[candidate]
+            return {
+                "input_symbol": symbol,
+                "normalized_symbol": candidate,
+                "exchange_symbol": market.get("id") or candidate.replace("/", ""),
+                "found": True,
+            }
+        alt = candidate.replace("/", "")
+        for market_symbol, market in markets.items():
+            if (market.get("id") or "").upper() == alt:
+                return {
+                    "input_symbol": symbol,
+                    "normalized_symbol": market_symbol,
+                    "exchange_symbol": market.get("id") or alt,
+                    "found": True,
+                }
+        return {
+            "input_symbol": symbol,
+            "normalized_symbol": candidate,
+            "exchange_symbol": alt,
+            "found": False,
+        }
+
+    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        normalized_qty, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
+        exchange_filters = {
+            "min_notional": float(min_notional),
+            "min_qty": float(((market or {}).get("limits") or {}).get("amount", {}).get("min") or 0.0),
+            "step_size": float(((market or {}).get("precision") or {}).get("amount") or 0.0),
+            "tick_size": float(((market or {}).get("precision") or {}).get("price") or 0.0),
+        }
+        if normalized_qty <= 0:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "rejected_invalid_quantity",
+                "exchange_filters": exchange_filters,
+            }
+        min_qty = exchange_filters["min_qty"]
+        if min_qty > 0 and normalized_qty < min_qty:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "skipped_min_qty",
+                "exchange_filters": exchange_filters,
+            }
+        notional = normalized_qty * max(normalized_price, 0.0000001)
+        if min_notional > 0 and notional < min_notional:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "skipped_min_notional",
+                "exchange_filters": exchange_filters,
+            }
+        return {
+            "ok": True,
+            "normalized_quantity": float(normalized_qty),
+            "normalized_price": float(normalized_price),
+            "reason_code": "ok",
+            "exchange_filters": exchange_filters,
+        }
 
     def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
         try:

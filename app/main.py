@@ -9,7 +9,7 @@ from app.core import settings
 from sqlalchemy import inspect, text
 
 from app.db import Base, SessionLocal, engine
-from app.models import BotSession, StrategyProfile, User, UserStrategyControl
+from app.models import BotSession, StrategyProfile, StrategyTemplate, User, UserStrategyControl
 from app.routers import api, auth, views
 from app.security import hash_password
 from app.services.alerts import format_failure_message, send_telegram_alert
@@ -128,6 +128,8 @@ def bootstrap():
         ensure_pricing_seed(db)
         if not inspect(engine).has_table("bot_sessions"):
             BotSession.__table__.create(bind=engine, checkfirst=True)
+        if not inspect(engine).has_table("strategy_templates"):
+            StrategyTemplate.__table__.create(bind=engine, checkfirst=True)
 
         for user in db.query(User).all():
             ensure_user_grants(db, user)

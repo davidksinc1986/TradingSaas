@@ -175,6 +175,20 @@ class StrategyProfile(Base):
     params_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+
+
+class StrategyTemplate(Base):
+    __tablename__ = "strategy_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_template_id: Mapped[int | None] = mapped_column(ForeignKey("strategy_templates.id"), nullable=True)
+    config_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 class TradeRun(Base):
     __tablename__ = "trade_runs"
 

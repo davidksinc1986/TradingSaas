@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="dashboard-header dashboard-header-grid">
+<div class="dashboard-redesign">
+<section class="dashboard-header dashboard-header-grid hero-glass">
   <div>
     <span class="pill">Hola, {{ user.name }}</span>
     <h1>Tu centro de operación inteligente</h1>
@@ -29,11 +30,11 @@
   </aside>
 </section>
 
-<section class="stats-grid">
-  <div class="card stat"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
-  <div class="card stat"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
-  <div class="card stat"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
-  <div class="card stat"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
+<section class="stats-grid kpi-ribbon">
+  <div class="card stat stat-card"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
+  <div class="card stat stat-card"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
+  <div class="card stat stat-card"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
+  <div class="card stat stat-card"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
 </section>
 
 <section class="tabs" id="dashboard-tabs">
@@ -164,17 +165,17 @@
           <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
         </div>
 
-        <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
+        <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
-        <label>Take Win / Take Profit
+        <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
           <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
           <small class="hint">Ejemplo: 1.5 (%) o 12 (USDT)</small>
         </label>
-        <label>Stop Loss
+        <label>Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button>
           <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="1.0"></div>
           <small class="hint">Ejemplo: 1 (%) o 8 (USDT)</small>
         </label>
-        <label>Trailing Stop
+        <label>Trailing Stop <button type="button" class="btn btn-sm term-help" data-term="trailing">?</button>
           <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
           <small class="hint">Se activa después de entrar en ganancia y protege beneficio.</small>
         </label>
@@ -228,12 +229,17 @@
         <small class="hint">Click para ver explicación rápida</small>
       </div>
       <div id="strategy-library" class="stack"></div>
+      <div class="row-wrap" style="margin-top:8px;">
+        <button class="btn" type="button" id="publish-template-btn">Publicar estrategia actual</button>
+        <button class="btn" type="button" id="refresh-template-pool-btn">Ver pool público</button>
+      </div>
+      <div id="template-pool" class="stack" style="margin-top:8px;"></div>
       </div>
 
       <section class="card">
         <div class="row-between">
           <h2>Bots activos (24/7)</h2>
-          <button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button>
+          <div style="display:flex;gap:8px;"><button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button><button class="btn" type="button" id="copy-selected-bot-btn">Copiar bot seleccionado</button></div>
         </div>
         <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación.</small>
         <div class="table-wrap" style="margin-top:10px;">
@@ -263,7 +269,7 @@
   <section class="card">
     <div class="row-between">
       <h2>Logs de ejecución (5m / 1h)</h2>
-      <button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button>
+      <div style="display:flex;gap:8px;"><button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button><button class="btn" type="button" id="download-execution-logs-btn">Descargar CSV</button></div>
     </div>
     <small class="hint">Muestra la última vela capturada, decisión (sin acción / compra / venta) y estado de ejecución para validar conexión con Binance u otros conectores.</small>
     <small class="hint" id="execution-logs-refresh-meta">Auto-refresh cada 5 minutos · Mostrando últimos 50 logs.</small>
@@ -298,7 +304,7 @@
 
 <section class="card">
     <div class="row-between">
-      <h2>Transacciones</h2>
+      <h2>Transacciones <button type="button" class="btn btn-sm term-help" data-term="pnl">?</button></h2>
       <label>Filtro
         <select id="trade-range-filter">
           <option value="day">Diario</option>
@@ -326,7 +332,24 @@
   </section>
 
   
+  
   <section class="card">
+    <div class="row-between">
+      <h2>Actividad y performance avanzada</h2>
+      <small class="hint">Basado en tus operaciones históricas</small>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div><canvas id="equity-curve-chart" height="120"></canvas></div>
+      <div><canvas id="drawdown-curve-chart" height="120"></canvas></div>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div><canvas id="monthly-returns-chart" height="120"></canvas></div>
+      <div><canvas id="yearly-returns-chart" height="120"></canvas></div>
+    </div>
+    <div id="activity-kpis" class="trade-metrics" style="margin-top:10px;"></div>
+  </section>
+
+<section class="card">
     <div class="grid-2">
       <div>
         <h2>PNL por plataforma</h2>
@@ -377,7 +400,7 @@
       <li><b>Símbolos:</b> usa formato BASE/USDT, separados por coma. Ej: <code>BTC/USDT,ETH/USDT</code>.</li>
       <li><b>Riesgo por trade (%):</b> número entero o decimal entre 1 y 100. Ej: <code>2</code> = 2%.</li>
       <li><b>Prob. mínima ML (%):</b> umbral entre 0 y 100. Ej: <code>55</code> significa 55%.</li>
-      <li><b>Take Win / Stop Loss / Trailing:</b> selecciona unidad <code>%</code> o <code>USDT</code> y luego valor numérico.</li>
+      <li><b>Take Win / Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button> / Trailing:</b> selecciona unidad <code>%</code> o <code>USDT</code> y luego valor numérico.</li>
       <li><b>Live/Paper:</b> activa “Intentar live…” solo si tu conector está en modo live.</li>
     </ul>
   </div>
@@ -398,6 +421,19 @@
   </div>
 </div>
 
+</div>
+
 <script src="/static/dashboard.js?v={{ static_version }}"></script>
+
+<div id="term-help-modal" class="modal hidden">
+  <div class="modal-card card strategy-modal-card">
+    <div class="modal-head">
+      <h3 id="term-help-title">Explicación</h3>
+      <button class="btn" type="button" id="term-help-close">Cerrar</button>
+    </div>
+    <p id="term-help-body" class="hint"></p>
+  </div>
+</div>
+
 <script src="/static/strategy_wizard.js?v={{ static_version }}"></script>
 {% endblock %}
