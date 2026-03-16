@@ -129,68 +129,83 @@
 
 <section id="tab-strategies" class="tab-panel">
   <div class="stack" style="gap:14px;">
-    <div class="card strategy-wizard-panel">
-      <div class="row-between">
-        <h2>Ejecutar estrategia</h2>
-        <button class="btn" type="button" id="heartbeat-btn">Validar conectores</button>
-      </div>
-      <div id="heartbeat-output" class="stack" style="margin:10px 0;"></div>
-
-      <form id="run-form" class="form-grid wizard-form">
-        <div class="wizard-step-nav">
-          <button class="btn btn-sm active" type="button" data-wizard-step="1">1. Base</button>
-          <button class="btn btn-sm" type="button" data-wizard-step="2">2. Riesgo</button>
-          <button class="btn btn-sm" type="button" data-wizard-step="3">3. Salida</button>
-        </div>
-        <div class="wizard-step active" data-wizard-content="1">
-          <label>Conectores disponibles para ejecutar
-            <select id="run-connector-select" multiple size="5"></select>
-          </label>
-          <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
-          <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
-          <label>Timeframe<input name="timeframe" value="1h"></label>
-          <label>Estrategia
-            <select name="strategy_slug"></select>
-          </label>
-        </div>
-        <div class="wizard-step" data-wizard-content="2">
-        <small class="hint" id="strategy-managed-hint"></small>
-        <div class="row-wrap">
-          <button class="btn btn-sm" type="button" id="open-strategy-wizard">Wizard de configuración</button>
-          <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
-        </div>
-        <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
-        <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
-        </div>
-        <div class="wizard-step" data-wizard-content="3">
-        <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
-          <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
-          <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
-        </label>
-        <label>Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button>
-          <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="1.0"></div>
-          <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
-        </label>
-        <label>Trailing Stop <button type="button" class="btn btn-sm term-help" data-term="trailing">?</button>
-          <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
-          <small class="hint">Consulta explicación en el botón <b>?</b>.</small>
-        </label>
-        <label>Cierre por indicador
-          <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
-        </label>
-        <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
-        <input type="hidden" name="leverage_profile" value="none">
-        <input type="hidden" name="max_open_positions" value="1">
-        <input type="hidden" name="compound_growth_enabled" value="false">
-        <input type="hidden" name="atr_volatility_filter_enabled" value="true">
-        </div>
+    <div class="strategy-top-layout">
+      <div class="card strategy-wizard-panel">
         <div class="row-between">
-          <button class="btn" type="button" id="wizard-prev-inline">Atrás</button>
-          <button class="btn" type="button" id="wizard-next-inline">Siguiente</button>
+          <h2>Ejecutar estrategia</h2>
+          <button class="btn" type="button" id="heartbeat-btn">Validar conectores</button>
         </div>
-        <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
-        <div id="run-feedback" class="status-msg" hidden></div>
-      </form>
+        <div id="heartbeat-output" class="stack" style="margin:10px 0;"></div>
+
+        <form id="run-form" class="form-grid wizard-form">
+          <div class="wizard-step-nav">
+            <button class="btn btn-sm active" type="button" data-wizard-step="1">1. Base</button>
+            <button class="btn btn-sm" type="button" data-wizard-step="2">2. Riesgo</button>
+            <button class="btn btn-sm" type="button" data-wizard-step="3">3. Salida</button>
+          </div>
+          <div class="wizard-step active" data-wizard-content="1">
+            <label>Conectores disponibles para ejecutar
+              <select id="run-connector-select" multiple size="5"></select>
+            </label>
+            <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
+            <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+            <label>Timeframe<input name="timeframe" value="1h"></label>
+            <label>Estrategia <a class="strategy-inline-help" href="#strategy-library-panel" title="Ir a estrategias disponibles">?</a>
+              <select name="strategy_slug"></select>
+            </label>
+          </div>
+          <div class="wizard-step" data-wizard-content="2">
+          <small class="hint" id="strategy-managed-hint"></small>
+          <div class="row-wrap">
+            <button class="btn btn-sm" type="button" id="open-strategy-wizard">Wizard de configuración</button>
+            <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
+          </div>
+          <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
+          <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
+          </div>
+          <div class="wizard-step" data-wizard-content="3">
+          <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
+            <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
+            <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
+          </label>
+          <label>Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button>
+            <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="1.0"></div>
+            <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
+          </label>
+          <label>Trailing Stop <button type="button" class="btn btn-sm term-help" data-term="trailing">?</button>
+            <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
+            <small class="hint">Consulta explicación en el botón <b>?</b>.</small>
+          </label>
+          <label>Cierre por indicador
+            <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
+          </label>
+          <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
+          <input type="hidden" name="leverage_profile" value="none">
+          <input type="hidden" name="max_open_positions" value="1">
+          <input type="hidden" name="compound_growth_enabled" value="false">
+          <input type="hidden" name="atr_volatility_filter_enabled" value="true">
+          </div>
+          <div class="row-between">
+            <button class="btn" type="button" id="wizard-prev-inline">Atrás</button>
+            <button class="btn" type="button" id="wizard-next-inline">Siguiente</button>
+          </div>
+          <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
+          <div id="run-feedback" class="status-msg" hidden></div>
+        </form>
+      </div>
+
+      <div class="card strategy-library-card compact" id="strategy-library-panel">
+        <div class="row-between">
+          <h2>Estrategias disponibles</h2>
+          <small class="hint">Click para ver explicación rápida</small>
+        </div>
+        <div id="strategy-library" class="stack"></div>
+        <div class="row-wrap" style="margin-top:8px;">
+          <button class="btn" type="button" id="publish-template-btn">Publicar estrategia actual</button>
+          <button class="btn" type="button" id="refresh-template-pool-btn">Ver pool público</button>
+        </div>
+        <div id="template-pool" class="stack" style="margin-top:8px;"></div>
+      </div>
     </div>
 
     <section class="card" id="market-movers-board">
@@ -223,19 +238,6 @@
           </table>
         </div>
       </section>
-      <div class="card strategy-library-card compact">
-      <div class="row-between">
-        <h2>Estrategias disponibles</h2>
-        <small class="hint">Click para ver explicación rápida</small>
-      </div>
-      <div id="strategy-library" class="stack"></div>
-      <div class="row-wrap" style="margin-top:8px;">
-        <button class="btn" type="button" id="publish-template-btn">Publicar estrategia actual</button>
-        <button class="btn" type="button" id="refresh-template-pool-btn">Ver pool público</button>
-      </div>
-      <div id="template-pool" class="stack" style="margin-top:8px;"></div>
-      </div>
-
       <section class="card">
         <div class="row-between">
           <h2>Bots activos (24/7)</h2>
