@@ -1,11 +1,14 @@
+import csv
+import io
 import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.db import get_db
 from app.core import settings
-from app.models import BotSession, Connector, PlanConfig, PlatformPolicy, PricingConfig, TradeLog, TradeRun, User, UserPlatformGrant, UserStrategyControl
+from app.models import BotSession, Connector, PlanConfig, PlatformPolicy, PricingConfig, StrategyTemplate, TradeLog, TradeRun, User, UserPlatformGrant, UserStrategyControl
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
     AdminUserCreate,
@@ -15,12 +18,15 @@ from app.schemas import (
     AdminPricingConfigUpdate,
     AdminStrategyControlUpdate,
     StrategyControlUpdate,
+    BotSessionCopyPayload,
     BotSessionCreate,
     BotSessionUpdate,
     AdminUserUpdate,
     ConnectorCreate,
     ConnectorUpdate,
     StrategyRequest,
+    StrategyTemplateApplyPayload,
+    StrategyTemplateCreate,
     TradingViewWebhook,
 )
 from app.security import encrypt_payload, hash_password
@@ -29,7 +35,7 @@ from app.services.connectors import get_client
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
 from app.services.bot_runner import execute_due_bot_sessions
-from app.services.trading import dashboard_data, run_strategy
+from app.services.trading import activity_metrics, dashboard_data, run_strategy
 from app.services.strategies import ALL_STRATEGIES
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -649,6 +655,214 @@ def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current
     db.delete(session)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/bot-sessions/{session_id}/copy")
+def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends(get_db), user=Depends(current_user)):
+    source = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Bot session not found")
+
+    target_connector_id = payload.connector_id or source.connector_id
+    connector = db.query(Connector).filter(Connector.id == target_connector_id, Connector.user_id == user.id, Connector.is_enabled.is_(True)).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
+
+    cloned = BotSession(
+        user_id=user.id,
+        connector_id=connector.id,
+        strategy_slug=source.strategy_slug,
+        timeframe=source.timeframe,
+        symbols_json={"symbols": payload.symbols if payload.symbols is not None else ((source.symbols_json or {}).get("symbols", []))},
+        interval_minutes=source.interval_minutes,
+        risk_per_trade=source.risk_per_trade,
+        min_ml_probability=source.min_ml_probability,
+        use_live_if_available=source.use_live_if_available,
+        take_profit_mode=source.take_profit_mode,
+        take_profit_value=source.take_profit_value,
+        stop_loss_mode=source.stop_loss_mode,
+        stop_loss_value=source.stop_loss_value,
+        trailing_stop_mode=source.trailing_stop_mode,
+        trailing_stop_value=source.trailing_stop_value,
+        indicator_exit_enabled=source.indicator_exit_enabled,
+        indicator_exit_rule=source.indicator_exit_rule,
+        is_active=bool(source.is_active),
+        last_status="cloned",
+    )
+    db.add(cloned)
+    db.commit()
+    db.refresh(cloned)
+    return {"ok": True, "session_id": cloned.id}
+
+
+@router.get("/execution-logs/download")
+def download_execution_logs(limit: int = 500, db=Depends(get_db), user=Depends(current_user)):
+    target = min(max(limit, 1), 2000)
+    runs = db.query(TradeRun).filter(TradeRun.user_id == user.id).order_by(TradeRun.created_at.desc()).limit(target).all()
+
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(["id", "created_at", "connector_id", "symbol", "timeframe", "signal", "status", "ml_probability", "quantity", "notes_json"])
+    for run in runs:
+        writer.writerow([
+            run.id,
+            run.created_at.isoformat() if run.created_at else "",
+            run.connector_id,
+            run.symbol,
+            run.timeframe,
+            run.signal,
+            run.status,
+            run.ml_probability,
+            run.quantity,
+            run.notes or "",
+        ])
+    stream.seek(0)
+    filename = f"execution_logs_user_{user.id}.csv"
+    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@router.get("/strategy-templates")
+def list_strategy_templates(db=Depends(get_db), user=Depends(current_user)):
+    mine = db.query(StrategyTemplate).filter(StrategyTemplate.user_id == user.id).order_by(StrategyTemplate.created_at.desc()).all()
+    public_templates = db.query(StrategyTemplate).filter(StrategyTemplate.is_public.is_(True), StrategyTemplate.user_id != user.id).order_by(StrategyTemplate.created_at.desc()).limit(200).all()
+    rows = []
+    for item in [*mine, *public_templates]:
+        rows.append({
+            "id": item.id,
+            "user_id": item.user_id,
+            "name": item.name,
+            "description": item.description,
+            "is_public": bool(item.is_public),
+            "source_template_id": item.source_template_id,
+            "config": item.config_json or {},
+            "created_at": _safe_iso(item.created_at),
+            "owned": item.user_id == user.id,
+        })
+    return rows
+
+
+@router.post("/strategy-templates")
+def create_strategy_template(payload: StrategyTemplateCreate, db=Depends(get_db), user=Depends(current_user)):
+    config = payload.config or {}
+    if payload.source_bot_session_id:
+        source = db.query(BotSession).filter(BotSession.id == payload.source_bot_session_id, BotSession.user_id == user.id).first()
+        if not source:
+            raise HTTPException(status_code=404, detail="Source bot session not found")
+        config = {
+            "strategy_slug": source.strategy_slug,
+            "timeframe": source.timeframe,
+            "risk_per_trade": source.risk_per_trade,
+            "min_ml_probability": source.min_ml_probability,
+            "use_live_if_available": source.use_live_if_available,
+            "take_profit_mode": source.take_profit_mode,
+            "take_profit_value": source.take_profit_value,
+            "stop_loss_mode": source.stop_loss_mode,
+            "stop_loss_value": source.stop_loss_value,
+            "trailing_stop_mode": source.trailing_stop_mode,
+            "trailing_stop_value": source.trailing_stop_value,
+            "indicator_exit_enabled": source.indicator_exit_enabled,
+            "indicator_exit_rule": source.indicator_exit_rule,
+            "interval_minutes": source.interval_minutes,
+            "symbols": ((source.symbols_json or {}).get("symbols") or []),
+            "connector_id": source.connector_id,
+        }
+
+    tpl = StrategyTemplate(
+        user_id=user.id,
+        name=payload.name,
+        description=payload.description,
+        is_public=payload.is_public,
+        config_json=config,
+    )
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return {"ok": True, "template_id": tpl.id}
+
+
+@router.post("/strategy-templates/{template_id}/copy")
+def copy_strategy_template(template_id: int, db=Depends(get_db), user=Depends(current_user)):
+    source = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if source.user_id != user.id and not source.is_public:
+        raise HTTPException(status_code=403, detail="Template is private")
+
+    clone = StrategyTemplate(
+        user_id=user.id,
+        name=f"{source.name} (copy)",
+        description=source.description,
+        is_public=False,
+        source_template_id=source.id,
+        config_json=source.config_json or {},
+    )
+    db.add(clone)
+    db.commit()
+    db.refresh(clone)
+    return {"ok": True, "template_id": clone.id}
+
+
+@router.post("/strategy-templates/{template_id}/apply")
+def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayload, db=Depends(get_db), user=Depends(current_user)):
+    template = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if template.user_id != user.id and not template.is_public:
+        raise HTTPException(status_code=403, detail="Template is private")
+
+    connector = db.query(Connector).filter(Connector.id == payload.connector_id, Connector.user_id == user.id, Connector.is_enabled.is_(True)).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
+
+    cfg = template.config_json or {}
+    session = BotSession(
+        user_id=user.id,
+        connector_id=connector.id,
+        strategy_slug=cfg.get("strategy_slug", "ema_rsi"),
+        timeframe=cfg.get("timeframe", "5m"),
+        symbols_json={"symbols": payload.symbols},
+        interval_minutes=int(cfg.get("interval_minutes", _interval_from_timeframe(cfg.get("timeframe", "5m"), 5))),
+        risk_per_trade=float(cfg.get("risk_per_trade", 0.03)),
+        min_ml_probability=float(cfg.get("min_ml_probability", 0.58)),
+        use_live_if_available=bool(cfg.get("use_live_if_available", False)),
+        take_profit_mode=cfg.get("take_profit_mode", "percent"),
+        take_profit_value=float(cfg.get("take_profit_value", 1.8)),
+        stop_loss_mode=cfg.get("stop_loss_mode", "percent"),
+        stop_loss_value=float(cfg.get("stop_loss_value", 1.1)),
+        trailing_stop_mode=cfg.get("trailing_stop_mode", "percent"),
+        trailing_stop_value=float(cfg.get("trailing_stop_value", 0.9)),
+        indicator_exit_enabled=bool(cfg.get("indicator_exit_enabled", False)),
+        indicator_exit_rule=cfg.get("indicator_exit_rule", "macd_cross"),
+        is_active=payload.is_active,
+        last_status="from_template",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return {"ok": True, "session_id": session.id}
+
+
+@router.get("/activity/performance")
+def activity_performance(db=Depends(get_db), user=Depends(current_user)):
+    try:
+        return activity_metrics(db, user.id)
+    except Exception as exc:
+        detail = f"user_id={user.id}: {exc}"
+        logger.exception("Activity metrics build failed: %s", detail)
+        _alert_admin_failure("API /api/activity/performance", detail)
+        return {
+            "equity_curve": [],
+            "drawdown_curve": [],
+            "monthly_returns": [],
+            "yearly_returns": [],
+            "summary": {
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "profit_factor": 0.0,
+                "win_rate": 0.0,
+                "total_trades": 0,
+            },
+        }
 
 
 @router.get("/dashboard")

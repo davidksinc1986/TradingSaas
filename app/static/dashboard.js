@@ -72,7 +72,7 @@ async function deleteBotSession(id){await api(`/api/bot-sessions/${id}`,{method:
 function activeConnectorForMarket(){const selected=selectedRunConnectorIds();if(selected.length){const picked=(DASHBOARD_CACHE.connectors||[]).find((c)=>c.id===selected[0]);if(picked)return picked;}return (DASHBOARD_CACHE.connectors||[]).find((c)=>c.is_enabled)||(DASHBOARD_CACHE.connectors||[])[0]||null;}
 function renderLiveStrategiesPanel(){const panel=document.getElementById('strategies-live-panel');const countNode=document.getElementById('strategies-live-count');if(!panel)return;const sessions=(DASHBOARD_CACHE.botSessions||[]).filter((item)=>item.is_active);if(countNode)countNode.textContent=`${sessions.length} activas`;if(!sessions.length){panel.innerHTML='<small class="hint">No hay estrategias en ejecución ahora mismo.</small>';return;}const grouped={};sessions.forEach((item)=>{const platform=(item.platform||'sin app').toUpperCase();const mode=(item.mode||item.market_type||'spot').toString().toLowerCase();const market=mode.includes('future')?'futures':'spot';if(!grouped[platform])grouped[platform]={spot:[],futures:[]};grouped[platform][market].push(item);});panel.innerHTML=Object.entries(grouped).map(([platform,markets])=>{const marketBlock=(type,label)=>{const rows=markets[type]||[];if(!rows.length){return `<div class="strategy-live-market"><strong>${label}</strong><small class="hint">Sin estrategias activas.</small></div>`;}return `<div class="strategy-live-market"><strong>${label} · ${rows.length}</strong><ul>${rows.map((item)=>`<li>${strategyName(item.strategy_slug)} · ${(item.symbols||[]).join(', ')||'-'}</li>`).join('')}</ul></div>`;};return `<article class="strategy-live-app"><h4>${platform}</h4><div class="strategy-live-market-grid">${marketBlock('spot','Spot')}${marketBlock('futures','Futures')}</div></article>`;}).join('');}
 async function editBotSession(id){const current=(DASHBOARD_CACHE.botSessions||[]).find((item)=>item.id===id);if(!current)return;const modal=document.createElement('div');modal.className='modal';modal.innerHTML=`<div class="modal-card card strategy-modal-card"><div class="modal-head"><h3>Editar estrategia activa</h3><button class="btn" type="button" id="close-edit-session">Cerrar</button></div><form id="edit-session-form" class="form-grid"><label>Timeframe<input name="timeframe" value="${current.timeframe||'5m'}"/></label><label>Símbolos (coma)<input name="symbols" value="${(current.symbols||[]).join(',')}"/></label><label>Take Win<div class="row-wrap"><select name="take_profit_mode"><option value="percent" ${(current.take_profit_mode||'percent')==='percent'?'selected':''}>%</option><option value="usdt" ${(current.take_profit_mode||'percent')==='usdt'?'selected':''}>USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="${Number(current.take_profit_value||1.5)}"/></div></label><label>Stop Loss<div class="row-wrap"><select name="stop_loss_mode"><option value="percent" ${(current.stop_loss_mode||'percent')==='percent'?'selected':''}>%</option><option value="usdt" ${(current.stop_loss_mode||'percent')==='usdt'?'selected':''}>USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="${Number(current.stop_loss_value||1.0)}"/></div></label><label>Trailing Stop<div class="row-wrap"><select name="trailing_stop_mode"><option value="percent" ${(current.trailing_stop_mode||'percent')==='percent'?'selected':''}>%</option><option value="usdt" ${(current.trailing_stop_mode||'percent')==='usdt'?'selected':''}>USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="${Number(current.trailing_stop_value||0.8)}"/></div></label><label class="checkbox"><input type="checkbox" name="indicator_exit_enabled" ${current.indicator_exit_enabled?'checked':''}/> Cierre por indicador</label><button class="btn primary" type="submit">Guardar cambios</button></form></div>`;document.body.appendChild(modal);const close=()=>modal.remove();modal.querySelector('#close-edit-session').addEventListener('click',close);modal.addEventListener('click',(e)=>{if(e.target===modal)close();});modal.querySelector('#edit-session-form').addEventListener('submit',async(e)=>{e.preventDefault();const fd=new FormData(e.target);const timeframe=String(fd.get('timeframe')||'5m');const interval=timeframeToMinutes(timeframe);await api(`/api/bot-sessions/${id}`,{method:'PUT',body:JSON.stringify({timeframe,symbols:parseCsv(fd.get('symbols')),interval_minutes:interval,take_profit_mode:fd.get('take_profit_mode'),take_profit_value:Number(fd.get('take_profit_value')),stop_loss_mode:fd.get('stop_loss_mode'),stop_loss_value:Number(fd.get('stop_loss_value')),trailing_stop_mode:fd.get('trailing_stop_mode'),trailing_stop_value:Number(fd.get('trailing_stop_value')),indicator_exit_enabled:fd.get('indicator_exit_enabled')==='on'})});close();await refreshBotSessions();await refreshExecutionLogs();});}
-function renderBotSessions(){const tbody=document.querySelector('#bot-sessions-table tbody');if(!tbody)return;const rows=DASHBOARD_CACHE.botSessions||[];if(!rows.length){tbody.innerHTML='<tr><td colspan="9"><small class="hint">No hay bots activos todavía. Activa uno desde "Ejecutar estrategia".</small></td></tr>';return;}tbody.innerHTML=rows.map((item)=>`<tr><td>${item.connector_label||'-'}</td><td>${item.platform||'-'} (${item.mode||'-'})</td><td>${(item.symbols||[]).join(', ')||'-'}</td><td>${strategyName(item.strategy_slug)}<br><small class="hint">TF ${item.timeframe||'-'}</small></td><td>${Number(item.capital_per_operation||0).toFixed(4)}</td><td>Cada ${item.interval_minutes||5} min</td><td>${botStatusLabel(item)}</td><td>${item.last_run_at?new Date(item.last_run_at).toLocaleString():'-'}</td><td><div class="row-wrap"><button class="btn btn-sm" onclick="setBotSessionActive(${item.id}, ${!item.is_active})">${item.is_active?'Pausar':'Reanudar'}</button><button class="btn btn-sm" onclick="editBotSession(${item.id})">Editar</button><button class="btn btn-sm" onclick="deleteBotSession(${item.id})">Eliminar</button></div></td></tr>`).join('');}
+function renderBotSessions(){const tbody=document.querySelector('#bot-sessions-table tbody');if(!tbody)return;const rows=DASHBOARD_CACHE.botSessions||[];if(!rows.length){tbody.innerHTML='<tr><td colspan="9"><small class="hint">No hay bots activos todavía. Activa uno desde "Ejecutar estrategia".</small></td></tr>';return;}tbody.innerHTML=rows.map((item)=>`<tr data-session-id="${item.id}"><td>${item.connector_label||'-'}</td><td>${item.platform||'-'} (${item.mode||'-'})</td><td>${(item.symbols||[]).join(', ')||'-'}</td><td>${strategyName(item.strategy_slug)}<br><small class="hint">TF ${item.timeframe||'-'}</small></td><td>${Number(item.capital_per_operation||0).toFixed(4)}</td><td>Cada ${item.interval_minutes||5} min</td><td>${botStatusLabel(item)}</td><td>${item.last_run_at?new Date(item.last_run_at).toLocaleString():'-'}</td><td><div class="row-wrap"><button class="btn btn-sm" onclick="setBotSessionActive(${item.id}, ${!item.is_active})">${item.is_active?'Pausar':'Reanudar'}</button><button class="btn btn-sm" onclick="editBotSession(${item.id})">Editar</button><button class="btn btn-sm" onclick="deleteBotSession(${item.id})">Eliminar</button></div></td></tr>`).join('');}
 async function refreshBotSessions(){try{const rows=await api('/api/bot-sessions');DASHBOARD_CACHE.botSessions=Array.isArray(rows)?rows:[];renderBotSessions();renderLiveStrategiesPanel();}catch(err){const tbody=document.querySelector('#bot-sessions-table tbody');if(tbody)tbody.innerHTML=`<tr><td colspan="9"><div class="status-msg status-error">No se pudieron cargar bots: ${parseApiError(err)}</div></td></tr>`;}}
 function setRunFeedback(message,type='ok'){const box=document.getElementById('run-feedback');if(!box)return;box.hidden=false;box.textContent=message;box.classList.remove('status-ok','status-error');box.classList.add(type==='error'?'status-error':'status-ok');}
 async function activateBotFromForm(){const form=document.getElementById('run-form');if(!form)return;const fd=new FormData(form);const connectorIds=selectedRunConnectorIds();if(!connectorIds.length){setRunFeedback('Selecciona un conector para activar bot 24/7.','error');return;}const timeframe=String(fd.get('timeframe')||'5m');const payload={connector_id:connectorIds[0],symbols:parseCsv(fd.get('symbols')),timeframe,strategy_slug:fd.get('strategy_slug'),risk_per_trade:Number(fd.get('risk_per_trade_percent')),min_ml_probability:Number(fd.get('min_ml_probability_percent')),use_live_if_available:fd.get('use_live_if_available')==='on',take_profit_mode:fd.get('take_profit_mode'),take_profit_value:Number(fd.get('take_profit_value')),stop_loss_mode:fd.get('stop_loss_mode'),stop_loss_value:Number(fd.get('stop_loss_value')),trailing_stop_mode:fd.get('trailing_stop_mode'),trailing_stop_value:Number(fd.get('trailing_stop_value')),indicator_exit_enabled:fd.get('indicator_exit_enabled')==='on',indicator_exit_rule:fd.get('indicator_exit_rule'),interval_minutes:timeframeToMinutes(timeframe)};try{const result=await api('/api/bot-sessions',{method:'POST',body:JSON.stringify(payload)});setRunFeedback(`Bot 24/7 activado. Sesión #${result.session_id}.`);await refreshBotSessions();await refreshExecutionLogs();}catch(err){setRunFeedback(parseApiError(err),'error');}}
@@ -113,3 +113,103 @@ document.getElementById('run-form')?.addEventListener('submit',async(e)=>{e.prev
 
 async function init(){const [metadata,strategyControl,user]=await Promise.all([api('/api/platform-metadata'),api('/api/strategy-control'),api('/api/me')]);METADATA=metadata;STRATEGY_CONTROL=strategyControl;initTabs('#dashboard-tabs','tab-');renderProfile(user);renderStrategySelect();renderStrategyLibrary();renderPlatformTabs();bindPlatformForms();applyStrategyControlUI();await refreshDashboard();setInterval(refreshExecutionLogs,EXECUTION_LOG_REFRESH_MS);setInterval(refreshBotSessions,60*1000);await refreshMarketBoard();runHeartbeat();}
 init().catch(err=>{setRunFeedback('Error cargando dashboard: '+parseApiError(err),'error');});
+
+let SELECTED_BOT_SESSION_ID=null;
+
+async function downloadExecutionLogs(){
+  try{window.open('/api/execution-logs/download?limit=1000','_blank');}
+  catch(err){alert(parseApiError(err));}
+}
+
+async function copySelectedBotSession(){
+  const sourceId=SELECTED_BOT_SESSION_ID||Number(prompt('ID de bot session a copiar:',''));
+  if(!sourceId)return;
+  const targetConnector=Number(prompt('ID de conector destino (opcional):','')||0)||null;
+  try{
+    await api(`/api/bot-sessions/${sourceId}/copy`,{method:'POST',body:JSON.stringify({connector_id:targetConnector})});
+    alert('Bot copiado correctamente');
+    refreshBotSessions();
+  }catch(err){alert(parseApiError(err));}
+}
+
+async function publishCurrentStrategyTemplate(){
+  const fd=new FormData(document.getElementById('run-form'));
+  const name=prompt('Nombre de la estrategia pública:','Mi estrategia');
+  if(!name)return;
+  const config={
+    strategy_slug:fd.get('strategy_slug'),
+    timeframe:fd.get('timeframe'),
+    risk_per_trade:Number(fd.get('risk_per_trade_percent')||3)/100,
+    min_ml_probability:Number(fd.get('min_ml_probability_percent')||58)/100,
+    take_profit_mode:fd.get('take_profit_mode')||'percent',
+    take_profit_value:Number(fd.get('take_profit_value')||1.8),
+    stop_loss_mode:fd.get('stop_loss_mode')||'percent',
+    stop_loss_value:Number(fd.get('stop_loss_value')||1.1),
+    trailing_stop_mode:fd.get('trailing_stop_mode')||'percent',
+    trailing_stop_value:Number(fd.get('trailing_stop_value')||0.9),
+    symbols:parseCsv(fd.get('symbols')),
+  };
+  try{
+    await api('/api/strategy-templates',{method:'POST',body:JSON.stringify({name,description:'Publicada desde dashboard',is_public:true,config})});
+    alert('Estrategia publicada en el pool');
+    refreshTemplatePool();
+  }catch(err){alert(parseApiError(err));}
+}
+
+async function refreshTemplatePool(){
+  const node=document.getElementById('template-pool');
+  if(!node)return;
+  try{
+    const rows=await api('/api/strategy-templates');
+    node.innerHTML=rows.slice(0,20).map(item=>`<div class="connector-item"><div class="row-between"><strong>${item.name}</strong><span class="pill tiny ${item.is_public?'pill-on':'pill-off'}">${item.is_public?'Pública':'Privada'}</span></div><small class="hint">${item.description||''}</small><div style="margin-top:8px;"><button class="btn" type="button" onclick="copyTemplateToMe(${item.id})">Copiar</button></div></div>`).join('')||'<small class="hint">No hay estrategias en el pool aún.</small>';
+  }catch(err){node.innerHTML=`<small class="status-msg status-error">${parseApiError(err)}</small>`;}
+}
+
+async function copyTemplateToMe(id){
+  try{await api(`/api/strategy-templates/${id}/copy`,{method:'POST'});alert('Template copiado');refreshTemplatePool();}
+  catch(err){alert(parseApiError(err));}
+}
+window.copyTemplateToMe=copyTemplateToMe;
+
+document.getElementById('download-execution-logs-btn')?.addEventListener('click',downloadExecutionLogs);
+document.getElementById('copy-selected-bot-btn')?.addEventListener('click',copySelectedBotSession);
+document.getElementById('publish-template-btn')?.addEventListener('click',publishCurrentStrategyTemplate);
+document.getElementById('refresh-template-pool-btn')?.addEventListener('click',refreshTemplatePool);
+document.querySelector('#bot-sessions-table tbody')?.addEventListener('click',(e)=>{const tr=e.target.closest('tr');if(!tr)return;const id=Number(tr.getAttribute('data-session-id')||0);if(id)SELECTED_BOT_SESSION_ID=id;});
+setTimeout(refreshTemplatePool,1200);
+
+const TERM_HELP={
+  tp:{title:'Take Profit (TP)',body:'El TP es el nivel donde aseguras ganancia. En % para intradía suele usarse entre 1% y 3%; en USDT depende de tu tamaño. Regla básica: TP mayor que SL.'},
+  sl:{title:'Stop Loss (SL)',body:'El SL limita pérdidas. En % para cuentas pequeñas suele usarse 0.8% a 1.5%. Si SL es muy grande, una operación mala afecta demasiado tu cuenta.'},
+  trailing:{title:'Trailing Stop',body:'El trailing mueve el stop a favor de la operación cuando el precio avanza. Valores típicos: 0.5% a 1.2% según volatilidad.'},
+  pnl:{title:'PNL %',body:'PNL% es el porcentaje de ganancia o pérdida respecto al capital invertido. Ejemplo: si inviertes 100 y ganas 5, PNL%=5%.'},
+  risk:{title:'Riesgo por trade',body:'Porcentaje máximo de cuenta que arriesgas por operación. Para cuentas pequeñas y pruebas: 2% a 3%. En producción conservadora: 0.5% a 1.5%.'},
+};
+
+function openTermHelp(term){const meta=TERM_HELP[term]||{title:'Ayuda',body:'Sin definición disponible.'};const modal=document.getElementById('term-help-modal');if(!modal)return;document.getElementById('term-help-title').textContent=meta.title;document.getElementById('term-help-body').textContent=meta.body;modal.classList.remove('hidden');}
+function closeTermHelp(){document.getElementById('term-help-modal')?.classList.add('hidden');}
+
+async function refreshActivityPerformance(){
+  let payload=null;
+  try{payload=await api('/api/activity/performance');}catch(_err){payload={equity_curve:[],drawdown_curve:[],monthly_returns:[],yearly_returns:[],summary:{sharpe_ratio:0,max_drawdown:0,profit_factor:0,win_rate:0,total_trades:0}};}
+  const kpi=document.getElementById('activity-kpis');
+  if(kpi){const s=payload.summary||{};kpi.innerHTML=`<div class="metric-card"><strong>Sharpe</strong><span>${Number(s.sharpe_ratio||0).toFixed(2)}</span></div><div class="metric-card"><strong>Max DD</strong><span>${Number(s.max_drawdown||0).toFixed(2)}%</span></div><div class="metric-card"><strong>Profit Factor</strong><span>${Number(s.profit_factor||0).toFixed(2)}</span></div><div class="metric-card"><strong>Win Rate</strong><span>${Number(s.win_rate||0).toFixed(1)}%</span></div>`;}
+  const equity=(payload.equity_curve||[]), dd=(payload.drawdown_curve||[]), monthly=(payload.monthly_returns||[]), yearly=(payload.yearly_returns||[]);
+  const equityCanvas=document.getElementById('equity-curve-chart');
+  if(equityCanvas){if(window.equityCurveChart)window.equityCurveChart.destroy();window.equityCurveChart=new Chart(equityCanvas,{type:'line',data:{labels:equity.map(i=>new Date(i.x).toLocaleDateString()),datasets:[{label:'Cumulative Return',data:equity.map(i=>i.y),borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.15)',fill:true,tension:.25}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+  const ddCanvas=document.getElementById('drawdown-curve-chart');
+  if(ddCanvas){if(window.drawdownCurveChart)window.drawdownCurveChart.destroy();window.drawdownCurveChart=new Chart(ddCanvas,{type:'bar',data:{labels:dd.map(i=>new Date(i.x).toLocaleDateString()),datasets:[{label:'Drawdown %',data:dd.map(i=>i.y),backgroundColor:'#ef4444'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+  const mCanvas=document.getElementById('monthly-returns-chart');
+  if(mCanvas){if(window.monthlyReturnsChart)window.monthlyReturnsChart.destroy();window.monthlyReturnsChart=new Chart(mCanvas,{type:'bar',data:{labels:monthly.map(i=>i.period),datasets:[{label:'Monthly Returns',data:monthly.map(i=>i.value),backgroundColor:'#38bdf8'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+  const yCanvas=document.getElementById('yearly-returns-chart');
+  if(yCanvas){if(window.yearlyReturnsChart)window.yearlyReturnsChart.destroy();window.yearlyReturnsChart=new Chart(yCanvas,{type:'bar',data:{labels:yearly.map(i=>i.period),datasets:[{label:'Yearly Returns',data:yearly.map(i=>i.value),backgroundColor:'#a78bfa'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+}
+
+if(typeof refreshDashboard==='function'){
+  const _refreshDashboardOriginal=refreshDashboard;
+  refreshDashboard=async function(){await _refreshDashboardOriginal();await refreshActivityPerformance();};
+}
+
+document.querySelectorAll('.term-help').forEach(btn=>btn.addEventListener('click',()=>openTermHelp(btn.dataset.term)));
+document.getElementById('term-help-close')?.addEventListener('click',closeTermHelp);
+document.getElementById('term-help-modal')?.addEventListener('click',(e)=>{if(e.target.id==='term-help-modal')closeTermHelp();});
