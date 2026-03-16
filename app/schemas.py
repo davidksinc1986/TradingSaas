@@ -193,3 +193,22 @@ class AdminPlanConfigPayload(BaseModel):
     is_custom: bool = False
     is_active: bool = True
     sort_order: int = 0
+
+
+class BotSessionCopyPayload(BaseModel):
+    connector_id: int | None = None
+    symbols: list[str] | None = None
+
+
+class StrategyTemplateCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    description: str = ""
+    is_public: bool = False
+    source_bot_session_id: int | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTemplateApplyPayload(BaseModel):
+    connector_id: int
+    symbols: list[str]
+    is_active: bool = True
