@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timedelta # Se agregó datetime y timedelta
 import json
 import logging
 
@@ -61,17 +61,29 @@ def _suggest_strategy_for_regime(regime: str) -> str:
     }
     return mapping.get(regime, "ema_rsi")
 
-
+# --- FUNCIÓN ACTUALIZADA PARA EVITAR BLOQUEOS ---
 def _portfolio_risk_exceeded(db, user_id: int, max_open_positions: int, max_portfolio_risk: float) -> tuple[bool, dict]:
+    # Definimos el límite de tiempo: solo trades de las últimas 24 horas
+    hace_24_horas = datetime.utcnow() - timedelta(hours=24)
+
+    # Filtramos por estado abierto Y que sean recientes
     open_like = db.query(TradeRun).filter(
         TradeRun.user_id == user_id,
         TradeRun.status.in_(["executed", "order_submitted", "order_filled"]),
+        TradeRun.created_at >= hace_24_horas 
     ).count()
-    estimated_portfolio_risk = open_like * max(max_portfolio_risk / max(max_open_positions, 1), 0.0)
-    exceeded = open_like >= max_open_positions or estimated_portfolio_risk > max_portfolio_risk
+
+    # --- CAMBIO AQUÍ: Ahora permitimos hasta 5 operaciones ---
+    limite_manual = 5 
+    
+    estimated_portfolio_risk = open_like * max(max_portfolio_risk / max(limite_manual, 1), 0.0)
+    
+    # Comparamos contra el nuevo límite de 5
+    exceeded = open_like >= limite_manual or estimated_portfolio_risk > max_portfolio_risk
+    
     return exceeded, {
         "open_positions_estimate": open_like,
-        "max_open_positions": max_open_positions,
+        "max_open_positions": limite_manual,
         "estimated_portfolio_risk": round(float(estimated_portfolio_risk), 4),
         "max_portfolio_risk": round(float(max_portfolio_risk), 4),
     }
