@@ -30,17 +30,10 @@
   </aside>
 </section>
 
-<section class="stats-grid kpi-ribbon">
-  <div class="card stat stat-card"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
-  <div class="card stat stat-card"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
-  <div class="card stat stat-card"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
-  <div class="card stat stat-card"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
-</section>
-
 <section class="tabs" id="dashboard-tabs">
-  <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil"><span class="tab-glyph">◈</span><span class="tab-label">Perfil</span></button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores"><span class="tab-glyph">◇</span><span class="tab-label">Apps</span></button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="strategies" title="Estrategias" aria-label="Estrategias"><span class="tab-glyph">◆</span><span class="tab-label">Estrategias</span></button>
+  <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil"><span class="tab-glyph">◉</span><span class="tab-label">Perfil</span></button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores"><span class="tab-glyph">◉</span><span class="tab-label">Apps</span></button>
+  <button class="tab-btn tab-icon-btn" type="button" data-tab="strategies" title="Estrategias" aria-label="Estrategias"><span class="tab-glyph">◉</span><span class="tab-label">Estrategias</span></button>
   <button class="tab-btn tab-icon-btn" type="button" data-tab="activity" title="Actividad" aria-label="Actividad"><span class="tab-glyph">◉</span><span class="tab-label">Actividad</span></button>
 </section>
 
@@ -109,14 +102,9 @@
           <label>Porcentaje del balance USDT (%)
             <input name="trade_balance_percent" id="trade-balance-percent" type="number" min="1" max="100" step="0.1" value="10">
           </label>
-          <div class="card soft-card">
-            <strong>Ejemplos rápidos</strong>
-            <ul class="hint" style="margin:8px 0 0 18px;">
-              <li>Si eliges <b>monto fijo 12</b>, cada orden intentará usar 12 USDT.</li>
-              <li>Si eliges <b>25%</b> y tu balance disponible es 80 USDT, la orden intentará usar 20 USDT.</li>
-              <li>Si el cálculo da menos de 10 USDT, se ajusta automáticamente a 10 USDT.</li>
-            </ul>
-          </div>
+          <button class="btn btn-sm term-help" type="button" data-term="trade_amount_examples">?
+            Ver ejemplos de cálculo
+          </button>
           <button class="btn primary compact-save-btn" type="submit">Guardar monto</button>
         </form>
         <div id="profile-trade-amount-feedback" class="hint" style="margin-top:8px;"></div>
@@ -140,60 +128,72 @@
 </section>
 
 <section id="tab-strategies" class="tab-panel">
-  <div class="grid-2">
-    <div class="card">
+  <div class="stack" style="gap:14px;">
+    <div class="card strategy-wizard-panel">
       <div class="row-between">
         <h2>Ejecutar estrategia</h2>
         <button class="btn" type="button" id="heartbeat-btn">Validar conectores</button>
       </div>
       <div id="heartbeat-output" class="stack" style="margin:10px 0;"></div>
 
-      <form id="run-form" class="form-grid">
-        <label>Conectores disponibles para ejecutar
-          <select id="run-connector-select" multiple size="5"></select>
-        </label>
-        <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
-
-        <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
-        <label>Timeframe<input name="timeframe" value="1h"></label>
-        <label>Estrategia
-          <select name="strategy_slug"></select>
-        </label>
+      <form id="run-form" class="form-grid wizard-form">
+        <div class="wizard-step-nav">
+          <button class="btn btn-sm active" type="button" data-wizard-step="1">1. Base</button>
+          <button class="btn btn-sm" type="button" data-wizard-step="2">2. Riesgo</button>
+          <button class="btn btn-sm" type="button" data-wizard-step="3">3. Salida</button>
+        </div>
+        <div class="wizard-step active" data-wizard-content="1">
+          <label>Conectores disponibles para ejecutar
+            <select id="run-connector-select" multiple size="5"></select>
+          </label>
+          <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
+          <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+          <label>Timeframe<input name="timeframe" value="1h"></label>
+          <label>Estrategia
+            <select name="strategy_slug"></select>
+          </label>
+        </div>
+        <div class="wizard-step" data-wizard-content="2">
         <small class="hint" id="strategy-managed-hint"></small>
         <div class="row-wrap">
           <button class="btn btn-sm" type="button" id="open-strategy-wizard">Wizard de configuración</button>
           <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
         </div>
-
         <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
         <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
+        </div>
+        <div class="wizard-step" data-wizard-content="3">
         <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
           <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
-          <small class="hint">Ejemplo: 1.5 (%) o 12 (USDT)</small>
+          <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
         </label>
         <label>Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button>
           <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="1.0"></div>
-          <small class="hint">Ejemplo: 1 (%) o 8 (USDT)</small>
+          <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
         </label>
         <label>Trailing Stop <button type="button" class="btn btn-sm term-help" data-term="trailing">?</button>
           <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
-          <small class="hint">Se activa después de entrar en ganancia y protege beneficio.</small>
+          <small class="hint">Consulta explicación en el botón <b>?</b>.</small>
         </label>
         <label>Cierre por indicador
           <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
         </label>
         <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
-<input type="hidden" name="leverage_profile" value="none">
+        <input type="hidden" name="leverage_profile" value="none">
         <input type="hidden" name="max_open_positions" value="1">
         <input type="hidden" name="compound_growth_enabled" value="false">
         <input type="hidden" name="atr_volatility_filter_enabled" value="true">
+        </div>
+        <div class="row-between">
+          <button class="btn" type="button" id="wizard-prev-inline">Atrás</button>
+          <button class="btn" type="button" id="wizard-next-inline">Siguiente</button>
+        </div>
         <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
         <div id="run-feedback" class="status-msg" hidden></div>
       </form>
     </div>
 
-    <div class="stack" style="gap:14px;">
-      <section class="card" id="market-movers-board">
+    <section class="card" id="market-movers-board">
         <div class="row-between">
           <h2>Monedas con mayor movimiento / ganancia</h2>
           <button class="btn" id="refresh-market-btn" type="button">Actualizar ahora</button>
@@ -223,7 +223,7 @@
           </table>
         </div>
       </section>
-      <div class="card">
+      <div class="card strategy-library-card compact">
       <div class="row-between">
         <h2>Estrategias disponibles</h2>
         <small class="hint">Click para ver explicación rápida</small>
@@ -261,11 +261,17 @@
           </table>
         </div>
       </section>
-    </div>
   </div>
 </section>
 
 <section id="tab-activity" class="tab-panel">
+  <section class="stats-grid kpi-ribbon">
+    <div class="card stat stat-card"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
+    <div class="card stat stat-card"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
+    <div class="card stat stat-card"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
+    <div class="card stat stat-card"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
+  </section>
+
   <section class="card">
     <div class="row-between">
       <h2>Logs de ejecución (5m / 1h)</h2>
@@ -290,16 +296,6 @@
         <tbody></tbody>
       </table>
     </div>
-  </section>
-
-  <section class="card">
-    <h2>Webhook de TradingView explicado fácil</h2>
-    <ul class="hint">
-      <li>1) TradingView envía una alerta a una URL segura de tu cuenta.</li>
-      <li>2) La app valida tu clave secreta (passphrase).</li>
-      <li>3) Si indicas <code>target_connector_id</code>, reenvía la orden a Binance/Bybit/OKX/MT5.</li>
-    </ul>
-    <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
   </section>
 
 <section class="card">
@@ -362,6 +358,16 @@
     </div>
     <h2>Evolución acumulada del PNL</h2>
     <canvas id="pnl-cumulative-chart" height="120"></canvas>
+  </section>
+
+  <section class="card">
+    <h2>Webhook de TradingView explicado fácil</h2>
+    <ul class="hint">
+      <li>1) TradingView envía una alerta a una URL segura de tu cuenta.</li>
+      <li>2) La app valida tu clave secreta (passphrase).</li>
+      <li>3) Si indicas <code>target_connector_id</code>, reenvía la orden a Binance/Bybit/OKX/MT5.</li>
+    </ul>
+    <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
   </section>
 </section>
 
