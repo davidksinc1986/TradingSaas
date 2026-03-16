@@ -404,3 +404,21 @@ tr:hover td{background:rgba(255,255,255,.02)}
 @media (max-width:680px){
   .kpi-ribbon{grid-template-columns:1fr}
 }
+
+/* UX refinements requested */
+.tab-icon-btn .tab-glyph{font-size:15px;opacity:.9}
+.tab-btn:not(.active) .tab-glyph,.tab-btn:not(.active) .tab-label{color:#d5d7de}
+.tab-btn.active .tab-glyph{color:#1b1400}
+
+.strategy-wizard-panel{max-width:980px}
+.wizard-step-nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.wizard-step-nav .btn.active{background:rgba(240,185,11,.22);border-color:rgba(240,185,11,.5);color:#ffe8ad}
+.wizard-step{display:none;gap:10px}
+.wizard-step.active{display:grid}
+
+.strategy-library-card.compact{padding:14px}
+.strategy-card-compact{padding:10px 12px;border-radius:12px;background:linear-gradient(130deg,rgba(240,185,11,.12),rgba(37,99,235,.12));border:1px solid rgba(240,185,11,.35)}
+.strategy-card-compact strong{font-size:15px}
+.strategy-card-compact .hint{font-size:13px}
+
+#tab-activity .kpi-ribbon{margin-top:0}
