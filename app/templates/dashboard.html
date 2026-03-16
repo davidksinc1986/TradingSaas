@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="dashboard-header dashboard-header-grid">
+<div class="dashboard-redesign">
+<section class="dashboard-header dashboard-header-grid hero-glass">
   <div>
     <span class="pill">Hola, {{ user.name }}</span>
     <h1>Tu centro de operación inteligente</h1>
@@ -29,11 +30,11 @@
   </aside>
 </section>
 
-<section class="stats-grid">
-  <div class="card stat"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
-  <div class="card stat"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
-  <div class="card stat"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
-  <div class="card stat"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
+<section class="stats-grid kpi-ribbon">
+  <div class="card stat stat-card"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
+  <div class="card stat stat-card"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
+  <div class="card stat stat-card"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
+  <div class="card stat stat-card"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
 </section>
 
 <section class="tabs" id="dashboard-tabs">
@@ -418,6 +419,8 @@
       <button class="btn primary" type="button" id="strategy-wizard-next">Siguiente</button>
     </div>
   </div>
+</div>
+
 </div>
 
 <script src="/static/dashboard.js?v={{ static_version }}"></script>

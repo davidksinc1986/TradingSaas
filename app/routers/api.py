@@ -1021,6 +1021,7 @@ def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_us
             "quantity": run.quantity,
             "created_at": run.created_at.isoformat(),
             "notes": parsed_note,
+            "candle": parsed_note.get("candle") or (parsed_note.get("scanner") or {}).get("candle"),
         })
     return payload
 

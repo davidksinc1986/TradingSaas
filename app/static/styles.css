@@ -284,3 +284,123 @@ select[multiple]{min-height:120px}
 .strategy-wizard-card textarea{width:100%;min-height:110px;background:#0f1217;color:#f8fafc;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px}
 .strategy-wizard-card label{display:grid;gap:6px}
 .strategy-wizard-card .modal-list li{margin-bottom:6px}
+
+/* Dashboard redesign v2: cleaner visual hierarchy and stronger attraction */
+.dashboard-redesign{
+  position:relative;
+  display:grid;
+  gap:18px;
+}
+.dashboard-redesign::before{
+  content:"";
+  position:absolute;
+  inset:-12px -8px auto -8px;
+  height:360px;
+  background:
+    radial-gradient(700px 220px at 12% 0%, rgba(240,185,11,.2), transparent 65%),
+    radial-gradient(620px 200px at 88% 10%, rgba(56,189,248,.16), transparent 70%);
+  pointer-events:none;
+  z-index:0;
+}
+.dashboard-redesign > *{position:relative;z-index:1}
+
+.hero-glass{
+  padding:20px;
+  border-radius:24px;
+  border:1px solid rgba(255,255,255,.08);
+  background:linear-gradient(135deg, rgba(20,20,20,.88), rgba(14,14,14,.86));
+  box-shadow:0 16px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.hero-glass h1{
+  margin-top:8px;
+  margin-bottom:8px;
+  font-size:42px;
+  letter-spacing:-.02em;
+}
+.hero-glass p{max-width:68ch}
+
+.kpi-ribbon{
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px;
+}
+.stat-card{
+  border:1px solid rgba(255,255,255,.08);
+  background:linear-gradient(180deg, rgba(26,26,26,.9), rgba(16,16,16,.92));
+  position:relative;
+  overflow:hidden;
+}
+.stat-card::after{
+  content:"";
+  position:absolute;
+  left:0;right:0;top:0;
+  height:3px;
+  background:linear-gradient(90deg,#f0b90b,#38bdf8,#a78bfa);
+  opacity:.9;
+}
+.stat-card strong{
+  font-size:36px;
+  line-height:1;
+  text-shadow:0 0 16px rgba(240,185,11,.22);
+}
+
+#dashboard-tabs{
+  padding:10px;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(9,9,9,.8);
+  backdrop-filter:blur(6px);
+}
+#dashboard-tabs .tab-btn{
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.08);
+  background:#101010;
+}
+#dashboard-tabs .tab-btn.active{
+  border-color:rgba(240,185,11,.42);
+  background:linear-gradient(135deg, rgba(240,185,11,.18), rgba(240,185,11,.1));
+  color:#ffe08a;
+}
+
+#tab-strategies .card,
+#tab-activity .card,
+#tab-profile .card,
+#tab-connectors .card{
+  border-color:rgba(255,255,255,.08);
+  background:linear-gradient(180deg, rgba(22,22,22,.95), rgba(14,14,14,.98));
+}
+
+.table-wrap{
+  border:1px solid rgba(255,255,255,.06);
+  border-radius:14px;
+  background:rgba(9,9,9,.65);
+}
+th{
+  color:#f8e7ab;
+  font-weight:700;
+  letter-spacing:.01em;
+  background:rgba(255,255,255,.015);
+}
+tr:hover td{background:rgba(255,255,255,.02)}
+
+#activity-kpis .metric-card{
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(12,12,12,.72);
+}
+
+.term-help{
+  padding:4px 8px;
+  min-width:30px;
+  border-radius:999px;
+  border-color:rgba(240,185,11,.45);
+  color:#ffe08a;
+  font-size:12px;
+}
+.term-help:hover{background:rgba(240,185,11,.14)}
+
+@media (max-width:1080px){
+  .hero-glass h1{font-size:34px}
+  .kpi-ribbon{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:680px){
+  .kpi-ribbon{grid-template-columns:1fr}
+}
