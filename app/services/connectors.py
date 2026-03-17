@@ -33,13 +33,27 @@ class BaseConnectorClient:
         self.secrets = decrypt_payload(connector.encrypted_secret_blob)
         self.config = connector.config_json or {}
 
-    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
         return ExecutionResult(
             status="paper-filled",
             message="Paper execution completed",
             fill_price=price_hint,
             quantity=quantity,
-            raw={"mode": self.connector.mode, "platform": self.connector.platform, "market_type": getattr(self.connector, "market_type", "spot")},
+            raw={
+                "mode": self.connector.mode,
+                "platform": self.connector.platform,
+                "market_type": getattr(self.connector, "market_type", "spot"),
+                "reduce_only": reduce_only,
+                "extra_params": extra_params or {},
+            },
         )
 
     def normalize_symbol(self, symbol: str) -> dict[str, Any]:
@@ -61,7 +75,23 @@ class BaseConnectorClient:
         }
 
     def test_connection(self) -> dict[str, Any]:
-        return {"ok": True, "platform": self.connector.platform, "mode": self.connector.mode, "market_type": getattr(self.connector, "market_type", "spot")}
+        return {
+            "ok": True,
+            "platform": self.connector.platform,
+            "mode": self.connector.mode,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+        }
+
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        return {
+            "market_type": getattr(self.connector, "market_type", "spot"),
+            "symbol": symbol,
+            "has_position": False,
+            "spot_base_free": 0.0,
+            "spot_base_total": 0.0,
+            "net_contracts": 0.0,
+            "side": None,
+        }
 
 
 class CCXTConnectorClient(BaseConnectorClient):
@@ -227,24 +257,145 @@ class CCXTConnectorClient(BaseConnectorClient):
             "min_notional": self._min_notional(market),
         }
 
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+
+        if not market:
+            return {
+                "market_type": market_type,
+                "symbol": symbol,
+                "found": False,
+                "has_position": False,
+                "spot_base_free": 0.0,
+                "spot_base_total": 0.0,
+                "net_contracts": 0.0,
+                "side": None,
+            }
+
+        if market_type == "spot":
+            balance = exchange.fetch_balance()
+            base = market.get("base")
+            asset_row = (balance or {}).get(base) or {}
+            free_qty = float(asset_row.get("free") or 0.0)
+            total_qty = float(asset_row.get("total") or free_qty or 0.0)
+            return {
+                "market_type": "spot",
+                "symbol": symbol,
+                "found": True,
+                "base": base,
+                "quote": market.get("quote"),
+                "has_position": total_qty > 0,
+                "spot_base_free": free_qty,
+                "spot_base_total": total_qty,
+                "net_contracts": 0.0,
+                "side": "long" if total_qty > 0 else None,
+            }
+
+        try:
+            positions = exchange.fetch_positions([symbol])
+        except Exception:
+            positions = []
+
+        net_contracts = 0.0
+        detected_side = None
+
+        for pos in positions or []:
+            info = pos.get("info") or {}
+            raw_amt = (
+                pos.get("contracts")
+                or pos.get("positionAmt")
+                or info.get("positionAmt")
+                or info.get("contracts")
+                or 0
+            )
+            try:
+                amt = float(raw_amt or 0.0)
+            except Exception:
+                amt = 0.0
+
+            side = (pos.get("side") or info.get("positionSide") or "").lower()
+            if side == "short" and amt > 0:
+                amt = -amt
+
+            if amt != 0:
+                net_contracts += amt
+
+        if net_contracts > 0:
+            detected_side = "long"
+        elif net_contracts < 0:
+            detected_side = "short"
+
+        return {
+            "market_type": "futures",
+            "symbol": symbol,
+            "found": True,
+            "base": market.get("base"),
+            "quote": market.get("quote"),
+            "has_position": net_contracts != 0,
+            "spot_base_free": 0.0,
+            "spot_base_total": 0.0,
+            "net_contracts": float(net_contracts),
+            "side": detected_side,
+        }
+
     def _resolve_fill_price(self, order: dict[str, Any], price_hint: float) -> float:
         return float(order.get("average") or order.get("price") or order.get("cost") or price_hint)
 
-    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
         if self.connector.mode != "live":
-            return super().execute_market(symbol, side, quantity, price_hint)
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
+
         exchange = self.build_exchange()
         quantity, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
         if quantity <= 0:
             raise RuntimeError(f"Quantity for {symbol} resolved to 0 after exchange precision filters")
-        order = exchange.create_order(symbol=symbol, type="market", side=side, amount=quantity)
+
+        order_params = dict(extra_params or {})
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        if market_type == "futures" and reduce_only:
+            order_params["reduceOnly"] = True
+
+        if order_params:
+            order = exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=side,
+                amount=quantity,
+                params=order_params,
+            )
+        else:
+            order = exchange.create_order(symbol=symbol, type="market", side=side, amount=quantity)
+
         fill_price = self._resolve_fill_price(order, price_hint)
         return ExecutionResult(
             status="live-submitted",
             message="Live order submitted via CCXT",
             fill_price=fill_price,
             quantity=float(order.get("amount") or quantity),
-            raw={**order, "normalized_price": normalized_price, "min_notional": min_notional},
+            raw={
+                **order,
+                "normalized_price": normalized_price,
+                "min_notional": min_notional,
+                "reduce_only": reduce_only,
+                "extra_params": order_params,
+            },
         )
 
     def test_connection(self) -> dict[str, Any]:
@@ -296,9 +447,24 @@ class MT5ConnectorClient(BaseConnectorClient):
             return price_hint
         return float(tick.ask if side == "buy" else tick.bid or price_hint)
 
-    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
         if self.connector.mode != "live":
-            return super().execute_market(symbol, side, quantity, price_hint)
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
         self._ensure_session()
         try:
             if not mt5.symbol_select(symbol, True):
@@ -336,7 +502,7 @@ class MT5ConnectorClient(BaseConnectorClient):
                 message="Live order submitted via MetaTrader5",
                 fill_price=float(getattr(result, "price", price) or price),
                 quantity=float(getattr(result, "volume", quantity) or quantity),
-                raw=result_dict,
+                raw={**result_dict, "reduce_only": reduce_only, "extra_params": extra_params or {}},
             )
         finally:
             self._shutdown()
@@ -366,9 +532,24 @@ class CTraderConnectorClient(BaseConnectorClient):
     def _bridge_url(self) -> str | None:
         return self.config.get("bridge_url") or self.secrets.get("bridge_url")
 
-    def execute_market(self, symbol: str, side: str, quantity: float, price_hint: float) -> ExecutionResult:
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
         if self.connector.mode != "live":
-            return super().execute_market(symbol, side, quantity, price_hint)
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
         bridge_url = self._bridge_url()
         if not bridge_url:
             return ExecutionResult(
@@ -376,13 +557,15 @@ class CTraderConnectorClient(BaseConnectorClient):
                 message="cTrader live mode requires a bridge_url or a dedicated Open API client implementation.",
                 fill_price=price_hint,
                 quantity=quantity,
-                raw={"platform": "ctrader"},
+                raw={"platform": "ctrader", "reduce_only": reduce_only, "extra_params": extra_params or {}},
             )
         payload = {
             "symbol": symbol,
             "side": side,
             "quantity": quantity,
             "price_hint": price_hint,
+            "reduce_only": reduce_only,
+            "extra_params": extra_params or {},
             "access_token": self.secrets.get("access_token"),
             "account_id": self.secrets.get("account_id"),
             "client_id": self.secrets.get("client_id"),
@@ -408,7 +591,6 @@ class CTraderConnectorClient(BaseConnectorClient):
             response = client.get(bridge_url.rstrip("/") + "/health")
             response.raise_for_status()
             return {"ok": True, "bridge": response.json()}
-
 
 
 def get_client(connector):
