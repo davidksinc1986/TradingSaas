@@ -27,6 +27,7 @@ class User(Base):
     connectors = relationship("Connector", back_populates="user", cascade="all, delete-orphan")
     trade_runs = relationship("TradeRun", back_populates="user", cascade="all, delete-orphan")
     trade_logs = relationship("TradeLog", back_populates="user", cascade="all, delete-orphan")
+    open_positions = relationship("OpenPosition", back_populates="user", cascade="all, delete-orphan")
     bot_sessions = relationship("BotSession", back_populates="user", cascade="all, delete-orphan")
     platform_grants = relationship("UserPlatformGrant", back_populates="user", cascade="all, delete-orphan")
     strategy_control = relationship("UserStrategyControl", back_populates="user", cascade="all, delete-orphan", uselist=False)
@@ -129,6 +130,7 @@ class Connector(Base):
     user = relationship("User", back_populates="connectors")
     trade_runs = relationship("TradeRun", back_populates="connector", cascade="all, delete-orphan")
     trade_logs = relationship("TradeLog", back_populates="connector", cascade="all, delete-orphan")
+    open_positions = relationship("OpenPosition", back_populates="connector", cascade="all, delete-orphan")
     bot_sessions = relationship("BotSession", back_populates="connector", cascade="all, delete-orphan")
 
 
@@ -175,8 +177,6 @@ class StrategyProfile(Base):
     params_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
-
-
 class StrategyTemplate(Base):
     __tablename__ = "strategy_templates"
 
@@ -188,6 +188,7 @@ class StrategyTemplate(Base):
     source_template_id: Mapped[int | None] = mapped_column(ForeignKey("strategy_templates.id"), nullable=True)
     config_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 
 class TradeRun(Base):
     __tablename__ = "trade_runs"
@@ -201,7 +202,7 @@ class TradeRun(Base):
     signal: Mapped[str] = mapped_column(String(20))
     ml_probability: Mapped[float] = mapped_column(Float, default=0.5)
     quantity: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String(20), default="queued")
+    status: Mapped[str] = mapped_column(String(30), default="queued")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -228,3 +229,27 @@ class TradeLog(Base):
 
     user = relationship("User", back_populates="trade_logs")
     connector = relationship("Connector", back_populates="trade_logs")
+
+
+class OpenPosition(Base):
+    __tablename__ = "open_positions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    connector_id: Mapped[int] = mapped_column(ForeignKey("connectors.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
+    market_type: Mapped[str] = mapped_column(String(20), default="spot", index=True)
+    symbol: Mapped[str] = mapped_column(String(100), index=True)
+    position_side: Mapped[str] = mapped_column(String(20), default="long", index=True)
+    entry_price: Mapped[float] = mapped_column(Float, default=0.0)
+    current_qty: Mapped[float] = mapped_column(Float, default=0.0)
+    is_open: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    source_trade_log_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_trade_log_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    user = relationship("User", back_populates="open_positions")
+    connector = relationship("Connector", back_populates="open_positions")
