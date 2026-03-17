@@ -208,7 +208,6 @@ STRATEGY_RULES = {
     "pairs_spread_proxy": {"market_types": ["spot"], "allow_short": False},
     "ema_rsi_adx_stack": {"market_types": ["spot"], "allow_short": False},
     "volatility_compression_breakout": {"market_types": ["spot", "futures"], "allow_short": True},
-
     "momentum_breakout": {"market_types": ["futures"], "allow_short": True},
     "macd_trend_pullback": {"market_types": ["futures"], "allow_short": True},
     "adx_trend_follow": {"market_types": ["futures"], "allow_short": True},
