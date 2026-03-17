@@ -198,3 +198,26 @@ FUTURES_TOP_STRATEGIES = [
 ]
 
 ALL_STRATEGIES = list(STRATEGY_MAP.keys())
+
+STRATEGY_RULES = {
+    "ema_rsi": {"market_types": ["spot"], "allow_short": False},
+    "mean_reversion_zscore": {"market_types": ["spot"], "allow_short": False},
+    "bollinger_rsi_reversal": {"market_types": ["spot"], "allow_short": False},
+    "stochastic_rebound": {"market_types": ["spot"], "allow_short": False},
+    "volatility_parity_rebalance": {"market_types": ["spot"], "allow_short": False},
+    "pairs_spread_proxy": {"market_types": ["spot"], "allow_short": False},
+    "ema_rsi_adx_stack": {"market_types": ["spot"], "allow_short": False},
+    "volatility_compression_breakout": {"market_types": ["spot", "futures"], "allow_short": True},
+
+    "momentum_breakout": {"market_types": ["futures"], "allow_short": True},
+    "macd_trend_pullback": {"market_types": ["futures"], "allow_short": True},
+    "adx_trend_follow": {"market_types": ["futures"], "allow_short": True},
+    "supertrend_volatility": {"market_types": ["futures"], "allow_short": True},
+    "kalman_trend_filter": {"market_types": ["futures"], "allow_short": True},
+    "atr_channel_breakout": {"market_types": ["futures"], "allow_short": True},
+    "volatility_breakout": {"market_types": ["futures"], "allow_short": True},
+}
+
+
+def get_strategy_rule(strategy_slug: str) -> dict:
+    return STRATEGY_RULES.get(strategy_slug, {"market_types": ["spot", "futures"], "allow_short": False})
