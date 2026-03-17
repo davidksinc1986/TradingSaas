@@ -5,14 +5,14 @@ from datetime import date, datetime, timedelta
 import json
 import logging
 
-from app.models import Connector, TradeLog, TradeRun, User, UserPlatformGrant
+from app.models import Connector, OpenPosition, TradeLog, TradeRun, User, UserPlatformGrant
+from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
 from app.services.connectors import get_client
 from app.services.indicators import add_indicators
 from app.services.market import synthetic_ohlcv
 from app.services.ml import train_and_score
-from app.services.risk import position_size
+from app.services.scanner import select_symbols_for_run
 from app.services.strategies import STRATEGY_MAP, get_strategy_rule
-from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
 
 logger = logging.getLogger("trading_saas.trading")
 
@@ -71,26 +71,29 @@ def _suggest_strategy_for_regime(regime: str, market_type: str) -> str:
 
 def _portfolio_risk_exceeded(db, user_id: int, max_open_positions: int, max_portfolio_risk: float) -> tuple[bool, dict]:
     if max_open_positions <= 0:
+        open_count = db.query(OpenPosition).filter(
+            OpenPosition.user_id == user_id,
+            OpenPosition.is_open.is_(True),
+            OpenPosition.current_qty > 0,
+        ).count()
         return False, {
-            "open_positions_estimate": 0,
+            "open_positions_estimate": open_count,
             "max_open_positions": "unlimited",
             "estimated_portfolio_risk": 0.0,
             "max_portfolio_risk": round(float(max_portfolio_risk), 4),
         }
 
-    hace_24_horas = datetime.utcnow() - timedelta(hours=24)
-
-    open_like = db.query(TradeRun).filter(
-        TradeRun.user_id == user_id,
-        TradeRun.status.in_(["executed", "order_submitted", "order_filled"]),
-        TradeRun.created_at >= hace_24_horas,
+    open_count = db.query(OpenPosition).filter(
+        OpenPosition.user_id == user_id,
+        OpenPosition.is_open.is_(True),
+        OpenPosition.current_qty > 0,
     ).count()
 
-    estimated_portfolio_risk = open_like * max(max_portfolio_risk / max(max_open_positions, 1), 0.0)
-    exceeded = open_like >= max_open_positions or estimated_portfolio_risk > max_portfolio_risk
+    estimated_portfolio_risk = open_count * max(max_portfolio_risk / max(max_open_positions, 1), 0.0)
+    exceeded = open_count >= max_open_positions or estimated_portfolio_risk > max_portfolio_risk
 
     return exceeded, {
-        "open_positions_estimate": open_like,
+        "open_positions_estimate": open_count,
         "max_open_positions": max_open_positions,
         "estimated_portfolio_risk": round(float(estimated_portfolio_risk), 4),
         "max_portfolio_risk": round(float(max_portfolio_risk), 4),
@@ -110,7 +113,105 @@ def _is_exit_intent(intent: str) -> bool:
     return intent in {"close_long", "close_short", "sell_spot_exit"}
 
 
+def _get_open_position(db, user_id: int, connector_id: int, symbol: str, position_side: str) -> OpenPosition | None:
+    return db.query(OpenPosition).filter(
+        OpenPosition.user_id == user_id,
+        OpenPosition.connector_id == connector_id,
+        OpenPosition.symbol == symbol,
+        OpenPosition.position_side == position_side,
+        OpenPosition.is_open.is_(True),
+    ).order_by(OpenPosition.updated_at.desc()).first()
+
+
+def _build_db_position_context(db, connector: Connector, symbol: str, market_type: str) -> dict:
+    long_pos = _get_open_position(db, connector.user_id, connector.id, symbol, "long")
+    short_pos = _get_open_position(db, connector.user_id, connector.id, symbol, "short")
+
+    long_qty = float(long_pos.current_qty or 0.0) if long_pos else 0.0
+    short_qty = float(short_pos.current_qty or 0.0) if short_pos else 0.0
+
+    if market_type == "spot":
+        return {
+            "market_type": "spot",
+            "symbol": symbol,
+            "has_position": long_qty > 0,
+            "spot_base_free": long_qty,
+            "spot_base_total": long_qty,
+            "net_contracts": 0.0,
+            "side": "long" if long_qty > 0 else None,
+            "db_entry_price": float(long_pos.entry_price or 0.0) if long_pos else 0.0,
+        }
+
+    net_contracts = long_qty - short_qty
+    detected_side = None
+    if net_contracts > 0:
+        detected_side = "long"
+    elif net_contracts < 0:
+        detected_side = "short"
+
+    return {
+        "market_type": "futures",
+        "symbol": symbol,
+        "has_position": net_contracts != 0,
+        "spot_base_free": 0.0,
+        "spot_base_total": 0.0,
+        "net_contracts": net_contracts,
+        "side": detected_side,
+        "db_long_qty": long_qty,
+        "db_short_qty": short_qty,
+        "db_long_entry": float(long_pos.entry_price or 0.0) if long_pos else 0.0,
+        "db_short_entry": float(short_pos.entry_price or 0.0) if short_pos else 0.0,
+    }
+
+
+def _effective_position_context(db, connector: Connector, client, symbol: str, market_type: str) -> dict:
+    db_ctx = _build_db_position_context(db, connector, symbol, market_type)
+    exchange_ctx = {}
+
+    try:
+        if hasattr(client, "fetch_position_context"):
+            exchange_ctx = client.fetch_position_context(symbol) or {}
+    except Exception as exc:
+        logger.warning("[POSITION_CONTEXT] symbol=%s exchange_context_error=%s", symbol, str(exc))
+        exchange_ctx = {}
+
+    mode_is_live = connector.mode == "live"
+
+    if market_type == "spot":
+        if mode_is_live and exchange_ctx:
+            spot_qty = float(exchange_ctx.get("spot_base_free") or exchange_ctx.get("spot_base_total") or 0.0)
+            return {
+                **db_ctx,
+                **exchange_ctx,
+                "effective_source": "exchange",
+                "effective_spot_qty": spot_qty,
+            }
+        return {
+            **db_ctx,
+            **exchange_ctx,
+            "effective_source": "db",
+            "effective_spot_qty": float(db_ctx.get("spot_base_free") or 0.0),
+        }
+
+    if mode_is_live and exchange_ctx:
+        net_contracts = float(exchange_ctx.get("net_contracts") or 0.0)
+        return {
+            **db_ctx,
+            **exchange_ctx,
+            "effective_source": "exchange",
+            "effective_net_contracts": net_contracts,
+        }
+
+    return {
+        **db_ctx,
+        **exchange_ctx,
+        "effective_source": "db",
+        "effective_net_contracts": float(db_ctx.get("net_contracts") or 0.0),
+    }
+
+
 def _resolve_trade_plan(
+    db,
     connector,
     client,
     strategy_slug: str,
@@ -127,8 +228,7 @@ def _resolve_trade_plan(
     if signal == "hold":
         return {"execute": False, "reason_code": "signal_hold", "intent": "none"}
 
-    ctx = client.fetch_position_context(normalized_symbol) if hasattr(client, "fetch_position_context") else {}
-    ctx = ctx or {}
+    ctx = _effective_position_context(db, connector, client, normalized_symbol, market_type)
 
     if market_type == "spot":
         if signal == "buy":
@@ -141,7 +241,7 @@ def _resolve_trade_plan(
                 "position_context": ctx,
             }
 
-        available_qty = float(ctx.get("spot_base_free") or ctx.get("spot_base_total") or 0.0)
+        available_qty = float(ctx.get("effective_spot_qty") or 0.0)
         if available_qty <= 0:
             return {
                 "execute": False,
@@ -169,7 +269,7 @@ def _resolve_trade_plan(
             "position_context": ctx,
         }
 
-    net_contracts = float(ctx.get("net_contracts") or 0.0)
+    net_contracts = float(ctx.get("effective_net_contracts") or 0.0)
 
     if signal == "buy":
         if net_contracts < 0:
@@ -219,6 +319,143 @@ def _resolve_trade_plan(
     return {"execute": False, "reason_code": "signal_hold", "intent": "none", "position_context": ctx}
 
 
+def _weighted_entry_price(old_qty: float, old_price: float, add_qty: float, add_price: float) -> float:
+    total_qty = max(old_qty + add_qty, 0.0)
+    if total_qty <= 0:
+        return 0.0
+    return ((old_qty * old_price) + (add_qty * add_price)) / total_qty
+
+
+def _close_position(position: OpenPosition, qty_to_reduce: float, trade_log_id: int):
+    remaining = max(float(position.current_qty or 0.0) - float(qty_to_reduce or 0.0), 0.0)
+    position.current_qty = remaining
+    position.last_trade_log_id = trade_log_id
+    position.updated_at = datetime.utcnow()
+    if remaining <= 1e-12:
+        position.current_qty = 0.0
+        position.is_open = False
+        position.closed_at = datetime.utcnow()
+
+
+def _open_or_increase_position(
+    db,
+    user_id: int,
+    connector: Connector,
+    symbol: str,
+    market_type: str,
+    position_side: str,
+    qty: float,
+    fill_price: float,
+    trade_log_id: int,
+):
+    position = _get_open_position(db, user_id, connector.id, symbol, position_side)
+    if position:
+        old_qty = float(position.current_qty or 0.0)
+        old_price = float(position.entry_price or 0.0)
+        position.entry_price = _weighted_entry_price(old_qty, old_price, qty, fill_price)
+        position.current_qty = old_qty + qty
+        position.last_trade_log_id = trade_log_id
+        position.updated_at = datetime.utcnow()
+        if not position.source_trade_log_id:
+            position.source_trade_log_id = trade_log_id
+        return position
+
+    position = OpenPosition(
+        user_id=user_id,
+        connector_id=connector.id,
+        platform=connector.platform,
+        market_type=market_type,
+        symbol=symbol,
+        position_side=position_side,
+        entry_price=float(fill_price),
+        current_qty=float(qty),
+        is_open=True,
+        opened_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        source_trade_log_id=trade_log_id,
+        last_trade_log_id=trade_log_id,
+        meta_json={},
+    )
+    db.add(position)
+    return position
+
+
+def _apply_execution_to_positions(
+    db,
+    user_id: int,
+    connector: Connector,
+    symbol: str,
+    market_type: str,
+    executed_side: str,
+    executed_qty: float,
+    fill_price: float,
+    reduce_only: bool,
+    trade_log_id: int,
+):
+    qty = float(executed_qty or 0.0)
+    if qty <= 0:
+        return
+
+    if market_type == "spot":
+        if executed_side == "buy":
+            _open_or_increase_position(
+                db=db,
+                user_id=user_id,
+                connector=connector,
+                symbol=symbol,
+                market_type="spot",
+                position_side="long",
+                qty=qty,
+                fill_price=fill_price,
+                trade_log_id=trade_log_id,
+            )
+            return
+
+        long_pos = _get_open_position(db, user_id, connector.id, symbol, "long")
+        if long_pos:
+            _close_position(long_pos, qty, trade_log_id)
+        return
+
+    if executed_side == "buy":
+        if reduce_only:
+            short_pos = _get_open_position(db, user_id, connector.id, symbol, "short")
+            if short_pos:
+                _close_position(short_pos, qty, trade_log_id)
+            return
+
+        _open_or_increase_position(
+            db=db,
+            user_id=user_id,
+            connector=connector,
+            symbol=symbol,
+            market_type="futures",
+            position_side="long",
+            qty=qty,
+            fill_price=fill_price,
+            trade_log_id=trade_log_id,
+        )
+        return
+
+    if executed_side == "sell":
+        if reduce_only:
+            long_pos = _get_open_position(db, user_id, connector.id, symbol, "long")
+            if long_pos:
+                _close_position(long_pos, qty, trade_log_id)
+            return
+
+        _open_or_increase_position(
+            db=db,
+            user_id=user_id,
+            connector=connector,
+            symbol=symbol,
+            market_type="futures",
+            position_side="short",
+            qty=qty,
+            fill_price=fill_price,
+            trade_log_id=trade_log_id,
+        )
+
+
 def run_strategy(
     db,
     user_id: int,
@@ -263,20 +500,13 @@ def run_strategy(
         cooldown_candles = int(cfg.get("cooldown_candles", 1) or 1)
         max_portfolio_risk = float(cfg.get("max_portfolio_risk", 0.05) or 0.05)
         extreme_move_halt_pct = float(cfg.get("extreme_move_halt_pct", 0.05) or 0.05)
-        smart_select_top_n = int(cfg.get("smart_select_top_n", 0) or 0)
 
-        symbols_to_run = list(symbols)
-        if smart_select_top_n > 0 and len(symbols) > smart_select_top_n:
-            ranked = []
-            for symbol in symbols:
-                tmp = add_indicators(synthetic_ohlcv(symbol=symbol, timeframe=timeframe))
-                if tmp.empty:
-                    continue
-                row = tmp.iloc[-1]
-                score = float(row.get("ret_5", 0) or 0) + float(row.get("vol_10", 0) or 0)
-                ranked.append((score, symbol))
-            ranked.sort(reverse=True)
-            symbols_to_run = [sym for _, sym in ranked[:smart_select_top_n]] or symbols_to_run
+        symbols_to_run, scanner_meta = select_symbols_for_run(
+            connector_id=connector.id,
+            timeframe=timeframe,
+            fallback_symbols=list(symbols),
+            cfg=cfg,
+        )
 
         for raw_symbol in symbols_to_run:
             df_raw = synthetic_ohlcv(symbol=raw_symbol, timeframe=timeframe)
@@ -288,6 +518,7 @@ def run_strategy(
             signal = base_strategy_fn(df_raw)
             prob = train_and_score(df_raw)
             price = float(row["close"])
+
             candle_snapshot = {
                 "open": round(float(row["open"]), 6),
                 "high": round(float(row["high"]), 6),
@@ -304,7 +535,6 @@ def run_strategy(
                 candle_snapshot["low"],
                 candle_snapshot["close"],
             )
-            logger.info("[PRICE_CHECK] symbol=%s entry_price=%s close_price=%s", raw_symbol, price, candle_snapshot["close"])
 
             regime = _detect_market_regime(row)
             active_strategy_slug = strategy_slug
@@ -352,12 +582,12 @@ def run_strategy(
             }
             normalized_symbol = symbol_info.get("normalized_symbol") or raw_symbol
             exchange_symbol = symbol_info.get("exchange_symbol") or str(normalized_symbol).replace("/", "")
-            logger.info("[ORDER_SYMBOL] display_symbol=%s exchange_symbol=%s", raw_symbol, exchange_symbol)
 
             connector_balance = connector_balance_hint(connector)
             stop_pct = float((cfg or {}).get("stop_pct", 0.01))
             risk_pct = float(risk_per_trade)
             atr_now = float(row.get("atr", 0) or 0)
+
             if dynamic_risk_enabled and atr_now > 0 and price > 0:
                 atr_ratio = min(max(atr_now / price, 0.002), 0.2)
                 risk_pct = min(max(risk_per_trade * (0.01 / atr_ratio), risk_per_trade * 0.5), risk_per_trade * 1.5)
@@ -369,26 +599,17 @@ def run_strategy(
             trade_mode = (getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
             fixed_amount = max(5.0, float(getattr(user, "fixed_trade_amount_usd", 10) or 10))
             balance_percent = float(getattr(user, "trade_balance_percent", 10) or 10)
+
             allocation_usd = (
                 max(5.0, connector_balance * max(0.0, min(balance_percent, 100.0)) / 100.0)
                 if trade_mode == "balance_percent"
                 else fixed_amount
             )
             qty = min(theoretical_qty, allocation_usd / max(price, 0.0000001))
+
             max_risk_amount = float((cfg or {}).get("max_risk_amount", 0) or 0)
             if max_risk_amount > 0:
                 qty = min(qty, max_risk_amount / max(price, 0.0000001))
-
-            logger.info(
-                "[SIZE_CALCULATION] balance=%s risk_pct=%s risk_usdt=%s entry_price=%s stop_loss_pct=%s position_notional=%s raw_qty=%s",
-                round(connector_balance, 6),
-                round(risk_pct, 6),
-                round(risk_usdt, 6),
-                round(price, 8),
-                round(stop_pct, 6),
-                round(position_notional, 6),
-                round(theoretical_qty, 8),
-            )
 
             exceeded, portfolio_state = _portfolio_risk_exceeded(
                 db,
@@ -404,12 +625,6 @@ def run_strategy(
             ).order_by(TradeRun.created_at.desc()).limit(cooldown_candles).all()
 
             in_cooldown = any(item.status in {"executed", "order_submitted", "order_filled"} for item in recent_same_symbol)
-            logger.info(
-                "[POSITION_CHECK] symbol=%s existing_position=%s max_positions=%s",
-                raw_symbol,
-                portfolio_state["open_positions_estimate"],
-                max_open_positions,
-            )
 
             volatility_ok = True
             if atr_volatility_filter_enabled:
@@ -419,6 +634,7 @@ def run_strategy(
             extreme_move = abs(float(row.get("ret_5", 0) or 0)) >= extreme_move_halt_pct
 
             trade_plan = _resolve_trade_plan(
+                db=db,
                 connector=connector,
                 client=client,
                 strategy_slug=active_strategy_slug,
@@ -466,6 +682,8 @@ def run_strategy(
                 "strategy": active_strategy_slug,
                 "strategy_requested": strategy_slug,
                 "market_regime": regime,
+                "scanner_meta": scanner_meta,
+                "scanner_signal_input_symbol": raw_symbol,
                 "scanner": {
                     "signal": signal,
                     "ml_probability": round(prob, 6),
@@ -561,15 +779,6 @@ def run_strategy(
             final_qty = float(validation.get("normalized_quantity") or 0)
             final_price = float(validation.get("normalized_price") or price)
 
-            logger.info(
-                "[EXCHANGE_FILTERS] symbol=%s min_qty=%s step_size=%s tick_size=%s qty_after_round=%s",
-                raw_symbol,
-                validation.get("exchange_filters", {}).get("min_qty"),
-                validation.get("exchange_filters", {}).get("step_size"),
-                validation.get("exchange_filters", {}).get("tick_size"),
-                round(final_qty, 8),
-            )
-
             if not validation.get("ok"):
                 reason_code = validation.get("reason_code") or "rejected_exchange_filter"
                 trade_run.status = reason_code
@@ -617,6 +826,7 @@ def run_strategy(
 
             leverage = cfg.get("leverage")
             margin_type = cfg.get("margin_type", "cross")
+
             logger.info(
                 "[ORDER_PAYLOAD] symbol=%s side=%s order_type=market quantity=%s leverage=%s margin_type=%s reduce_only=%s intent=%s market_type=%s",
                 exchange_symbol,
@@ -684,19 +894,10 @@ def run_strategy(
                 stop_loss_price = fill_price * (1 + (stop_loss_value / 100)) if stop_loss_mode == "percent" else fill_price + stop_loss_value
                 take_profit_price = fill_price * (1 - (take_profit_value / 100)) if take_profit_mode == "percent" else max(fill_price - take_profit_value, 0)
 
-            logger.info(
-                "[EXIT_PLAN] tp_pct=%s sl_pct=%s trailing_pct=%s tp_price=%s sl_price=%s",
-                take_profit_value,
-                stop_loss_value,
-                trailing_stop_value,
-                round(take_profit_price, 8),
-                round(stop_loss_price, 8),
-            )
-
             result_status = str(result.status or "submitted").lower()
             final_status = "order_filled" if "filled" in result_status else "order_submitted"
 
-            db.add(TradeLog(
+            trade_log = TradeLog(
                 user_id=user_id,
                 connector_id=connector.id,
                 platform=connector.platform,
@@ -730,8 +931,24 @@ def run_strategy(
                     "market_type": market_type,
                     "trade_plan": trade_plan,
                     "reduce_only": reduce_only,
+                    "scanner_meta": scanner_meta,
                 },
-            ))
+            )
+            db.add(trade_log)
+            db.flush()
+
+            _apply_execution_to_positions(
+                db=db,
+                user_id=user_id,
+                connector=connector,
+                symbol=normalized_symbol,
+                market_type=market_type,
+                executed_side=planned_side,
+                executed_qty=float(result.quantity or final_qty),
+                fill_price=float(result.fill_price or final_price),
+                reduce_only=reduce_only,
+                trade_log_id=trade_log.id,
+            )
 
             trade_run.status = final_status
             trade_run.notes = json.dumps({
@@ -842,7 +1059,13 @@ def dashboard_data(db, user_id: int):
     connectors = db.query(Connector).filter(Connector.user_id == user_id).all()
     trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.desc()).limit(20).all()
     all_trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).all()
+    open_positions = db.query(OpenPosition).filter(
+        OpenPosition.user_id == user_id,
+        OpenPosition.is_open.is_(True),
+        OpenPosition.current_qty > 0,
+    ).all()
     grants = db.query(UserPlatformGrant).filter(UserPlatformGrant.user_id == user_id).all()
+
     pnl = sum(t.pnl for t in all_trades)
     total_invested = sum((t.quantity or 0) * (t.price or 0) for t in all_trades)
     pnl_percent = (pnl / total_invested * 100) if total_invested > 0 else 0.0
@@ -855,6 +1078,21 @@ def dashboard_data(db, user_id: int):
         "total_connectors": len(connectors),
         "enabled_connectors": sum(1 for c in connectors if c.is_enabled),
         "total_trades": len(all_trades),
+        "open_positions_count": len(open_positions),
+        "open_positions": [
+            {
+                "id": p.id,
+                "platform": p.platform,
+                "market_type": p.market_type,
+                "symbol": p.symbol,
+                "position_side": p.position_side,
+                "entry_price": p.entry_price,
+                "current_qty": p.current_qty,
+                "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+            }
+            for p in open_positions
+        ],
         "realized_pnl": round(pnl, 2),
         "total_invested": round(total_invested, 2),
         "realized_pnl_percent": round(pnl_percent, 2),
