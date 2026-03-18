@@ -17,9 +17,21 @@ from app.services.strategies import STRATEGY_MAP, get_strategy_rule
 logger = logging.getLogger("trading_saas.trading")
 
 
-def connector_balance_hint(connector: Connector) -> float:
-    default_balance = float((connector.config_json or {}).get("paper_balance", 10000))
-    return max(default_balance, 100.0)
+def connector_balance_hint(connector: Connector, client=None) -> float:
+    cfg = connector.config_json or {}
+
+    if connector.mode == "live" and client and hasattr(client, "fetch_available_balance"):
+        try:
+            balance_info = client.fetch_available_balance() or {}
+            available = float(balance_info.get("available_balance") or 0.0)
+            min_balance_floor = float(cfg.get("min_balance_floor", 5.0) or 5.0)
+            if available > 0:
+                return max(available, min_balance_floor)
+        except Exception as exc:
+            logger.warning("[BALANCE_HINT] live balance fetch failed connector_id=%s error=%s", connector.id, str(exc))
+
+    default_balance = float(cfg.get("paper_balance", 1000) or 1000)
+    return max(default_balance, 5.0)
 
 
 def enforce_daily_limit(db, connector: Connector):
@@ -583,7 +595,7 @@ def run_strategy(
             normalized_symbol = symbol_info.get("normalized_symbol") or raw_symbol
             exchange_symbol = symbol_info.get("exchange_symbol") or str(normalized_symbol).replace("/", "")
 
-            connector_balance = connector_balance_hint(connector)
+            connector_balance = connector_balance_hint(connector, client)
             stop_pct = float((cfg or {}).get("stop_pct", 0.01))
             risk_pct = float(risk_per_trade)
             atr_now = float(row.get("atr", 0) or 0)
@@ -600,12 +612,30 @@ def run_strategy(
             fixed_amount = max(5.0, float(getattr(user, "fixed_trade_amount_usd", 10) or 10))
             balance_percent = float(getattr(user, "trade_balance_percent", 10) or 10)
 
-            allocation_usd = (
-                max(5.0, connector_balance * max(0.0, min(balance_percent, 100.0)) / 100.0)
-                if trade_mode == "balance_percent"
-                else fixed_amount
-            )
-            qty = min(theoretical_qty, allocation_usd / max(price, 0.0000001))
+            if trade_mode == "balance_percent":
+                allocation_usd = connector_balance * max(0.0, min(balance_percent, 100.0)) / 100.0
+            else:
+                allocation_usd = fixed_amount
+
+            min_trade_usd = float(cfg.get("min_trade_usd", 5.0) or 5.0)
+            max_trade_usd = float(cfg.get("max_trade_usd", 0) or 0)
+
+            allocation_usd = max(0.0, allocation_usd)
+            if max_trade_usd > 0:
+                allocation_usd = min(allocation_usd, max_trade_usd)
+
+            if market_type == "spot":
+                usable_allocation_usd = min(allocation_usd, connector_balance * 0.98)
+            else:
+                leverage_value = float(cfg.get("leverage", 1) or 1)
+                leverage_value = max(leverage_value, 1.0)
+                max_notional_from_balance = connector_balance * leverage_value * 0.95
+                usable_allocation_usd = min(allocation_usd, max_notional_from_balance)
+
+            if usable_allocation_usd < min_trade_usd:
+                usable_allocation_usd = min(usable_allocation_usd, connector_balance)
+
+            qty = min(theoretical_qty, usable_allocation_usd / max(price, 0.0000001))
 
             max_risk_amount = float((cfg or {}).get("max_risk_amount", 0) or 0)
             if max_risk_amount > 0:
@@ -694,7 +724,9 @@ def run_strategy(
                 "bot_session_id": bot_session_id,
                 "trade_amount_mode": trade_mode,
                 "allocation_usd": round(allocation_usd, 4),
+                "usable_allocation_usd": round(usable_allocation_usd, 4),
                 "size_model": {
+                    "connector_balance": round(float(connector_balance), 8),
                     "risk_per_trade": risk_pct,
                     "risk_usdt": round(float(risk_usdt), 8),
                     "stop_pct": stop_pct,
