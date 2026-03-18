@@ -1,1165 +1,744 @@
 from __future__ import annotations
 
-from collections import Counter
-from datetime import date, datetime, timedelta
-import json
-import logging
+from dataclasses import dataclass
+from typing import Any
 
-from app.models import Connector, OpenPosition, TradeLog, TradeRun, User, UserPlatformGrant
-from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
-from app.services.connectors import get_client
-from app.services.indicators import add_indicators
-from app.services.market import synthetic_ohlcv
-from app.services.ml import train_and_score
-from app.services.scanner import select_symbols_for_run
-from app.services.strategies import STRATEGY_MAP, get_strategy_rule
+import httpx
 
-logger = logging.getLogger("trading_saas.trading")
+from app.security import decrypt_payload
 
+try:
+    import ccxt
+except Exception:
+    ccxt = None
 
-def connector_balance_hint(connector: Connector, client=None) -> float:
-    cfg = connector.config_json or {}
-
-    if connector.mode == "live" and client and hasattr(client, "fetch_available_balance"):
-        try:
-            balance_info = client.fetch_available_balance() or {}
-            available = float(balance_info.get("available_balance") or 0.0)
-            min_balance_floor = float(cfg.get("min_balance_floor", 5.0) or 5.0)
-            if available > 0:
-                return max(available, min_balance_floor)
-        except Exception as exc:
-            logger.warning("[BALANCE_HINT] live balance fetch failed connector_id=%s error=%s", connector.id, str(exc))
-
-    default_balance = float(cfg.get("paper_balance", 1000) or 1000)
-    return max(default_balance, 5.0)
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
 
 
-def enforce_daily_limit(db, connector: Connector):
-    grant = db.query(UserPlatformGrant).filter(
-        UserPlatformGrant.user_id == connector.user_id,
-        UserPlatformGrant.platform == connector.platform,
-    ).first()
-    if not grant:
-        return
-    today = date.today().isoformat()
-    count = db.query(TradeLog).filter(
-        TradeLog.user_id == connector.user_id,
-        TradeLog.connector_id == connector.id,
-    ).all()
-    count_today = sum(1 for item in count if item.created_at.date().isoformat() == today)
-    if count_today >= grant.max_daily_movements:
-        raise RuntimeError(f"Daily movement limit reached for {connector.platform}: {grant.max_daily_movements}")
+@dataclass
+class ExecutionResult:
+    status: str
+    message: str
+    fill_price: float
+    quantity: float
+    raw: dict[str, Any]
 
 
-def _detect_market_regime(row) -> str:
-    adx = float(row.get("adx", 0) or 0)
-    bb_width = float(row.get("bb_width", 0) or 0)
-    atr_contraction = float(row.get("atr_contraction", 1) or 1)
-    if adx >= 25:
-        return "trending"
-    if bb_width < 0.03 and atr_contraction < 0.95:
-        return "compression"
-    if bb_width > 0.08:
-        return "high_volatility"
-    return "ranging"
+class BaseConnectorClient:
+    def __init__(self, connector):
+        self.connector = connector
+        self.secrets = decrypt_payload(connector.encrypted_secret_blob)
+        self.config = connector.config_json or {}
 
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            status="paper-filled",
+            message="Paper execution completed",
+            fill_price=price_hint,
+            quantity=quantity,
+            raw={
+                "mode": self.connector.mode,
+                "platform": self.connector.platform,
+                "market_type": getattr(self.connector, "market_type", "spot"),
+                "reduce_only": reduce_only,
+                "extra_params": extra_params or {},
+            },
+        )
 
-def _suggest_strategy_for_regime(regime: str, market_type: str) -> str:
-    spot_mapping = {
-        "trending": "ema_rsi_adx_stack",
-        "compression": "volatility_compression_breakout",
-        "high_volatility": "stochastic_rebound",
-        "ranging": "mean_reversion_zscore",
-    }
-    futures_mapping = {
-        "trending": "momentum_breakout",
-        "compression": "volatility_compression_breakout",
-        "high_volatility": "atr_channel_breakout",
-        "ranging": "macd_trend_pullback",
-    }
-    mapping = futures_mapping if market_type == "futures" else spot_mapping
-    return mapping.get(regime, "ema_rsi" if market_type == "spot" else "momentum_breakout")
-
-
-def _portfolio_risk_exceeded(db, user_id: int, max_open_positions: int, max_portfolio_risk: float) -> tuple[bool, dict]:
-    if max_open_positions <= 0:
-        open_count = db.query(OpenPosition).filter(
-            OpenPosition.user_id == user_id,
-            OpenPosition.is_open.is_(True),
-            OpenPosition.current_qty > 0,
-        ).count()
-        return False, {
-            "open_positions_estimate": open_count,
-            "max_open_positions": "unlimited",
-            "estimated_portfolio_risk": 0.0,
-            "max_portfolio_risk": round(float(max_portfolio_risk), 4),
+    def normalize_symbol(self, symbol: str) -> dict[str, Any]:
+        clean = (symbol or "").strip().upper()
+        return {
+            "input_symbol": symbol,
+            "normalized_symbol": clean,
+            "exchange_symbol": clean.replace("/", ""),
+            "found": True,
         }
 
-    open_count = db.query(OpenPosition).filter(
-        OpenPosition.user_id == user_id,
-        OpenPosition.is_open.is_(True),
-        OpenPosition.current_qty > 0,
-    ).count()
-
-    estimated_portfolio_risk = open_count * max(max_portfolio_risk / max(max_open_positions, 1), 0.0)
-    exceeded = open_count >= max_open_positions or estimated_portfolio_risk > max_portfolio_risk
-
-    return exceeded, {
-        "open_positions_estimate": open_count,
-        "max_open_positions": max_open_positions,
-        "estimated_portfolio_risk": round(float(estimated_portfolio_risk), 4),
-        "max_portfolio_risk": round(float(max_portfolio_risk), 4),
-    }
-
-
-def _timeframe_for_confirmation(base_timeframe: str) -> str:
-    tf = (base_timeframe or "").lower()
-    if tf in {"1m", "3m", "5m", "15m", "30m"}:
-        return "4h"
-    if tf in {"1h", "2h"}:
-        return "1d"
-    return "4h"
-
-
-def _is_exit_intent(intent: str) -> bool:
-    return intent in {"close_long", "close_short", "sell_spot_exit"}
-
-
-def _get_open_position(db, user_id: int, connector_id: int, symbol: str, position_side: str) -> OpenPosition | None:
-    return db.query(OpenPosition).filter(
-        OpenPosition.user_id == user_id,
-        OpenPosition.connector_id == connector_id,
-        OpenPosition.symbol == symbol,
-        OpenPosition.position_side == position_side,
-        OpenPosition.is_open.is_(True),
-    ).order_by(OpenPosition.updated_at.desc()).first()
-
-
-def _build_db_position_context(db, connector: Connector, symbol: str, market_type: str) -> dict:
-    long_pos = _get_open_position(db, connector.user_id, connector.id, symbol, "long")
-    short_pos = _get_open_position(db, connector.user_id, connector.id, symbol, "short")
-
-    long_qty = float(long_pos.current_qty or 0.0) if long_pos else 0.0
-    short_qty = float(short_pos.current_qty or 0.0) if short_pos else 0.0
-
-    if market_type == "spot":
+    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
         return {
-            "market_type": "spot",
+            "ok": quantity > 0,
+            "normalized_quantity": float(quantity),
+            "normalized_price": float(price_hint),
+            "reason_code": "ok" if quantity > 0 else "rejected_invalid_quantity",
+            "exchange_filters": {},
+        }
+
+    def test_connection(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "platform": self.connector.platform,
+            "mode": self.connector.mode,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+        }
+
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        return {
+            "market_type": getattr(self.connector, "market_type", "spot"),
             "symbol": symbol,
-            "has_position": long_qty > 0,
-            "spot_base_free": long_qty,
-            "spot_base_total": long_qty,
+            "has_position": False,
+            "spot_base_free": 0.0,
+            "spot_base_total": 0.0,
             "net_contracts": 0.0,
-            "side": "long" if long_qty > 0 else None,
-            "db_entry_price": float(long_pos.entry_price or 0.0) if long_pos else 0.0,
+            "side": None,
         }
 
-    net_contracts = long_qty - short_qty
-    detected_side = None
-    if net_contracts > 0:
-        detected_side = "long"
-    elif net_contracts < 0:
-        detected_side = "short"
-
-    return {
-        "market_type": "futures",
-        "symbol": symbol,
-        "has_position": net_contracts != 0,
-        "spot_base_free": 0.0,
-        "spot_base_total": 0.0,
-        "net_contracts": net_contracts,
-        "side": detected_side,
-        "db_long_qty": long_qty,
-        "db_short_qty": short_qty,
-        "db_long_entry": float(long_pos.entry_price or 0.0) if long_pos else 0.0,
-        "db_short_entry": float(short_pos.entry_price or 0.0) if short_pos else 0.0,
-    }
-
-
-def _effective_position_context(db, connector: Connector, client, symbol: str, market_type: str) -> dict:
-    db_ctx = _build_db_position_context(db, connector, symbol, market_type)
-    exchange_ctx = {}
-
-    try:
-        if hasattr(client, "fetch_position_context"):
-            exchange_ctx = client.fetch_position_context(symbol) or {}
-    except Exception as exc:
-        logger.warning("[POSITION_CONTEXT] symbol=%s exchange_context_error=%s", symbol, str(exc))
-        exchange_ctx = {}
-
-    mode_is_live = connector.mode == "live"
-
-    if market_type == "spot":
-        if mode_is_live and exchange_ctx:
-            spot_qty = float(exchange_ctx.get("spot_base_free") or exchange_ctx.get("spot_base_total") or 0.0)
-            return {
-                **db_ctx,
-                **exchange_ctx,
-                "effective_source": "exchange",
-                "effective_spot_qty": spot_qty,
-            }
+    def fetch_available_balance(self) -> dict[str, Any]:
+        fallback = float((self.config or {}).get("paper_balance", 1000) or 1000)
         return {
-            **db_ctx,
-            **exchange_ctx,
-            "effective_source": "db",
-            "effective_spot_qty": float(db_ctx.get("spot_base_free") or 0.0),
+            "ok": True,
+            "mode": self.connector.mode,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+            "quote_asset": "USDT",
+            "available_balance": fallback,
+            "total_balance": fallback,
+            "source": "paper_hint",
         }
 
-    if mode_is_live and exchange_ctx:
-        net_contracts = float(exchange_ctx.get("net_contracts") or 0.0)
-        return {
-            **db_ctx,
-            **exchange_ctx,
-            "effective_source": "exchange",
-            "effective_net_contracts": net_contracts,
+
+class CCXTConnectorClient(BaseConnectorClient):
+    def __init__(self, connector):
+        super().__init__(connector)
+        self._markets_cache: dict[str, Any] | None = None
+
+    def build_exchange(self):
+        if ccxt is None:
+            raise RuntimeError("ccxt is not installed")
+
+        exchange_class = getattr(ccxt, self.connector.platform)
+        kwargs = {
+            "apiKey": self.secrets.get("api_key"),
+            "secret": self.secrets.get("secret_key"),
+            "enableRateLimit": True,
         }
 
-    return {
-        **db_ctx,
-        **exchange_ctx,
-        "effective_source": "db",
-        "effective_net_contracts": float(db_ctx.get("net_contracts") or 0.0),
-    }
+        if self.connector.platform == "okx" and self.secrets.get("passphrase"):
+            kwargs["password"] = self.secrets.get("passphrase")
+        if self.secrets.get("password"):
+            kwargs["password"] = self.secrets.get("password")
 
+        options = {}
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
 
-def _resolve_trade_plan(
-    db,
-    connector,
-    client,
-    strategy_slug: str,
-    signal: str,
-    normalized_symbol: str,
-    desired_qty: float,
-    price_hint: float,
-    cfg: dict,
-) -> dict:
-    market_type = (getattr(connector, "market_type", None) or cfg.get("market_type") or "spot").lower()
-    strategy_rule = get_strategy_rule(strategy_slug)
-    allow_short = bool(strategy_rule.get("allow_short", False))
+        if self.connector.platform in {"binance", "bybit", "okx"}:
+            options["defaultType"] = "future" if market_type == "futures" else "spot"
 
-    if signal == "hold":
-        return {"execute": False, "reason_code": "signal_hold", "intent": "none"}
+        if self.config.get("sandbox"):
+            options["sandboxMode"] = True
 
-    ctx = _effective_position_context(db, connector, client, normalized_symbol, market_type)
+        if options:
+            kwargs["options"] = options
 
-    if market_type == "spot":
-        if signal == "buy":
+        exchange = exchange_class(kwargs)
+
+        if self.config.get("sandbox") and hasattr(exchange, "set_sandbox_mode"):
+            exchange.set_sandbox_mode(True)
+
+        return exchange
+
+    def _load_markets(self, exchange) -> dict[str, Any]:
+        if self._markets_cache is None:
+            self._markets_cache = exchange.load_markets()
+        return self._markets_cache
+
+    def _market(self, exchange, symbol: str) -> dict[str, Any] | None:
+        markets = self._load_markets(exchange)
+        return markets.get(symbol)
+
+    def normalize_symbol(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        markets = self._load_markets(exchange)
+        candidate = (symbol or "").strip().upper()
+
+        if candidate in markets:
+            market = markets[candidate]
             return {
-                "execute": True,
-                "intent": "open_long",
-                "side": "buy",
-                "quantity": float(desired_qty),
-                "reduce_only": False,
-                "position_context": ctx,
-            }
-
-        available_qty = float(ctx.get("effective_spot_qty") or 0.0)
-        if available_qty <= 0:
-            return {
-                "execute": False,
-                "reason_code": "skipped_no_spot_balance",
-                "intent": "none",
-                "position_context": ctx,
-            }
-
-        sell_full_balance = bool(cfg.get("spot_sell_full_balance", True))
-        sell_qty = available_qty if sell_full_balance else min(float(desired_qty), available_qty)
-        if sell_qty <= 0:
-            return {
-                "execute": False,
-                "reason_code": "rejected_invalid_quantity",
-                "intent": "none",
-                "position_context": ctx,
-            }
-
-        return {
-            "execute": True,
-            "intent": "sell_spot_exit",
-            "side": "sell",
-            "quantity": float(sell_qty),
-            "reduce_only": False,
-            "position_context": ctx,
-        }
-
-    net_contracts = float(ctx.get("effective_net_contracts") or 0.0)
-
-    if signal == "buy":
-        if net_contracts < 0:
-            return {
-                "execute": True,
-                "intent": "close_short",
-                "side": "buy",
-                "quantity": abs(net_contracts),
-                "reduce_only": True,
-                "position_context": ctx,
-            }
-        return {
-            "execute": True,
-            "intent": "open_long",
-            "side": "buy",
-            "quantity": float(desired_qty),
-            "reduce_only": False,
-            "position_context": ctx,
-        }
-
-    if signal == "sell":
-        if net_contracts > 0:
-            return {
-                "execute": True,
-                "intent": "close_long",
-                "side": "sell",
-                "quantity": abs(net_contracts),
-                "reduce_only": True,
-                "position_context": ctx,
-            }
-        if not allow_short:
-            return {
-                "execute": False,
-                "reason_code": "skipped_short_disabled",
-                "intent": "none",
-                "position_context": ctx,
-            }
-        return {
-            "execute": True,
-            "intent": "open_short",
-            "side": "sell",
-            "quantity": float(desired_qty),
-            "reduce_only": False,
-            "position_context": ctx,
-        }
-
-    return {"execute": False, "reason_code": "signal_hold", "intent": "none", "position_context": ctx}
-
-
-def _weighted_entry_price(old_qty: float, old_price: float, add_qty: float, add_price: float) -> float:
-    total_qty = max(old_qty + add_qty, 0.0)
-    if total_qty <= 0:
-        return 0.0
-    return ((old_qty * old_price) + (add_qty * add_price)) / total_qty
-
-
-def _close_position(position: OpenPosition, qty_to_reduce: float, trade_log_id: int):
-    remaining = max(float(position.current_qty or 0.0) - float(qty_to_reduce or 0.0), 0.0)
-    position.current_qty = remaining
-    position.last_trade_log_id = trade_log_id
-    position.updated_at = datetime.utcnow()
-    if remaining <= 1e-12:
-        position.current_qty = 0.0
-        position.is_open = False
-        position.closed_at = datetime.utcnow()
-
-
-def _open_or_increase_position(
-    db,
-    user_id: int,
-    connector: Connector,
-    symbol: str,
-    market_type: str,
-    position_side: str,
-    qty: float,
-    fill_price: float,
-    trade_log_id: int,
-):
-    position = _get_open_position(db, user_id, connector.id, symbol, position_side)
-    if position:
-        old_qty = float(position.current_qty or 0.0)
-        old_price = float(position.entry_price or 0.0)
-        position.entry_price = _weighted_entry_price(old_qty, old_price, qty, fill_price)
-        position.current_qty = old_qty + qty
-        position.last_trade_log_id = trade_log_id
-        position.updated_at = datetime.utcnow()
-        if not position.source_trade_log_id:
-            position.source_trade_log_id = trade_log_id
-        return position
-
-    position = OpenPosition(
-        user_id=user_id,
-        connector_id=connector.id,
-        platform=connector.platform,
-        market_type=market_type,
-        symbol=symbol,
-        position_side=position_side,
-        entry_price=float(fill_price),
-        current_qty=float(qty),
-        is_open=True,
-        opened_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-        source_trade_log_id=trade_log_id,
-        last_trade_log_id=trade_log_id,
-        meta_json={},
-    )
-    db.add(position)
-    return position
-
-
-def _apply_execution_to_positions(
-    db,
-    user_id: int,
-    connector: Connector,
-    symbol: str,
-    market_type: str,
-    executed_side: str,
-    executed_qty: float,
-    fill_price: float,
-    reduce_only: bool,
-    trade_log_id: int,
-):
-    qty = float(executed_qty or 0.0)
-    if qty <= 0:
-        return
-
-    if market_type == "spot":
-        if executed_side == "buy":
-            _open_or_increase_position(
-                db=db,
-                user_id=user_id,
-                connector=connector,
-                symbol=symbol,
-                market_type="spot",
-                position_side="long",
-                qty=qty,
-                fill_price=fill_price,
-                trade_log_id=trade_log_id,
-            )
-            return
-
-        long_pos = _get_open_position(db, user_id, connector.id, symbol, "long")
-        if long_pos:
-            _close_position(long_pos, qty, trade_log_id)
-        return
-
-    if executed_side == "buy":
-        if reduce_only:
-            short_pos = _get_open_position(db, user_id, connector.id, symbol, "short")
-            if short_pos:
-                _close_position(short_pos, qty, trade_log_id)
-            return
-
-        _open_or_increase_position(
-            db=db,
-            user_id=user_id,
-            connector=connector,
-            symbol=symbol,
-            market_type="futures",
-            position_side="long",
-            qty=qty,
-            fill_price=fill_price,
-            trade_log_id=trade_log_id,
-        )
-        return
-
-    if executed_side == "sell":
-        if reduce_only:
-            long_pos = _get_open_position(db, user_id, connector.id, symbol, "long")
-            if long_pos:
-                _close_position(long_pos, qty, trade_log_id)
-            return
-
-        _open_or_increase_position(
-            db=db,
-            user_id=user_id,
-            connector=connector,
-            symbol=symbol,
-            market_type="futures",
-            position_side="short",
-            qty=qty,
-            fill_price=fill_price,
-            trade_log_id=trade_log_id,
-        )
-
-
-def run_strategy(
-    db,
-    user_id: int,
-    connector_ids: list[int],
-    symbols: list[str],
-    timeframe: str,
-    strategy_slug: str,
-    risk_per_trade: float,
-    min_ml_probability: float,
-    use_live_if_available: bool,
-    take_profit_mode: str = "percent",
-    take_profit_value: float = 1.5,
-    stop_loss_mode: str = "percent",
-    stop_loss_value: float = 1.0,
-    trailing_stop_mode: str = "percent",
-    trailing_stop_value: float = 0.8,
-    indicator_exit_enabled: bool = False,
-    indicator_exit_rule: str = "macd_cross",
-    leverage_profile: str = "none",
-    max_open_positions: int = 0,
-    compound_growth_enabled: bool = False,
-    atr_volatility_filter_enabled: bool = True,
-    run_source: str = "manual",
-    bot_session_id: int | None = None,
-):
-    base_strategy_fn = STRATEGY_MAP[strategy_slug]
-    user = db.query(User).filter(User.id == user_id).first()
-    connectors = db.query(Connector).filter(
-        Connector.user_id == user_id,
-        Connector.id.in_(connector_ids),
-        Connector.is_enabled.is_(True),
-    ).all()
-    outputs = []
-
-    for connector in connectors:
-        client = get_client(connector)
-        cfg = connector.config_json or {}
-        market_type = (getattr(connector, "market_type", None) or cfg.get("market_type") or "spot").lower()
-        dynamic_risk_enabled = bool(cfg.get("dynamic_risk_enabled", True))
-        auto_regime_switch = bool(cfg.get("auto_regime_switch", True))
-        multi_tf_confirmation_enabled = bool(cfg.get("multi_tf_confirmation_enabled", True))
-        cooldown_candles = int(cfg.get("cooldown_candles", 1) or 1)
-        max_portfolio_risk = float(cfg.get("max_portfolio_risk", 0.05) or 0.05)
-
-        base_extreme_move_halt_pct = float(cfg.get("extreme_move_halt_pct", 0.08) or 0.08)
-        dynamic_circuit_breaker_enabled = bool(cfg.get("dynamic_circuit_breaker_enabled", True))
-        dynamic_circuit_breaker_multiplier = float(cfg.get("dynamic_circuit_breaker_multiplier", 2.5) or 2.5)
-        dynamic_circuit_breaker_min = float(cfg.get("dynamic_circuit_breaker_min", 0.05) or 0.05)
-        dynamic_circuit_breaker_max = float(cfg.get("dynamic_circuit_breaker_max", 0.15) or 0.15)
-
-        symbols_to_run, scanner_meta = select_symbols_for_run(
-            connector_id=connector.id,
-            timeframe=timeframe,
-            fallback_symbols=list(symbols),
-            cfg=cfg,
-        )
-
-        for raw_symbol in symbols_to_run:
-            df_raw = synthetic_ohlcv(symbol=raw_symbol, timeframe=timeframe)
-            df = add_indicators(df_raw)
-            if df.empty:
-                continue
-
-            row = df.iloc[-1]
-            signal = base_strategy_fn(df_raw)
-            prob = train_and_score(df_raw)
-            price = float(row["close"])
-
-            candle_snapshot = {
-                "open": round(float(row["open"]), 6),
-                "high": round(float(row["high"]), 6),
-                "low": round(float(row["low"]), 6),
-                "close": round(float(row["close"]), 6),
-                "volume": round(float(row["volume"]), 6),
-            }
-
-            logger.info(
-                "[RAW_MARKET_DATA] symbol=%s open=%s high=%s low=%s close=%s",
-                raw_symbol,
-                candle_snapshot["open"],
-                candle_snapshot["high"],
-                candle_snapshot["low"],
-                candle_snapshot["close"],
-            )
-
-            regime = _detect_market_regime(row)
-            active_strategy_slug = strategy_slug
-            if auto_regime_switch:
-                suggested = _suggest_strategy_for_regime(regime, market_type)
-                if suggested in STRATEGY_MAP:
-                    active_strategy_slug = suggested
-                    signal = STRATEGY_MAP[active_strategy_slug](df_raw)
-
-            strategy_rule = get_strategy_rule(active_strategy_slug)
-            allowed_markets = strategy_rule.get("market_types", ["spot", "futures"])
-            if market_type not in allowed_markets:
-                trade_run = TradeRun(
-                    user_id=user_id,
-                    connector_id=connector.id,
-                    strategy_slug=active_strategy_slug,
-                    symbol=raw_symbol,
-                    timeframe=timeframe,
-                    signal="hold",
-                    ml_probability=prob,
-                    quantity=0.0,
-                    status="skipped_strategy_market_mismatch",
-                    notes=json.dumps({
-                        "market_type": market_type,
-                        "strategy": active_strategy_slug,
-                        "reason_code": "skipped_strategy_market_mismatch",
-                    }),
-                )
-                db.add(trade_run)
-                outputs.append({
-                    "connector": connector.label,
-                    "platform": connector.platform,
-                    "symbol": raw_symbol,
-                    "signal": "hold",
-                    "ml_probability": round(prob, 4),
-                    "status": "skipped_strategy_market_mismatch",
-                })
-                continue
-
-            symbol_info = client.normalize_symbol(raw_symbol) if hasattr(client, "normalize_symbol") else {
-                "input_symbol": raw_symbol,
-                "normalized_symbol": raw_symbol,
-                "exchange_symbol": str(raw_symbol).replace("/", ""),
+                "input_symbol": symbol,
+                "normalized_symbol": candidate,
+                "exchange_symbol": market.get("id") or candidate.replace("/", ""),
                 "found": True,
             }
-            normalized_symbol = symbol_info.get("normalized_symbol") or raw_symbol
-            exchange_symbol = symbol_info.get("exchange_symbol") or str(normalized_symbol).replace("/", "")
 
-            connector_balance = connector_balance_hint(connector, client)
-            stop_pct = float((cfg or {}).get("stop_pct", 0.01))
-            risk_pct = float(risk_per_trade)
-            atr_now = float(row.get("atr", 0) or 0)
+        alt = candidate.replace("/", "")
+        for market_symbol, market in markets.items():
+            if (market.get("id") or "").upper() == alt:
+                return {
+                    "input_symbol": symbol,
+                    "normalized_symbol": market_symbol,
+                    "exchange_symbol": market.get("id") or alt,
+                    "found": True,
+                }
 
-            if dynamic_risk_enabled and atr_now > 0 and price > 0:
-                atr_ratio = min(max(atr_now / price, 0.002), 0.2)
-                risk_pct = min(max(risk_per_trade * (0.01 / atr_ratio), risk_per_trade * 0.5), risk_per_trade * 1.5)
+        return {
+            "input_symbol": symbol,
+            "normalized_symbol": candidate,
+            "exchange_symbol": alt,
+            "found": False,
+        }
 
-            risk_usdt = connector_balance * risk_pct
-            position_notional = risk_usdt / max(stop_pct, 0.0001)
-            theoretical_qty = position_notional / max(price, 0.0000001)
+    def fetch_available_balance(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return super().fetch_available_balance()
 
-            trade_mode = (getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
-            fixed_amount = max(5.0, float(getattr(user, "fixed_trade_amount_usd", 10) or 10))
-            balance_percent = float(getattr(user, "trade_balance_percent", 10) or 10)
+        exchange = self.build_exchange()
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        quote_asset = str(self.config.get("quote_asset", "USDT")).upper()
 
-            if trade_mode == "balance_percent":
-                allocation_usd = connector_balance * max(0.0, min(balance_percent, 100.0)) / 100.0
-            else:
-                allocation_usd = fixed_amount
+        balance = exchange.fetch_balance()
 
-            min_trade_usd = float(cfg.get("min_trade_usd", 5.0) or 5.0)
-            max_trade_usd = float(cfg.get("max_trade_usd", 0) or 0)
+        if market_type == "spot":
+            asset_row = (balance or {}).get(quote_asset) or {}
+            free_balance = float(asset_row.get("free") or 0.0)
+            total_balance = float(asset_row.get("total") or free_balance or 0.0)
 
-            allocation_usd = max(0.0, allocation_usd)
-            if max_trade_usd > 0:
-                allocation_usd = min(allocation_usd, max_trade_usd)
+            return {
+                "ok": True,
+                "mode": "live",
+                "market_type": "spot",
+                "quote_asset": quote_asset,
+                "available_balance": free_balance,
+                "total_balance": total_balance,
+                "source": "exchange_spot_balance",
+            }
 
-            if market_type == "spot":
-                usable_allocation_usd = min(allocation_usd, connector_balance * 0.98)
-            else:
-                leverage_value = float(cfg.get("leverage", 1) or 1)
-                leverage_value = max(leverage_value, 1.0)
-                max_notional_from_balance = connector_balance * leverage_value * 0.95
-                usable_allocation_usd = min(allocation_usd, max_notional_from_balance)
+        free_bucket = (balance or {}).get("free") or {}
+        total_bucket = (balance or {}).get("total") or {}
+        info = (balance or {}).get("info") or {}
 
-            if usable_allocation_usd < min_trade_usd:
-                usable_allocation_usd = min(usable_allocation_usd, connector_balance)
+        free_balance = float(free_bucket.get(quote_asset) or 0.0)
+        total_balance = float(total_bucket.get(quote_asset) or free_balance or 0.0)
 
-            qty = min(theoretical_qty, usable_allocation_usd / max(price, 0.0000001))
+        if free_balance <= 0:
+            for key in ("availableBalance", "available_balance", "walletBalance", "wallet_balance"):
+                raw = info.get(key)
+                if raw is not None:
+                    try:
+                        free_balance = float(raw)
+                        break
+                    except Exception:
+                        pass
 
-            max_risk_amount = float((cfg or {}).get("max_risk_amount", 0) or 0)
-            if max_risk_amount > 0:
-                qty = min(qty, max_risk_amount / max(price, 0.0000001))
+        if total_balance <= 0:
+            for key in ("totalWalletBalance", "walletBalance", "equity", "marginBalance"):
+                raw = info.get(key)
+                if raw is not None:
+                    try:
+                        total_balance = float(raw)
+                        break
+                    except Exception:
+                        pass
 
-            exceeded, portfolio_state = _portfolio_risk_exceeded(
-                db,
-                user_id,
-                max_open_positions=max_open_positions,
-                max_portfolio_risk=max_portfolio_risk,
-            )
+        if total_balance <= 0:
+            total_balance = free_balance
 
-            recent_same_symbol = db.query(TradeRun).filter(
-                TradeRun.user_id == user_id,
-                TradeRun.connector_id == connector.id,
-                TradeRun.symbol == raw_symbol,
-            ).order_by(TradeRun.created_at.desc()).limit(cooldown_candles).all()
+        return {
+            "ok": True,
+            "mode": "live",
+            "market_type": "futures",
+            "quote_asset": quote_asset,
+            "available_balance": float(free_balance),
+            "total_balance": float(total_balance),
+            "source": "exchange_futures_balance",
+        }
 
-            in_cooldown = any(item.status in {"executed", "order_submitted", "order_filled"} for item in recent_same_symbol)
+    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        normalized_qty, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
 
-            volatility_ok = True
-            if atr_volatility_filter_enabled:
-                atr_avg = float(row.get("atr_mean_20", 0) or 0)
-                volatility_ok = atr_now > atr_avg if atr_avg > 0 else True
+        exchange_filters = {
+            "min_notional": float(min_notional),
+            "min_qty": float(((market or {}).get("limits") or {}).get("amount", {}).get("min") or 0.0),
+            "step_size": float(((market or {}).get("precision") or {}).get("amount") or 0.0),
+            "tick_size": float(((market or {}).get("precision") or {}).get("price") or 0.0),
+        }
 
-            ret_5_value = abs(float(row.get("ret_5", 0) or 0))
-            volatility_reference = float(row.get("vol_10", 0) or 0)
+        if normalized_qty <= 0:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "rejected_invalid_quantity",
+                "exchange_filters": exchange_filters,
+            }
 
-            effective_extreme_move_halt_pct = base_extreme_move_halt_pct
-            if dynamic_circuit_breaker_enabled:
-                dynamic_threshold = volatility_reference * dynamic_circuit_breaker_multiplier
-                effective_extreme_move_halt_pct = min(
-                    max(dynamic_threshold, dynamic_circuit_breaker_min),
-                    dynamic_circuit_breaker_max,
-                )
+        min_qty = exchange_filters["min_qty"]
+        if min_qty > 0 and normalized_qty < min_qty:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "skipped_min_qty",
+                "exchange_filters": exchange_filters,
+            }
 
-            extreme_move = ret_5_value >= effective_extreme_move_halt_pct
+        notional = normalized_qty * max(normalized_price, 0.0000001)
+        if min_notional > 0 and notional < min_notional:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "skipped_min_notional",
+                "exchange_filters": exchange_filters,
+            }
 
-            trade_plan = _resolve_trade_plan(
-                db=db,
-                connector=connector,
-                client=client,
-                strategy_slug=active_strategy_slug,
-                signal=signal,
-                normalized_symbol=normalized_symbol,
-                desired_qty=qty,
-                price_hint=price,
-                cfg=cfg,
-            )
+        return {
+            "ok": True,
+            "normalized_quantity": float(normalized_qty),
+            "normalized_price": float(normalized_price),
+            "reason_code": "ok",
+            "exchange_filters": exchange_filters,
+        }
 
-            is_exit = _is_exit_intent(trade_plan.get("intent", "none"))
-            ml_ok = is_exit or prob >= min_ml_probability
+    def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
+        try:
+            return float(exchange.amount_to_precision(symbol, quantity))
+        except Exception:
+            return float(quantity)
 
-            should_execute = (
-                signal != "hold"
-                and trade_plan.get("execute", False)
-                and (
-                    is_exit
-                    or (ml_ok and volatility_ok and not exceeded and not in_cooldown and not extreme_move)
-                )
-            )
+    def _normalize_price(self, exchange, symbol: str, price: float) -> float:
+        try:
+            return float(exchange.price_to_precision(symbol, price))
+        except Exception:
+            return float(price)
 
-            effective_mode = "live" if (use_live_if_available and connector.mode == "live") else connector.mode
+    def _min_notional(self, market: dict[str, Any] | None) -> float:
+        if not market:
+            return 0.0
+        limits = market.get("limits") or {}
+        cost = limits.get("cost") or {}
+        min_cost = cost.get("min")
+        try:
+            return float(min_cost or 0.0)
+        except Exception:
+            return 0.0
 
-            confirmation = {"enabled": multi_tf_confirmation_enabled, "status": "skipped", "timeframe": None, "trend": None}
-            if multi_tf_confirmation_enabled:
-                confirm_tf = _timeframe_for_confirmation(timeframe)
-                confirm_df = add_indicators(synthetic_ohlcv(symbol=raw_symbol, timeframe=confirm_tf))
-                if not confirm_df.empty:
-                    c_row = confirm_df.iloc[-1]
-                    trend = "buy" if float(c_row.get("ema_fast", 0)) >= float(c_row.get("ema_slow", 0)) else "sell"
-                    confirmation = {
-                        "enabled": True,
-                        "status": "passed" if signal == trend else "rejected",
-                        "timeframe": confirm_tf,
-                        "trend": trend,
-                    }
-                    if signal in {"buy", "sell"} and signal != trend and not is_exit:
-                        should_execute = False
+    def _apply_exchange_filters(self, exchange, symbol: str, quantity: float, price_hint: float) -> tuple[float, float, float]:
+        market = self._market(exchange, symbol)
+        quantity = self._normalize_amount(exchange, symbol, quantity)
+        normalized_price = self._normalize_price(exchange, symbol, price_hint)
+        min_notional = self._min_notional(market)
 
-            common_note = {
-                "mode": effective_mode,
+        if min_notional > 0 and quantity * normalized_price < min_notional:
+            min_quantity = min_notional / max(normalized_price, 0.0000001)
+            quantity = self._normalize_amount(exchange, symbol, min_quantity)
+
+        return quantity, normalized_price, min_notional
+
+    def min_requirements(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        if not market:
+            return {"symbol": symbol, "found": False}
+
+        limits = market.get("limits") or {}
+        amount_limits = limits.get("amount") or {}
+        price_limits = limits.get("price") or {}
+
+        return {
+            "symbol": symbol,
+            "found": True,
+            "base": market.get("base"),
+            "quote": market.get("quote"),
+            "min_qty": float(amount_limits.get("min") or 0.0),
+            "min_price": float(price_limits.get("min") or 0.0),
+            "min_notional": self._min_notional(market),
+        }
+
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+
+        if not market:
+            return {
                 "market_type": market_type,
-                "timeframe": timeframe,
-                "strategy": active_strategy_slug,
-                "strategy_requested": strategy_slug,
-                "market_regime": regime,
-                "scanner_meta": scanner_meta,
-                "scanner_signal_input_symbol": raw_symbol,
-                "scanner": {
-                    "signal": signal,
-                    "ml_probability": round(prob, 6),
-                    "candle": candle_snapshot,
-                },
-                "symbol_normalization": symbol_info,
-                "run_source": run_source,
-                "bot_session_id": bot_session_id,
-                "trade_amount_mode": trade_mode,
-                "allocation_usd": round(allocation_usd, 4),
-                "usable_allocation_usd": round(usable_allocation_usd, 4),
-                "size_model": {
-                    "connector_balance": round(float(connector_balance), 8),
-                    "risk_per_trade": risk_pct,
-                    "risk_usdt": round(float(risk_usdt), 8),
-                    "stop_pct": stop_pct,
-                    "position_notional": round(float(position_notional), 8),
-                    "theoretical_qty": round(float(theoretical_qty), 8),
-                    "capped_qty": round(float(qty), 8),
-                },
-                "portfolio_risk": portfolio_state,
-                "cooldown_active": in_cooldown,
-                "circuit_breaker_triggered": extreme_move,
-                "circuit_breaker_threshold": round(float(effective_extreme_move_halt_pct), 6),
-                "circuit_breaker_ret_5": round(float(ret_5_value), 6),
-                "dynamic_circuit_breaker_enabled": bool(dynamic_circuit_breaker_enabled),
-                "multi_timeframe_confirmation": confirmation,
-                "take_profit_mode": take_profit_mode,
-                "take_profit_value": take_profit_value,
-                "stop_loss_mode": stop_loss_mode,
-                "stop_loss_value": stop_loss_value,
-                "trailing_stop_mode": trailing_stop_mode,
-                "trailing_stop_value": trailing_stop_value,
-                "indicator_exit_enabled": bool(indicator_exit_enabled),
-                "indicator_exit_rule": indicator_exit_rule,
-                "leverage_profile": leverage_profile,
-                "max_open_positions": max_open_positions,
-                "compound_growth_enabled": bool(compound_growth_enabled),
-                "atr_volatility_filter_enabled": bool(atr_volatility_filter_enabled),
-                "trade_plan": trade_plan,
+                "symbol": symbol,
+                "found": False,
+                "has_position": False,
+                "spot_base_free": 0.0,
+                "spot_base_total": 0.0,
+                "net_contracts": 0.0,
+                "side": None,
             }
 
-            trade_run = TradeRun(
-                user_id=user_id,
-                connector_id=connector.id,
-                strategy_slug=active_strategy_slug,
-                symbol=raw_symbol,
-                timeframe=timeframe,
-                signal=signal,
-                ml_probability=prob,
-                quantity=qty,
-                status="signal_buy" if should_execute and signal == "buy" else ("signal_sell" if should_execute and signal == "sell" else "signal_hold"),
-                notes=json.dumps({**common_note, "decision": "pending"}),
-            )
-            db.add(trade_run)
+        if market_type == "spot":
+            balance = exchange.fetch_balance()
+            base = market.get("base")
+            asset_row = (balance or {}).get(base) or {}
+            free_qty = float(asset_row.get("free") or 0.0)
+            total_qty = float(asset_row.get("total") or free_qty or 0.0)
 
-            if not should_execute:
-                reason_code = trade_plan.get("reason_code") or "skipped_signal_or_filters"
-                if signal == "hold":
-                    reason_code = "signal_hold"
-                elif not trade_plan.get("execute", False):
-                    reason_code = trade_plan.get("reason_code") or "skipped_signal_or_filters"
-                elif not ml_ok:
-                    reason_code = "skipped_low_confidence"
-                elif exceeded and not is_exit:
-                    reason_code = "skipped_max_positions"
-                elif in_cooldown and not is_exit:
-                    reason_code = "skipped_cooldown"
-                elif extreme_move and not is_exit:
-                    reason_code = "skipped_circuit_breaker"
-                elif confirmation.get("status") == "rejected" and not is_exit:
-                    reason_code = "skipped_multitimeframe_mismatch"
-
-                trade_run.status = reason_code
-                trade_run.notes = json.dumps({**common_note, "decision": "no_action", "reason_code": reason_code})
-                outputs.append({
-                    "connector": connector.label,
-                    "platform": connector.platform,
-                    "symbol": raw_symbol,
-                    "signal": signal,
-                    "ml_probability": round(prob, 4),
-                    "status": reason_code,
-                })
-                continue
-
-            planned_side = trade_plan.get("side", signal)
-            planned_qty = float(trade_plan.get("quantity") or qty)
-            reduce_only = bool(trade_plan.get("reduce_only", False))
-
-            validation = client.pretrade_validate(normalized_symbol, planned_qty, price) if hasattr(client, "pretrade_validate") else {
-                "ok": planned_qty > 0,
-                "normalized_quantity": planned_qty,
-                "normalized_price": price,
-                "reason_code": "ok" if planned_qty > 0 else "rejected_invalid_quantity",
-                "exchange_filters": {},
+            return {
+                "market_type": "spot",
+                "symbol": symbol,
+                "found": True,
+                "base": base,
+                "quote": market.get("quote"),
+                "has_position": total_qty > 0,
+                "spot_base_free": free_qty,
+                "spot_base_total": total_qty,
+                "net_contracts": 0.0,
+                "side": "long" if total_qty > 0 else None,
             }
 
-            final_qty = float(validation.get("normalized_quantity") or 0)
-            final_price = float(validation.get("normalized_price") or price)
+        try:
+            positions = exchange.fetch_positions([symbol])
+        except Exception:
+            positions = []
 
-            if not validation.get("ok"):
-                reason_code = validation.get("reason_code") or "rejected_exchange_filter"
-                trade_run.status = reason_code
-                trade_run.notes = json.dumps({
-                    **common_note,
-                    "decision": planned_side,
-                    "validation": validation,
-                    "order_status": reason_code,
-                    "reason_code": reason_code,
-                })
-                outputs.append({
-                    "connector": connector.label,
-                    "platform": connector.platform,
-                    "symbol": raw_symbol,
-                    "signal": signal,
-                    "ml_probability": round(prob, 4),
-                    "status": reason_code,
-                    "reason_code": reason_code,
-                })
-                continue
+        net_contracts = 0.0
+        detected_side = None
 
-            if final_qty <= 0:
-                trade_run.status = "rejected_invalid_quantity"
-                trade_run.notes = json.dumps({
-                    **common_note,
-                    "decision": planned_side,
-                    "order_status": "rejected",
-                    "reason_code": "rejected_invalid_quantity",
-                    "validation": validation,
-                })
-                outputs.append({
-                    "connector": connector.label,
-                    "platform": connector.platform,
-                    "symbol": raw_symbol,
-                    "signal": signal,
-                    "ml_probability": round(prob, 4),
-                    "status": "rejected_invalid_quantity",
-                    "reason_code": "rejected_invalid_quantity",
-                })
-                continue
-
-            original_mode = connector.mode
-            if connector.mode == "live" and not use_live_if_available:
-                connector.mode = "paper"
-
-            leverage = cfg.get("leverage")
-            margin_type = cfg.get("margin_type", "cross")
-
-            logger.info(
-                "[ORDER_PAYLOAD] symbol=%s side=%s order_type=market quantity=%s leverage=%s margin_type=%s reduce_only=%s intent=%s market_type=%s",
-                exchange_symbol,
-                planned_side,
-                round(final_qty, 8),
-                leverage,
-                margin_type,
-                reduce_only,
-                trade_plan.get("intent"),
-                market_type,
+        for pos in positions or []:
+            info = pos.get("info") or {}
+            raw_amt = (
+                pos.get("contracts")
+                or pos.get("positionAmt")
+                or info.get("positionAmt")
+                or info.get("contracts")
+                or 0
             )
-
             try:
-                enforce_daily_limit(db, connector)
-                result = client.execute_market(
-                    symbol=normalized_symbol,
-                    side=planned_side,
-                    quantity=final_qty,
-                    price_hint=final_price,
-                    reduce_only=reduce_only,
-                    extra_params={},
-                )
-            except Exception as exc:
-                logger.warning("[ORDER_ERROR] symbol=%s error_message=%s", raw_symbol, str(exc))
-                trade_run.status = "rejected_exchange"
-                trade_run.notes = json.dumps({
-                    **common_note,
-                    "decision": planned_side,
-                    "order_status": "rejected",
-                    "reason_code": "rejected_exchange",
-                    "validation": validation,
-                    "exchange_error": str(exc),
-                })
-                outputs.append({
-                    "connector": connector.label,
-                    "platform": connector.platform,
-                    "symbol": raw_symbol,
-                    "signal": signal,
-                    "ml_probability": round(prob, 4),
-                    "status": "rejected_exchange",
-                    "reason_code": "rejected_exchange",
-                    "message": str(exc),
-                })
-                if user:
-                    send_user_telegram_alert(
-                        user,
-                        format_user_failure_message(
-                            locale=user.alert_language,
-                            scope="trade_execution",
-                            detail=str(exc),
-                            connector_label=connector.label,
-                            platform=connector.platform,
-                            symbol=raw_symbol,
-                        ),
-                    )
-                continue
-            finally:
-                connector.mode = original_mode
+                amt = float(raw_amt or 0.0)
+            except Exception:
+                amt = 0.0
 
-            fill_price = float(result.fill_price or final_price)
-            if planned_side == "buy":
-                stop_loss_price = fill_price * (1 - (stop_loss_value / 100)) if stop_loss_mode == "percent" else max(fill_price - stop_loss_value, 0)
-                take_profit_price = fill_price * (1 + (take_profit_value / 100)) if take_profit_mode == "percent" else fill_price + take_profit_value
-            else:
-                stop_loss_price = fill_price * (1 + (stop_loss_value / 100)) if stop_loss_mode == "percent" else fill_price + stop_loss_value
-                take_profit_price = fill_price * (1 - (take_profit_value / 100)) if take_profit_mode == "percent" else max(fill_price - take_profit_value, 0)
+            side = (pos.get("side") or info.get("positionSide") or "").lower()
+            if side == "short" and amt > 0:
+                amt = -amt
 
-            result_status = str(result.status or "submitted").lower()
-            final_status = "order_filled" if "filled" in result_status else "order_submitted"
+            if amt != 0:
+                net_contracts += amt
 
-            trade_log = TradeLog(
-                user_id=user_id,
-                connector_id=connector.id,
-                platform=connector.platform,
-                symbol=normalized_symbol,
-                side=planned_side,
-                quantity=result.quantity,
-                price=result.fill_price,
-                status=final_status,
-                pnl=0.0,
-                meta_json={
-                    "message": result.message,
-                    "raw": result.raw,
-                    "strategy_slug": active_strategy_slug,
-                    "reason_code": final_status,
-                    "take_profit_mode": take_profit_mode,
-                    "take_profit_value": take_profit_value,
-                    "stop_loss_mode": stop_loss_mode,
-                    "stop_loss_value": stop_loss_value,
-                    "trailing_stop_mode": trailing_stop_mode,
-                    "trailing_stop_value": trailing_stop_value,
-                    "indicator_exit_enabled": bool(indicator_exit_enabled),
-                    "indicator_exit_rule": indicator_exit_rule,
-                    "risk_orders": {
-                        "stop_loss_price": round(float(stop_loss_price), 8),
-                        "take_profit_price": round(float(take_profit_price), 8),
-                        "trailing_stop_mode": trailing_stop_mode,
-                        "trailing_stop_value": trailing_stop_value,
-                    },
-                    "validation": validation,
-                    "symbol_normalization": symbol_info,
-                    "market_type": market_type,
-                    "trade_plan": trade_plan,
-                    "reduce_only": reduce_only,
-                    "scanner_meta": scanner_meta,
-                },
-            )
-            db.add(trade_log)
-            db.flush()
+        if net_contracts > 0:
+            detected_side = "long"
+        elif net_contracts < 0:
+            detected_side = "short"
 
-            _apply_execution_to_positions(
-                db=db,
-                user_id=user_id,
-                connector=connector,
-                symbol=normalized_symbol,
-                market_type=market_type,
-                executed_side=planned_side,
-                executed_qty=float(result.quantity or final_qty),
-                fill_price=float(result.fill_price or final_price),
+        return {
+            "market_type": "futures",
+            "symbol": symbol,
+            "found": True,
+            "base": market.get("base"),
+            "quote": market.get("quote"),
+            "has_position": net_contracts != 0,
+            "spot_base_free": 0.0,
+            "spot_base_total": 0.0,
+            "net_contracts": float(net_contracts),
+            "side": detected_side,
+        }
+
+    def _resolve_fill_price(self, order: dict[str, Any], price_hint: float) -> float:
+        average = order.get("average")
+        price = order.get("price")
+        if average is not None:
+            return float(average)
+        if price is not None:
+            return float(price)
+
+        cost = order.get("cost")
+        amount = order.get("amount")
+        try:
+            if cost is not None and amount not in (None, 0, 0.0):
+                return float(cost) / float(amount)
+        except Exception:
+            pass
+
+        return float(price_hint)
+
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
                 reduce_only=reduce_only,
-                trade_log_id=trade_log.id,
+                extra_params=extra_params,
             )
 
-            trade_run.status = final_status
-            trade_run.notes = json.dumps({
-                **common_note,
-                "decision": planned_side,
-                "order_status": final_status,
-                "reason_code": final_status,
-                "validation": validation,
-                "risk_orders": {
-                    "stop_loss_price": round(float(stop_loss_price), 8),
-                    "take_profit_price": round(float(take_profit_price), 8),
-                },
-                "execution_message": result.message,
-            })
+        exchange = self.build_exchange()
+        quantity, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
 
-            outputs.append({
-                "connector": connector.label,
-                "platform": connector.platform,
-                "symbol": raw_symbol,
-                "normalized_symbol": normalized_symbol,
-                "signal": signal,
-                "executed_side": planned_side,
-                "ml_probability": round(prob, 4),
-                "quantity": result.quantity,
-                "fill_price": result.fill_price,
-                "status": final_status,
-                "reason_code": final_status,
-                "message": result.message,
-            })
+        if quantity <= 0:
+            raise RuntimeError(f"Quantity for {symbol} resolved to 0 after exchange precision filters")
 
-            if user:
-                send_user_telegram_alert(
-                    user,
-                    format_user_execution_message(
-                        locale=user.alert_language,
-                        connector_label=connector.label,
-                        platform=connector.platform,
-                        symbol=raw_symbol,
-                        side=planned_side,
-                        quantity=result.quantity,
-                        fill_price=result.fill_price,
-                        status=final_status,
-                        strategy_slug=active_strategy_slug,
-                        message=result.message,
-                    ),
-                )
+        order_params = dict(extra_params or {})
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
 
-    db.commit()
-    return outputs
+        if market_type == "futures" and reduce_only:
+            order_params["reduceOnly"] = True
 
+        if order_params:
+            order = exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=side,
+                amount=quantity,
+                params=order_params,
+            )
+        else:
+            order = exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=side,
+                amount=quantity,
+            )
 
-def activity_metrics(db, user_id: int) -> dict:
-    trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.asc()).all()
-    equity = 1.0
-    curve = []
-    peak = 1.0
-    drawdown = []
-    monthly = {}
-    yearly = {}
-    wins = 0
-    losses = 0
-    gross_profit = 0.0
-    gross_loss = 0.0
+        fill_price = self._resolve_fill_price(order, price_hint)
 
-    for t in trades:
-        pnl = float(t.pnl or 0)
-        if pnl > 0:
-            wins += 1
-            gross_profit += pnl
-        elif pnl < 0:
-            losses += 1
-            gross_loss += abs(pnl)
-        equity += pnl / 100.0
-        curve.append({"x": t.created_at.isoformat(), "y": round(equity, 6)})
-        peak = max(peak, equity)
-        dd = ((equity - peak) / peak) * 100 if peak else 0.0
-        drawdown.append({"x": t.created_at.isoformat(), "y": round(dd, 4)})
-        m_key = t.created_at.strftime("%Y-%m")
-        y_key = t.created_at.strftime("%Y")
-        monthly[m_key] = monthly.get(m_key, 0.0) + pnl
-        yearly[y_key] = yearly.get(y_key, 0.0) + pnl
+        return ExecutionResult(
+            status="live-submitted",
+            message="Live order submitted via CCXT",
+            fill_price=fill_price,
+            quantity=float(order.get("amount") or quantity),
+            raw={
+                **order,
+                "normalized_price": normalized_price,
+                "min_notional": min_notional,
+                "reduce_only": reduce_only,
+                "extra_params": order_params,
+            },
+        )
 
-    total = len(trades)
-    win_rate = (wins / total * 100) if total else 0.0
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
-    returns = [float(t.pnl or 0) / 100.0 for t in trades if t.pnl is not None]
-    avg_ret = sum(returns) / len(returns) if returns else 0.0
-    std_ret = (sum((r - avg_ret) ** 2 for r in returns) / max(len(returns), 1)) ** 0.5 if returns else 0.0
-    sharpe = (avg_ret / std_ret * (252 ** 0.5)) if std_ret > 0 else 0.0
-    max_dd = min([d["y"] for d in drawdown], default=0.0)
+    def test_connection(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return {"ok": True, "mode": self.connector.mode, "note": "paper/signal mode"}
 
-    return {
-        "equity_curve": curve,
-        "drawdown_curve": drawdown,
-        "monthly_returns": [{"period": k, "value": round(v, 4)} for k, v in sorted(monthly.items())],
-        "yearly_returns": [{"period": k, "value": round(v, 4)} for k, v in sorted(yearly.items())],
-        "summary": {
-            "sharpe_ratio": round(sharpe, 4),
-            "max_drawdown": round(max_dd, 4),
-            "profit_factor": round(profit_factor, 4),
-            "win_rate": round(win_rate, 2),
-            "total_trades": total,
-        },
-    }
+        exchange = self.build_exchange()
+        markets = exchange.load_markets()
+        balance = None
+        try:
+            balance = exchange.fetch_balance()
+        except Exception as exc:
+            balance = {"error": str(exc)}
+
+        return {
+            "ok": True,
+            "platform": self.connector.platform,
+            "markets_loaded": len(markets),
+            "balance_preview": balance,
+        }
 
 
-def dashboard_data(db, user_id: int):
-    connectors = db.query(Connector).filter(Connector.user_id == user_id).all()
-    trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.desc()).limit(20).all()
-    all_trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).all()
-    open_positions = db.query(OpenPosition).filter(
-        OpenPosition.user_id == user_id,
-        OpenPosition.is_open.is_(True),
-        OpenPosition.current_qty > 0,
-    ).all()
-    grants = db.query(UserPlatformGrant).filter(UserPlatformGrant.user_id == user_id).all()
+class MT5ConnectorClient(BaseConnectorClient):
+    def _ensure_session(self):
+        if mt5 is None:
+            raise RuntimeError("MetaTrader5 package is not available in this environment")
 
-    pnl = sum(t.pnl for t in all_trades)
-    total_invested = sum((t.quantity or 0) * (t.price or 0) for t in all_trades)
-    pnl_percent = (pnl / total_invested * 100) if total_invested > 0 else 0.0
-    wins = sum(1 for t in all_trades if (t.pnl or 0) > 0)
-    losses = sum(1 for t in all_trades if (t.pnl or 0) < 0)
-    platform_counts = Counter(c.platform for c in connectors)
-    status_counts = Counter(t.status for t in all_trades)
+        path = self.config.get("terminal_path")
+        login = self.secrets.get("login") or self.config.get("login")
+        password = self.secrets.get("password")
+        server = self.secrets.get("server") or self.config.get("server")
 
-    return {
-        "total_connectors": len(connectors),
-        "enabled_connectors": sum(1 for c in connectors if c.is_enabled),
-        "total_trades": len(all_trades),
-        "open_positions_count": len(open_positions),
-        "open_positions": [
-            {
-                "id": p.id,
-                "platform": p.platform,
-                "market_type": p.market_type,
-                "symbol": p.symbol,
-                "position_side": p.position_side,
-                "entry_price": p.entry_price,
-                "current_qty": p.current_qty,
-                "opened_at": p.opened_at.isoformat() if p.opened_at else None,
-                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        initialized = mt5.initialize(path=path) if path else mt5.initialize()
+        if not initialized:
+            raise RuntimeError(f"mt5.initialize failed: {mt5.last_error()}")
+
+        if login and password and server:
+            authorized = mt5.login(login=int(login), password=str(password), server=str(server))
+            if not authorized:
+                raise RuntimeError(f"mt5.login failed: {mt5.last_error()}")
+
+    def _shutdown(self):
+        if mt5 is not None:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+
+    def _market_price(self, symbol: str, side: str, price_hint: float) -> float:
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return price_hint
+        return float(tick.ask if side == "buy" else tick.bid or price_hint)
+
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
+
+        self._ensure_session()
+        try:
+            if not mt5.symbol_select(symbol, True):
+                raise RuntimeError(f"symbol_select failed for {symbol}: {mt5.last_error()}")
+
+            order_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+            fill_type = getattr(mt5, self.config.get("type_filling", "ORDER_FILLING_IOC"), mt5.ORDER_FILLING_IOC)
+            price = self._market_price(symbol, side, price_hint)
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(quantity),
+                "type": order_type,
+                "price": price,
+                "deviation": int(self.config.get("deviation", 20)),
+                "magic": int(self.config.get("magic", 260311)),
+                "comment": self.config.get("comment", "quant-suite"),
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": fill_type,
             }
-            for p in open_positions
-        ],
-        "realized_pnl": round(pnl, 2),
-        "total_invested": round(total_invested, 2),
-        "realized_pnl_percent": round(pnl_percent, 2),
-        "winning_trades": wins,
-        "losing_trades": losses,
-        "platforms": dict(platform_counts),
-        "statuses": dict(status_counts),
-        "latest_trades": trades,
-        "limits": [
-            {
-                "platform": g.platform,
-                "enabled": g.is_enabled,
-                "max_symbols": g.max_symbols,
-                "max_daily_movements": g.max_daily_movements,
-                "notes": g.notes,
-            }
-            for g in grants
-        ],
-    }
+
+            stop_pct = float(self.config.get("stop_pct", 0) or 0)
+            take_pct = float(self.config.get("take_pct", 0) or 0)
+
+            if stop_pct > 0:
+                request["sl"] = price * (1 - stop_pct) if side == "buy" else price * (1 + stop_pct)
+            if take_pct > 0:
+                request["tp"] = price * (1 + take_pct) if side == "buy" else price * (1 - take_pct)
+
+            result = mt5.order_send(request)
+            if result is None:
+                raise RuntimeError(f"mt5.order_send returned None: {mt5.last_error()}")
+
+            retcode = getattr(result, "retcode", None)
+            if retcode != mt5.TRADE_RETCODE_DONE:
+                raise RuntimeError(f"mt5 order rejected retcode={retcode} last_error={mt5.last_error()}")
+
+            result_dict = result._asdict() if hasattr(result, "_asdict") else {"retcode": retcode}
+
+            return ExecutionResult(
+                status="live-submitted",
+                message="Live order submitted via MetaTrader5",
+                fill_price=float(getattr(result, "price", price) or price),
+                quantity=float(getattr(result, "volume", quantity) or quantity),
+                raw={**result_dict, "reduce_only": reduce_only, "extra_params": extra_params or {}},
+            )
+        finally:
+            self._shutdown()
+
+    def test_connection(self) -> dict[str, Any]:
+        self._ensure_session()
+        try:
+            account = mt5.account_info()
+            if account is None:
+                raise RuntimeError(f"mt5.account_info failed: {mt5.last_error()}")
+            account_dict = account._asdict() if hasattr(account, "_asdict") else {"login": getattr(account, "login", None)}
+            return {"ok": True, "account": account_dict}
+        finally:
+            self._shutdown()
+
+
+class TradingViewConnectorClient(BaseConnectorClient):
+    def test_connection(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "platform": "tradingview",
+            "note": "Use /api/webhooks/tradingview as webhook URL and configure a passphrase if desired.",
+        }
+
+
+class CTraderConnectorClient(BaseConnectorClient):
+    def _bridge_url(self) -> str | None:
+        return self.config.get("bridge_url") or self.secrets.get("bridge_url")
+
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
+
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return ExecutionResult(
+                status="bridge-required",
+                message="cTrader live mode requires a bridge_url or a dedicated Open API client implementation.",
+                fill_price=price_hint,
+                quantity=quantity,
+                raw={"platform": "ctrader", "reduce_only": reduce_only, "extra_params": extra_params or {}},
+            )
+
+        payload = {
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price_hint": price_hint,
+            "reduce_only": reduce_only,
+            "extra_params": extra_params or {},
+            "access_token": self.secrets.get("access_token"),
+            "account_id": self.secrets.get("account_id"),
+            "client_id": self.secrets.get("client_id"),
+            "client_secret": self.secrets.get("client_secret"),
+        }
+
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(bridge_url.rstrip("/") + "/execute", json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        return ExecutionResult(
+            status=data.get("status", "live-submitted"),
+            message=data.get("message", "cTrader bridge order submitted"),
+            fill_price=float(data.get("fill_price", price_hint)),
+            quantity=float(data.get("quantity", quantity)),
+            raw=data,
+        )
+
+    def test_connection(self) -> dict[str, Any]:
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return {"ok": True, "note": "No bridge_url configured yet; cTrader remains ready for bridge mode."}
+
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(bridge_url.rstrip("/") + "/health")
+            response.raise_for_status()
+            return {"ok": True, "bridge": response.json()}
+
+
+def get_client(connector):
+    if connector.platform in {"binance", "bybit", "okx"}:
+        return CCXTConnectorClient(connector)
+    if connector.platform == "mt5":
+        return MT5ConnectorClient(connector)
+    if connector.platform == "ctrader":
+        return CTraderConnectorClient(connector)
+    if connector.platform == "tradingview":
+        return TradingViewConnectorClient(connector)
+    return BaseConnectorClient(connector)
