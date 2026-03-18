@@ -1,302 +1,744 @@
-davidksinc@trading-bot-saas:~/TradingSaas$ sed -n '1,300p' app/services/trading.py
 from __future__ import annotations
 
-from collections import Counter
-from datetime import date, datetime, timedelta
-import json
-import logging
+from dataclasses import dataclass
+from typing import Any
 
-from app.models import Connector, OpenPosition, TradeLog, TradeRun, User, UserPlatformGrant
-from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
-from app.services.connectors import get_client
-from app.services.indicators import add_indicators
-from app.services.market import synthetic_ohlcv
-from app.services.ml import train_and_score
-from app.services.scanner import select_symbols_for_run
-from app.services.strategies import STRATEGY_MAP, get_strategy_rule
+import httpx
 
-logger = logging.getLogger("trading_saas.trading")
+from app.security import decrypt_payload
 
+try:
+    import ccxt
+except Exception:
+    ccxt = None
 
-def connector_balance_hint(connector: Connector) -> float:
-    default_balance = float((connector.config_json or {}).get("paper_balance", 10000))
-    return max(default_balance, 100.0)
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    mt5 = None
 
 
-def enforce_daily_limit(db, connector: Connector):
-    grant = db.query(UserPlatformGrant).filter(
-        UserPlatformGrant.user_id == connector.user_id,
-        UserPlatformGrant.platform == connector.platform,
-    ).first()
-    if not grant:
-        return
-    today = date.today().isoformat()
-    count = db.query(TradeLog).filter(
-        TradeLog.user_id == connector.user_id,
-        TradeLog.connector_id == connector.id,
-    ).all()
-    count_today = sum(1 for item in count if item.created_at.date().isoformat() == today)
-    if count_today >= grant.max_daily_movements:
-        raise RuntimeError(f"Daily movement limit reached for {connector.platform}: {grant.max_daily_movements}")
+@dataclass
+class ExecutionResult:
+    status: str
+    message: str
+    fill_price: float
+    quantity: float
+    raw: dict[str, Any]
 
 
-def _detect_market_regime(row) -> str:
-    adx = float(row.get("adx", 0) or 0)
-    bb_width = float(row.get("bb_width", 0) or 0)
-    atr_contraction = float(row.get("atr_contraction", 1) or 1)
-    if adx >= 25:
-        return "trending"
-    if bb_width < 0.03 and atr_contraction < 0.95:
-        return "compression"
-    if bb_width > 0.08:
-        return "high_volatility"
-    return "ranging"
+class BaseConnectorClient:
+    def __init__(self, connector):
+        self.connector = connector
+        self.secrets = decrypt_payload(connector.encrypted_secret_blob)
+        self.config = connector.config_json or {}
 
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            status="paper-filled",
+            message="Paper execution completed",
+            fill_price=price_hint,
+            quantity=quantity,
+            raw={
+                "mode": self.connector.mode,
+                "platform": self.connector.platform,
+                "market_type": getattr(self.connector, "market_type", "spot"),
+                "reduce_only": reduce_only,
+                "extra_params": extra_params or {},
+            },
+        )
 
-def _suggest_strategy_for_regime(regime: str, market_type: str) -> str:
-    spot_mapping = {
-        "trending": "ema_rsi_adx_stack",
-        "compression": "volatility_compression_breakout",
-        "high_volatility": "stochastic_rebound",
-        "ranging": "mean_reversion_zscore",
-    }
-    futures_mapping = {
-        "trending": "momentum_breakout",
-        "compression": "volatility_compression_breakout",
-        "high_volatility": "atr_channel_breakout",
-        "ranging": "macd_trend_pullback",
-    }
-    mapping = futures_mapping if market_type == "futures" else spot_mapping
-    return mapping.get(regime, "ema_rsi" if market_type == "spot" else "momentum_breakout")
-
-
-def _portfolio_risk_exceeded(db, user_id: int, max_open_positions: int, max_portfolio_risk: float) -> tuple[bool, dict]:
-    if max_open_positions <= 0:
-        open_count = db.query(OpenPosition).filter(
-            OpenPosition.user_id == user_id,
-            OpenPosition.is_open.is_(True),
-            OpenPosition.current_qty > 0,
-        ).count()
-        return False, {
-            "open_positions_estimate": open_count,
-            "max_open_positions": "unlimited",
-            "estimated_portfolio_risk": 0.0,
-            "max_portfolio_risk": round(float(max_portfolio_risk), 4),
+    def normalize_symbol(self, symbol: str) -> dict[str, Any]:
+        clean = (symbol or "").strip().upper()
+        return {
+            "input_symbol": symbol,
+            "normalized_symbol": clean,
+            "exchange_symbol": clean.replace("/", ""),
+            "found": True,
         }
 
-    open_count = db.query(OpenPosition).filter(
-        OpenPosition.user_id == user_id,
-        OpenPosition.is_open.is_(True),
-        OpenPosition.current_qty > 0,
-    ).count()
-
-    estimated_portfolio_risk = open_count * max(max_portfolio_risk / max(max_open_positions, 1), 0.0)
-    exceeded = open_count >= max_open_positions or estimated_portfolio_risk > max_portfolio_risk
-
-    return exceeded, {
-        "open_positions_estimate": open_count,
-        "max_open_positions": max_open_positions,
-        "estimated_portfolio_risk": round(float(estimated_portfolio_risk), 4),
-        "max_portfolio_risk": round(float(max_portfolio_risk), 4),
-    }
-
-
-def _timeframe_for_confirmation(base_timeframe: str) -> str:
-    tf = (base_timeframe or "").lower()
-    if tf in {"1m", "3m", "5m", "15m", "30m"}:
-        return "4h"
-    if tf in {"1h", "2h"}:
-        return "1d"
-    return "4h"
-
-
-def _is_exit_intent(intent: str) -> bool:
-    return intent in {"close_long", "close_short", "sell_spot_exit"}
-
-
-def _get_open_position(db, user_id: int, connector_id: int, symbol: str, position_side: str) -> OpenPosition | None:
-    return db.query(OpenPosition).filter(
-        OpenPosition.user_id == user_id,
-        OpenPosition.connector_id == connector_id,
-        OpenPosition.symbol == symbol,
-        OpenPosition.position_side == position_side,
-        OpenPosition.is_open.is_(True),
-    ).order_by(OpenPosition.updated_at.desc()).first()
-
-
-def _build_db_position_context(db, connector: Connector, symbol: str, market_type: str) -> dict:
-    long_pos = _get_open_position(db, connector.user_id, connector.id, symbol, "long")
-    short_pos = _get_open_position(db, connector.user_id, connector.id, symbol, "short")
-
-    long_qty = float(long_pos.current_qty or 0.0) if long_pos else 0.0
-    short_qty = float(short_pos.current_qty or 0.0) if short_pos else 0.0
-
-    if market_type == "spot":
+    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
         return {
-            "market_type": "spot",
+            "ok": quantity > 0,
+            "normalized_quantity": float(quantity),
+            "normalized_price": float(price_hint),
+            "reason_code": "ok" if quantity > 0 else "rejected_invalid_quantity",
+            "exchange_filters": {},
+        }
+
+    def test_connection(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "platform": self.connector.platform,
+            "mode": self.connector.mode,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+        }
+
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        return {
+            "market_type": getattr(self.connector, "market_type", "spot"),
             "symbol": symbol,
-            "has_position": long_qty > 0,
-            "spot_base_free": long_qty,
-            "spot_base_total": long_qty,
+            "has_position": False,
+            "spot_base_free": 0.0,
+            "spot_base_total": 0.0,
             "net_contracts": 0.0,
-            "side": "long" if long_qty > 0 else None,
-            "db_entry_price": float(long_pos.entry_price or 0.0) if long_pos else 0.0,
+            "side": None,
         }
 
-    net_contracts = long_qty - short_qty
-    detected_side = None
-    if net_contracts > 0:
-        detected_side = "long"
-    elif net_contracts < 0:
-        detected_side = "short"
-
-    return {
-        "market_type": "futures",
-        "symbol": symbol,
-        "has_position": net_contracts != 0,
-        "spot_base_free": 0.0,
-        "spot_base_total": 0.0,
-        "net_contracts": net_contracts,
-        "side": detected_side,
-        "db_long_qty": long_qty,
-        "db_short_qty": short_qty,
-        "db_long_entry": float(long_pos.entry_price or 0.0) if long_pos else 0.0,
-        "db_short_entry": float(short_pos.entry_price or 0.0) if short_pos else 0.0,
-    }
-
-
-def _effective_position_context(db, connector: Connector, client, symbol: str, market_type: str) -> dict:
-    db_ctx = _build_db_position_context(db, connector, symbol, market_type)
-    exchange_ctx = {}
-
-    try:
-        if hasattr(client, "fetch_position_context"):
-            exchange_ctx = client.fetch_position_context(symbol) or {}
-    except Exception as exc:
-        logger.warning("[POSITION_CONTEXT] symbol=%s exchange_context_error=%s", symbol, str(exc))
-        exchange_ctx = {}
-
-    mode_is_live = connector.mode == "live"
-
-    if market_type == "spot":
-        if mode_is_live and exchange_ctx:
-            spot_qty = float(exchange_ctx.get("spot_base_free") or exchange_ctx.get("spot_base_total") or 0.0)
-            return {
-                **db_ctx,
-                **exchange_ctx,
-                "effective_source": "exchange",
-                "effective_spot_qty": spot_qty,
-            }
+    def fetch_available_balance(self) -> dict[str, Any]:
+        fallback = float((self.config or {}).get("paper_balance", 1000) or 1000)
         return {
-            **db_ctx,
-            **exchange_ctx,
-            "effective_source": "db",
-            "effective_spot_qty": float(db_ctx.get("spot_base_free") or 0.0),
+            "ok": True,
+            "mode": self.connector.mode,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+            "quote_asset": "USDT",
+            "available_balance": fallback,
+            "total_balance": fallback,
+            "source": "paper_hint",
         }
 
-    if mode_is_live and exchange_ctx:
-        net_contracts = float(exchange_ctx.get("net_contracts") or 0.0)
+
+class CCXTConnectorClient(BaseConnectorClient):
+    def __init__(self, connector):
+        super().__init__(connector)
+        self._markets_cache: dict[str, Any] | None = None
+
+    def build_exchange(self):
+        if ccxt is None:
+            raise RuntimeError("ccxt is not installed")
+
+        exchange_class = getattr(ccxt, self.connector.platform)
+        kwargs = {
+            "apiKey": self.secrets.get("api_key"),
+            "secret": self.secrets.get("secret_key"),
+            "enableRateLimit": True,
+        }
+
+        if self.connector.platform == "okx" and self.secrets.get("passphrase"):
+            kwargs["password"] = self.secrets.get("passphrase")
+        if self.secrets.get("password"):
+            kwargs["password"] = self.secrets.get("password")
+
+        options = {}
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+
+        if self.connector.platform in {"binance", "bybit", "okx"}:
+            options["defaultType"] = "future" if market_type == "futures" else "spot"
+
+        if self.config.get("sandbox"):
+            options["sandboxMode"] = True
+
+        if options:
+            kwargs["options"] = options
+
+        exchange = exchange_class(kwargs)
+
+        if self.config.get("sandbox") and hasattr(exchange, "set_sandbox_mode"):
+            exchange.set_sandbox_mode(True)
+
+        return exchange
+
+    def _load_markets(self, exchange) -> dict[str, Any]:
+        if self._markets_cache is None:
+            self._markets_cache = exchange.load_markets()
+        return self._markets_cache
+
+    def _market(self, exchange, symbol: str) -> dict[str, Any] | None:
+        markets = self._load_markets(exchange)
+        return markets.get(symbol)
+
+    def normalize_symbol(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        markets = self._load_markets(exchange)
+        candidate = (symbol or "").strip().upper()
+
+        if candidate in markets:
+            market = markets[candidate]
+            return {
+                "input_symbol": symbol,
+                "normalized_symbol": candidate,
+                "exchange_symbol": market.get("id") or candidate.replace("/", ""),
+                "found": True,
+            }
+
+        alt = candidate.replace("/", "")
+        for market_symbol, market in markets.items():
+            if (market.get("id") or "").upper() == alt:
+                return {
+                    "input_symbol": symbol,
+                    "normalized_symbol": market_symbol,
+                    "exchange_symbol": market.get("id") or alt,
+                    "found": True,
+                }
+
         return {
-            **db_ctx,
-            **exchange_ctx,
-            "effective_source": "exchange",
-            "effective_net_contracts": net_contracts,
+            "input_symbol": symbol,
+            "normalized_symbol": candidate,
+            "exchange_symbol": alt,
+            "found": False,
         }
 
-    return {
-        **db_ctx,
-        **exchange_ctx,
-        "effective_source": "db",
-        "effective_net_contracts": float(db_ctx.get("net_contracts") or 0.0),
-    }
+    def fetch_available_balance(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return super().fetch_available_balance()
 
+        exchange = self.build_exchange()
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        quote_asset = str(self.config.get("quote_asset", "USDT")).upper()
 
-def _resolve_trade_plan(
-    db,
-    connector,
-    client,
-    strategy_slug: str,
-    signal: str,
-    normalized_symbol: str,
-    desired_qty: float,
-    price_hint: float,
-    cfg: dict,
-) -> dict:
-    market_type = (getattr(connector, "market_type", None) or cfg.get("market_type") or "spot").lower()
-    strategy_rule = get_strategy_rule(strategy_slug)
-    allow_short = bool(strategy_rule.get("allow_short", False))
+        balance = exchange.fetch_balance()
 
-    if signal == "hold":
-        return {"execute": False, "reason_code": "signal_hold", "intent": "none"}
+        if market_type == "spot":
+            asset_row = (balance or {}).get(quote_asset) or {}
+            free_balance = float(asset_row.get("free") or 0.0)
+            total_balance = float(asset_row.get("total") or free_balance or 0.0)
 
-    ctx = _effective_position_context(db, connector, client, normalized_symbol, market_type)
-
-    if market_type == "spot":
-        if signal == "buy":
             return {
-                "execute": True,
-                "intent": "open_long",
-                "side": "buy",
-                "quantity": float(desired_qty),
-                "reduce_only": False,
-                "position_context": ctx,
+                "ok": True,
+                "mode": "live",
+                "market_type": "spot",
+                "quote_asset": quote_asset,
+                "available_balance": free_balance,
+                "total_balance": total_balance,
+                "source": "exchange_spot_balance",
             }
 
-        available_qty = float(ctx.get("effective_spot_qty") or 0.0)
-        if available_qty <= 0:
-            return {
-                "execute": False,
-                "reason_code": "skipped_no_spot_balance",
-                "intent": "none",
-                "position_context": ctx,
-            }
+        free_bucket = (balance or {}).get("free") or {}
+        total_bucket = (balance or {}).get("total") or {}
+        info = (balance or {}).get("info") or {}
 
-        sell_full_balance = bool(cfg.get("spot_sell_full_balance", True))
-        sell_qty = available_qty if sell_full_balance else min(float(desired_qty), available_qty)
-        if sell_qty <= 0:
+        free_balance = float(free_bucket.get(quote_asset) or 0.0)
+        total_balance = float(total_bucket.get(quote_asset) or free_balance or 0.0)
+
+        if free_balance <= 0:
+            for key in ("availableBalance", "available_balance", "walletBalance", "wallet_balance"):
+                raw = info.get(key)
+                if raw is not None:
+                    try:
+                        free_balance = float(raw)
+                        break
+                    except Exception:
+                        pass
+
+        if total_balance <= 0:
+            for key in ("totalWalletBalance", "walletBalance", "equity", "marginBalance"):
+                raw = info.get(key)
+                if raw is not None:
+                    try:
+                        total_balance = float(raw)
+                        break
+                    except Exception:
+                        pass
+
+        if total_balance <= 0:
+            total_balance = free_balance
+
+        return {
+            "ok": True,
+            "mode": "live",
+            "market_type": "futures",
+            "quote_asset": quote_asset,
+            "available_balance": float(free_balance),
+            "total_balance": float(total_balance),
+            "source": "exchange_futures_balance",
+        }
+
+    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        normalized_qty, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
+
+        exchange_filters = {
+            "min_notional": float(min_notional),
+            "min_qty": float(((market or {}).get("limits") or {}).get("amount", {}).get("min") or 0.0),
+            "step_size": float(((market or {}).get("precision") or {}).get("amount") or 0.0),
+            "tick_size": float(((market or {}).get("precision") or {}).get("price") or 0.0),
+        }
+
+        if normalized_qty <= 0:
             return {
-                "execute": False,
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
                 "reason_code": "rejected_invalid_quantity",
-                "intent": "none",
-                "position_context": ctx,
+                "exchange_filters": exchange_filters,
             }
 
-        return {
-            "execute": True,
-            "intent": "sell_spot_exit",
-            "side": "sell",
-            "quantity": float(sell_qty),
-            "reduce_only": False,
-            "position_context": ctx,
-        }
-
-    net_contracts = float(ctx.get("effective_net_contracts") or 0.0)
-
-    if signal == "buy":
-        if net_contracts < 0:
+        min_qty = exchange_filters["min_qty"]
+        if min_qty > 0 and normalized_qty < min_qty:
             return {
-                "execute": True,
-                "intent": "close_short",
-                "side": "buy",
-                "quantity": abs(net_contracts),
-                "reduce_only": True,
-                "position_context": ctx,
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "skipped_min_qty",
+                "exchange_filters": exchange_filters,
             }
+
+        notional = normalized_qty * max(normalized_price, 0.0000001)
+        if min_notional > 0 and notional < min_notional:
+            return {
+                "ok": False,
+                "normalized_quantity": float(normalized_qty),
+                "normalized_price": float(normalized_price),
+                "reason_code": "skipped_min_notional",
+                "exchange_filters": exchange_filters,
+            }
+
         return {
-            "execute": True,
-            "intent": "open_long",
-            "side": "buy",
-            "quantity": float(desired_qty),
-            "reduce_only": False,
-            "position_context": ctx,
+            "ok": True,
+            "normalized_quantity": float(normalized_qty),
+            "normalized_price": float(normalized_price),
+            "reason_code": "ok",
+            "exchange_filters": exchange_filters,
         }
 
-    if signal == "sell":
+    def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
+        try:
+            return float(exchange.amount_to_precision(symbol, quantity))
+        except Exception:
+            return float(quantity)
+
+    def _normalize_price(self, exchange, symbol: str, price: float) -> float:
+        try:
+            return float(exchange.price_to_precision(symbol, price))
+        except Exception:
+            return float(price)
+
+    def _min_notional(self, market: dict[str, Any] | None) -> float:
+        if not market:
+            return 0.0
+        limits = market.get("limits") or {}
+        cost = limits.get("cost") or {}
+        min_cost = cost.get("min")
+        try:
+            return float(min_cost or 0.0)
+        except Exception:
+            return 0.0
+
+    def _apply_exchange_filters(self, exchange, symbol: str, quantity: float, price_hint: float) -> tuple[float, float, float]:
+        market = self._market(exchange, symbol)
+        quantity = self._normalize_amount(exchange, symbol, quantity)
+        normalized_price = self._normalize_price(exchange, symbol, price_hint)
+        min_notional = self._min_notional(market)
+
+        if min_notional > 0 and quantity * normalized_price < min_notional:
+            min_quantity = min_notional / max(normalized_price, 0.0000001)
+            quantity = self._normalize_amount(exchange, symbol, min_quantity)
+
+        return quantity, normalized_price, min_notional
+
+    def min_requirements(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        if not market:
+            return {"symbol": symbol, "found": False}
+
+        limits = market.get("limits") or {}
+        amount_limits = limits.get("amount") or {}
+        price_limits = limits.get("price") or {}
+
+        return {
+            "symbol": symbol,
+            "found": True,
+            "base": market.get("base"),
+            "quote": market.get("quote"),
+            "min_qty": float(amount_limits.get("min") or 0.0),
+            "min_price": float(price_limits.get("min") or 0.0),
+            "min_notional": self._min_notional(market),
+        }
+
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+
+        if not market:
+            return {
+                "market_type": market_type,
+                "symbol": symbol,
+                "found": False,
+                "has_position": False,
+                "spot_base_free": 0.0,
+                "spot_base_total": 0.0,
+                "net_contracts": 0.0,
+                "side": None,
+            }
+
+        if market_type == "spot":
+            balance = exchange.fetch_balance()
+            base = market.get("base")
+            asset_row = (balance or {}).get(base) or {}
+            free_qty = float(asset_row.get("free") or 0.0)
+            total_qty = float(asset_row.get("total") or free_qty or 0.0)
+
+            return {
+                "market_type": "spot",
+                "symbol": symbol,
+                "found": True,
+                "base": base,
+                "quote": market.get("quote"),
+                "has_position": total_qty > 0,
+                "spot_base_free": free_qty,
+                "spot_base_total": total_qty,
+                "net_contracts": 0.0,
+                "side": "long" if total_qty > 0 else None,
+            }
+
+        try:
+            positions = exchange.fetch_positions([symbol])
+        except Exception:
+            positions = []
+
+        net_contracts = 0.0
+        detected_side = None
+
+        for pos in positions or []:
+            info = pos.get("info") or {}
+            raw_amt = (
+                pos.get("contracts")
+                or pos.get("positionAmt")
+                or info.get("positionAmt")
+                or info.get("contracts")
+                or 0
+            )
+            try:
+                amt = float(raw_amt or 0.0)
+            except Exception:
+                amt = 0.0
+
+            side = (pos.get("side") or info.get("positionSide") or "").lower()
+            if side == "short" and amt > 0:
+                amt = -amt
+
+            if amt != 0:
+                net_contracts += amt
+
         if net_contracts > 0:
-            return {
-                "execute": True,
-                "intent": "close_long",
-                "side": "sell",
-                "quantity": abs(net_contracts),
-                "reduce_only": True,
-davidksinc@trading-bot-saas:~/TradingSaas$ 
+            detected_side = "long"
+        elif net_contracts < 0:
+            detected_side = "short"
+
+        return {
+            "market_type": "futures",
+            "symbol": symbol,
+            "found": True,
+            "base": market.get("base"),
+            "quote": market.get("quote"),
+            "has_position": net_contracts != 0,
+            "spot_base_free": 0.0,
+            "spot_base_total": 0.0,
+            "net_contracts": float(net_contracts),
+            "side": detected_side,
+        }
+
+    def _resolve_fill_price(self, order: dict[str, Any], price_hint: float) -> float:
+        average = order.get("average")
+        price = order.get("price")
+        if average is not None:
+            return float(average)
+        if price is not None:
+            return float(price)
+
+        cost = order.get("cost")
+        amount = order.get("amount")
+        try:
+            if cost is not None and amount not in (None, 0, 0.0):
+                return float(cost) / float(amount)
+        except Exception:
+            pass
+
+        return float(price_hint)
+
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
+
+        exchange = self.build_exchange()
+        quantity, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
+
+        if quantity <= 0:
+            raise RuntimeError(f"Quantity for {symbol} resolved to 0 after exchange precision filters")
+
+        order_params = dict(extra_params or {})
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+
+        if market_type == "futures" and reduce_only:
+            order_params["reduceOnly"] = True
+
+        if order_params:
+            order = exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=side,
+                amount=quantity,
+                params=order_params,
+            )
+        else:
+            order = exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=side,
+                amount=quantity,
+            )
+
+        fill_price = self._resolve_fill_price(order, price_hint)
+
+        return ExecutionResult(
+            status="live-submitted",
+            message="Live order submitted via CCXT",
+            fill_price=fill_price,
+            quantity=float(order.get("amount") or quantity),
+            raw={
+                **order,
+                "normalized_price": normalized_price,
+                "min_notional": min_notional,
+                "reduce_only": reduce_only,
+                "extra_params": order_params,
+            },
+        )
+
+    def test_connection(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return {"ok": True, "mode": self.connector.mode, "note": "paper/signal mode"}
+
+        exchange = self.build_exchange()
+        markets = exchange.load_markets()
+        balance = None
+        try:
+            balance = exchange.fetch_balance()
+        except Exception as exc:
+            balance = {"error": str(exc)}
+
+        return {
+            "ok": True,
+            "platform": self.connector.platform,
+            "markets_loaded": len(markets),
+            "balance_preview": balance,
+        }
+
+
+class MT5ConnectorClient(BaseConnectorClient):
+    def _ensure_session(self):
+        if mt5 is None:
+            raise RuntimeError("MetaTrader5 package is not available in this environment")
+
+        path = self.config.get("terminal_path")
+        login = self.secrets.get("login") or self.config.get("login")
+        password = self.secrets.get("password")
+        server = self.secrets.get("server") or self.config.get("server")
+
+        initialized = mt5.initialize(path=path) if path else mt5.initialize()
+        if not initialized:
+            raise RuntimeError(f"mt5.initialize failed: {mt5.last_error()}")
+
+        if login and password and server:
+            authorized = mt5.login(login=int(login), password=str(password), server=str(server))
+            if not authorized:
+                raise RuntimeError(f"mt5.login failed: {mt5.last_error()}")
+
+    def _shutdown(self):
+        if mt5 is not None:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+
+    def _market_price(self, symbol: str, side: str, price_hint: float) -> float:
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return price_hint
+        return float(tick.ask if side == "buy" else tick.bid or price_hint)
+
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
+
+        self._ensure_session()
+        try:
+            if not mt5.symbol_select(symbol, True):
+                raise RuntimeError(f"symbol_select failed for {symbol}: {mt5.last_error()}")
+
+            order_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+            fill_type = getattr(mt5, self.config.get("type_filling", "ORDER_FILLING_IOC"), mt5.ORDER_FILLING_IOC)
+            price = self._market_price(symbol, side, price_hint)
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(quantity),
+                "type": order_type,
+                "price": price,
+                "deviation": int(self.config.get("deviation", 20)),
+                "magic": int(self.config.get("magic", 260311)),
+                "comment": self.config.get("comment", "quant-suite"),
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": fill_type,
+            }
+
+            stop_pct = float(self.config.get("stop_pct", 0) or 0)
+            take_pct = float(self.config.get("take_pct", 0) or 0)
+
+            if stop_pct > 0:
+                request["sl"] = price * (1 - stop_pct) if side == "buy" else price * (1 + stop_pct)
+            if take_pct > 0:
+                request["tp"] = price * (1 + take_pct) if side == "buy" else price * (1 - take_pct)
+
+            result = mt5.order_send(request)
+            if result is None:
+                raise RuntimeError(f"mt5.order_send returned None: {mt5.last_error()}")
+
+            retcode = getattr(result, "retcode", None)
+            if retcode != mt5.TRADE_RETCODE_DONE:
+                raise RuntimeError(f"mt5 order rejected retcode={retcode} last_error={mt5.last_error()}")
+
+            result_dict = result._asdict() if hasattr(result, "_asdict") else {"retcode": retcode}
+
+            return ExecutionResult(
+                status="live-submitted",
+                message="Live order submitted via MetaTrader5",
+                fill_price=float(getattr(result, "price", price) or price),
+                quantity=float(getattr(result, "volume", quantity) or quantity),
+                raw={**result_dict, "reduce_only": reduce_only, "extra_params": extra_params or {}},
+            )
+        finally:
+            self._shutdown()
+
+    def test_connection(self) -> dict[str, Any]:
+        self._ensure_session()
+        try:
+            account = mt5.account_info()
+            if account is None:
+                raise RuntimeError(f"mt5.account_info failed: {mt5.last_error()}")
+            account_dict = account._asdict() if hasattr(account, "_asdict") else {"login": getattr(account, "login", None)}
+            return {"ok": True, "account": account_dict}
+        finally:
+            self._shutdown()
+
+
+class TradingViewConnectorClient(BaseConnectorClient):
+    def test_connection(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "platform": "tradingview",
+            "note": "Use /api/webhooks/tradingview as webhook URL and configure a passphrase if desired.",
+        }
+
+
+class CTraderConnectorClient(BaseConnectorClient):
+    def _bridge_url(self) -> str | None:
+        return self.config.get("bridge_url") or self.secrets.get("bridge_url")
+
+    def execute_market(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price_hint: float,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> ExecutionResult:
+        if self.connector.mode != "live":
+            return super().execute_market(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price_hint=price_hint,
+                reduce_only=reduce_only,
+                extra_params=extra_params,
+            )
+
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return ExecutionResult(
+                status="bridge-required",
+                message="cTrader live mode requires a bridge_url or a dedicated Open API client implementation.",
+                fill_price=price_hint,
+                quantity=quantity,
+                raw={"platform": "ctrader", "reduce_only": reduce_only, "extra_params": extra_params or {}},
+            )
+
+        payload = {
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price_hint": price_hint,
+            "reduce_only": reduce_only,
+            "extra_params": extra_params or {},
+            "access_token": self.secrets.get("access_token"),
+            "account_id": self.secrets.get("account_id"),
+            "client_id": self.secrets.get("client_id"),
+            "client_secret": self.secrets.get("client_secret"),
+        }
+
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(bridge_url.rstrip("/") + "/execute", json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        return ExecutionResult(
+            status=data.get("status", "live-submitted"),
+            message=data.get("message", "cTrader bridge order submitted"),
+            fill_price=float(data.get("fill_price", price_hint)),
+            quantity=float(data.get("quantity", quantity)),
+            raw=data,
+        )
+
+    def test_connection(self) -> dict[str, Any]:
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return {"ok": True, "note": "No bridge_url configured yet; cTrader remains ready for bridge mode."}
+
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(bridge_url.rstrip("/") + "/health")
+            response.raise_for_status()
+            return {"ok": True, "bridge": response.json()}
+
+
+def get_client(connector):
+    if connector.platform in {"binance", "bybit", "okx"}:
+        return CCXTConnectorClient(connector)
+    if connector.platform == "mt5":
+        return MT5ConnectorClient(connector)
+    if connector.platform == "ctrader":
+        return CTraderConnectorClient(connector)
+    if connector.platform == "tradingview":
+        return TradingViewConnectorClient(connector)
+    return BaseConnectorClient(connector)
