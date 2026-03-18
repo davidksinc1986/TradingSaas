@@ -105,6 +105,33 @@ class BaseConnectorClient:
             "source": "paper_hint",
         }
 
+    def place_risk_orders(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_loss_price: float,
+        take_profit_price: float,
+        trailing_stop_mode: str = "percent",
+        trailing_stop_value: float = 0.0,
+        market_type: str = "spot",
+    ) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "note": "Risk orders are not supported by this connector in current mode",
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "stop_loss_price": stop_loss_price,
+            "take_profit_price": take_profit_price,
+            "trailing_stop_mode": trailing_stop_mode,
+            "trailing_stop_value": trailing_stop_value,
+            "market_type": market_type,
+        }
+
+    def cancel_risk_orders(self, symbol: str) -> dict[str, Any]:
+        return {"ok": True, "cancelled": 0, "symbol": symbol}
+
 
 class CCXTConnectorClient(BaseConnectorClient):
     def __init__(self, connector):
@@ -323,7 +350,13 @@ class CCXTConnectorClient(BaseConnectorClient):
         except Exception:
             return 0.0
 
-    def _apply_exchange_filters(self, exchange, symbol: str, quantity: float, price_hint: float) -> tuple[float, float, float]:
+    def _apply_exchange_filters(
+        self,
+        exchange,
+        symbol: str,
+        quantity: float,
+        price_hint: float,
+    ) -> tuple[float, float, float]:
         market = self._market(exchange, symbol)
         quantity = self._normalize_amount(exchange, symbol, quantity)
         normalized_price = self._normalize_price(exchange, symbol, price_hint)
@@ -418,7 +451,7 @@ class CCXTConnectorClient(BaseConnectorClient):
             if side == "short" and amt > 0:
                 amt = -amt
 
-            if amt != 0:
+            if abs(amt) > 0:
                 net_contracts += amt
 
         if net_contracts > 0:
@@ -456,6 +489,14 @@ class CCXTConnectorClient(BaseConnectorClient):
             pass
 
         return float(price_hint)
+
+    def _order_status_to_result(self, order: dict[str, Any]) -> str:
+        status = str(order.get("status") or "").lower()
+        if status in {"closed", "filled"}:
+            return "live-filled"
+        if status in {"open", "new"}:
+            return "live-submitted"
+        return "live-submitted"
 
     def execute_market(
         self,
@@ -505,9 +546,10 @@ class CCXTConnectorClient(BaseConnectorClient):
             )
 
         fill_price = self._resolve_fill_price(order, price_hint)
+        result_status = self._order_status_to_result(order)
 
         return ExecutionResult(
-            status="live-submitted",
+            status=result_status,
             message="Live order submitted via CCXT",
             fill_price=fill_price,
             quantity=float(order.get("amount") or quantity),
@@ -519,6 +561,150 @@ class CCXTConnectorClient(BaseConnectorClient):
                 "extra_params": order_params,
             },
         )
+
+    def cancel_risk_orders(self, symbol: str) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return {"ok": True, "cancelled": 0, "symbol": symbol, "mode": self.connector.mode}
+
+        exchange = self.build_exchange()
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        if market_type != "futures":
+            return {"ok": True, "cancelled": 0, "symbol": symbol, "market_type": market_type}
+
+        cancelled = 0
+        errors: list[str] = []
+
+        try:
+            open_orders = exchange.fetch_open_orders(symbol)
+        except Exception as exc:
+            return {"ok": False, "cancelled": 0, "symbol": symbol, "error": str(exc)}
+
+        for order in open_orders or []:
+            order_type = str(order.get("type") or "").lower()
+            info = order.get("info") or {}
+            type_hint = str(info.get("type") or "").upper()
+
+            is_risk_order = (
+                "stop" in order_type
+                or "take_profit" in order_type
+                or "TAKE_PROFIT" in type_hint
+                or "STOP" in type_hint
+            )
+            if not is_risk_order:
+                continue
+
+            try:
+                exchange.cancel_order(order["id"], symbol)
+                cancelled += 1
+            except Exception as exc:
+                errors.append(str(exc))
+
+        return {"ok": len(errors) == 0, "cancelled": cancelled, "symbol": symbol, "errors": errors}
+
+    def place_risk_orders(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_loss_price: float,
+        take_profit_price: float,
+        trailing_stop_mode: str = "percent",
+        trailing_stop_value: float = 0.0,
+        market_type: str = "spot",
+    ) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return {
+                "ok": True,
+                "mode": self.connector.mode,
+                "note": "paper mode - no live risk orders placed",
+            }
+
+        if market_type != "futures":
+            return {
+                "ok": True,
+                "market_type": market_type,
+                "note": "risk orders are only placed automatically for futures in this implementation",
+            }
+
+        exchange = self.build_exchange()
+
+        qty = self._normalize_amount(exchange, symbol, quantity)
+        stop_loss_price = self._normalize_price(exchange, symbol, stop_loss_price)
+        take_profit_price = self._normalize_price(exchange, symbol, take_profit_price)
+
+        if qty <= 0:
+            raise RuntimeError(f"Risk order quantity resolved to 0 for {symbol}")
+
+        closing_side = "sell" if str(side).lower() == "buy" else "buy"
+        created_orders: list[dict[str, Any]] = []
+
+        # STOP LOSS
+        sl_params = {
+            "stopPrice": stop_loss_price,
+            "reduceOnly": True,
+            "workingType": "MARK_PRICE",
+        }
+        sl_order = exchange.create_order(
+            symbol=symbol,
+            type="STOP_MARKET",
+            side=closing_side,
+            amount=qty,
+            price=None,
+            params=sl_params,
+        )
+        created_orders.append({
+            "kind": "stop_loss",
+            "id": sl_order.get("id"),
+            "type": sl_order.get("type"),
+            "status": sl_order.get("status"),
+            "stop_price": stop_loss_price,
+            "raw": sl_order,
+        })
+
+        # TAKE PROFIT
+        tp_params = {
+            "stopPrice": take_profit_price,
+            "reduceOnly": True,
+            "workingType": "MARK_PRICE",
+        }
+        tp_order = exchange.create_order(
+            symbol=symbol,
+            type="TAKE_PROFIT_MARKET",
+            side=closing_side,
+            amount=qty,
+            price=None,
+            params=tp_params,
+        )
+        created_orders.append({
+            "kind": "take_profit",
+            "id": tp_order.get("id"),
+            "type": tp_order.get("type"),
+            "status": tp_order.get("status"),
+            "stop_price": take_profit_price,
+            "raw": tp_order,
+        })
+
+        # Trailing stop:
+        # lo dejamos documentado pero no creamos orden live aquí porque la implementación varía
+        # mucho entre exchanges y puede romper compatibilidad. TP/SL ya quedan cubiertos.
+        trailing_info = {
+            "requested": bool(trailing_stop_value and trailing_stop_value > 0),
+            "mode": trailing_stop_mode,
+            "value": trailing_stop_value,
+            "placed_live": False,
+            "note": "Trailing stop not placed as exchange order in this implementation",
+        }
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "market_type": market_type,
+            "side": side,
+            "closing_side": closing_side,
+            "quantity": qty,
+            "orders": created_orders,
+            "trailing": trailing_info,
+        }
 
     def test_connection(self) -> dict[str, Any]:
         if self.connector.mode != "live":
@@ -632,7 +818,7 @@ class MT5ConnectorClient(BaseConnectorClient):
             result_dict = result._asdict() if hasattr(result, "_asdict") else {"retcode": retcode}
 
             return ExecutionResult(
-                status="live-submitted",
+                status="live-filled",
                 message="Live order submitted via MetaTrader5",
                 fill_price=float(getattr(result, "price", price) or price),
                 quantity=float(getattr(result, "volume", quantity) or quantity),
