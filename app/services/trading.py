@@ -511,7 +511,12 @@ def run_strategy(
         multi_tf_confirmation_enabled = bool(cfg.get("multi_tf_confirmation_enabled", True))
         cooldown_candles = int(cfg.get("cooldown_candles", 1) or 1)
         max_portfolio_risk = float(cfg.get("max_portfolio_risk", 0.05) or 0.05)
-        extreme_move_halt_pct = float(cfg.get("extreme_move_halt_pct", 0.05) or 0.05)
+
+        base_extreme_move_halt_pct = float(cfg.get("extreme_move_halt_pct", 0.08) or 0.08)
+        dynamic_circuit_breaker_enabled = bool(cfg.get("dynamic_circuit_breaker_enabled", True))
+        dynamic_circuit_breaker_multiplier = float(cfg.get("dynamic_circuit_breaker_multiplier", 2.5) or 2.5)
+        dynamic_circuit_breaker_min = float(cfg.get("dynamic_circuit_breaker_min", 0.05) or 0.05)
+        dynamic_circuit_breaker_max = float(cfg.get("dynamic_circuit_breaker_max", 0.15) or 0.15)
 
         symbols_to_run, scanner_meta = select_symbols_for_run(
             connector_id=connector.id,
@@ -661,7 +666,18 @@ def run_strategy(
                 atr_avg = float(row.get("atr_mean_20", 0) or 0)
                 volatility_ok = atr_now > atr_avg if atr_avg > 0 else True
 
-            extreme_move = abs(float(row.get("ret_5", 0) or 0)) >= extreme_move_halt_pct
+            ret_5_value = abs(float(row.get("ret_5", 0) or 0))
+            volatility_reference = float(row.get("vol_10", 0) or 0)
+
+            effective_extreme_move_halt_pct = base_extreme_move_halt_pct
+            if dynamic_circuit_breaker_enabled:
+                dynamic_threshold = volatility_reference * dynamic_circuit_breaker_multiplier
+                effective_extreme_move_halt_pct = min(
+                    max(dynamic_threshold, dynamic_circuit_breaker_min),
+                    dynamic_circuit_breaker_max,
+                )
+
+            extreme_move = ret_5_value >= effective_extreme_move_halt_pct
 
             trade_plan = _resolve_trade_plan(
                 db=db,
@@ -737,6 +753,9 @@ def run_strategy(
                 "portfolio_risk": portfolio_state,
                 "cooldown_active": in_cooldown,
                 "circuit_breaker_triggered": extreme_move,
+                "circuit_breaker_threshold": round(float(effective_extreme_move_halt_pct), 6),
+                "circuit_breaker_ret_5": round(float(ret_5_value), 6),
+                "dynamic_circuit_breaker_enabled": bool(dynamic_circuit_breaker_enabled),
                 "multi_timeframe_confirmation": confirmation,
                 "take_profit_mode": take_profit_mode,
                 "take_profit_value": take_profit_value,
