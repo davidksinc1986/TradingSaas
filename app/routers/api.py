@@ -32,6 +32,7 @@ from app.schemas import (
 )
 from app.security import encrypt_payload, hash_password
 from app.services.alerts import (
+    TelegramDeliveryError,
     format_failure_message,
     format_user_failure_message,
     format_user_info_message,
@@ -321,7 +322,10 @@ def me_telegram_test(db=Depends(get_db), user=Depends(current_user)):
         raise HTTPException(status_code=400, detail="Activa las alertas de Telegram antes de probar el envío")
     if not user_has_telegram_config(user):
         raise HTTPException(status_code=400, detail="Faltan bot key o chat id de Telegram")
-    ok = send_user_telegram_test_alert(user)
+    try:
+        ok = send_user_telegram_test_alert(user, raise_on_error=True)
+    except TelegramDeliveryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
     if not ok:
         raise HTTPException(status_code=502, detail="No se pudo enviar el mensaje de prueba a Telegram")
     return {"ok": True, "message": "Mensaje de prueba enviado a Telegram"}

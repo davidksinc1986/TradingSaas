@@ -67,8 +67,11 @@ def test_send_user_telegram_test_alert_posts_message():
     captured = {}
 
     class _FakeResponse:
-        def raise_for_status(self):
-            return None
+        status_code = 200
+        text = '{"ok":true}'
+
+        def json(self):
+            return {"ok": True}
 
     class _FakeClient:
         def __init__(self, timeout):
@@ -93,6 +96,74 @@ def test_send_user_telegram_test_alert_posts_message():
     assert captured["url"] == "https://api.telegram.org/bot123:abc/sendMessage"
     assert captured["json"]["chat_id"] == "999"
     assert "Telegram" in captured["json"]["text"]
+
+
+def test_send_user_telegram_test_alert_raises_clear_error_for_not_found():
+    alerts = _load_alerts_module()
+
+    class _FakeResponse:
+        status_code = 404
+        text = '{"ok":false,"description":"Not Found"}'
+
+        def json(self):
+            return {"ok": False, "description": "Not Found"}
+
+    class _FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json):
+            return _FakeResponse()
+
+    alerts.httpx.Client = _FakeClient
+
+    try:
+        alerts.send_user_telegram_test_alert(_user(), raise_on_error=True)
+    except alerts.TelegramDeliveryError as exc:
+        assert "404" in str(exc)
+        assert "token" in str(exc).lower()
+    else:
+        raise AssertionError("Expected TelegramDeliveryError for invalid bot token")
+
+
+def test_send_user_telegram_test_alert_raises_clear_error_for_chat_not_found():
+    alerts = _load_alerts_module()
+
+    class _FakeResponse:
+        status_code = 400
+        text = '{"ok":false,"description":"Bad Request: chat not found"}'
+
+        def json(self):
+            return {"ok": False, "description": "Bad Request: chat not found"}
+
+    class _FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json):
+            return _FakeResponse()
+
+    alerts.httpx.Client = _FakeClient
+
+    try:
+        alerts.send_user_telegram_test_alert(_user(), raise_on_error=True)
+    except alerts.TelegramDeliveryError as exc:
+        assert "chat not found" in str(exc).lower()
+        assert "/start" in str(exc)
+    else:
+        raise AssertionError("Expected TelegramDeliveryError for invalid chat id")
 
 
 def test_execution_message_includes_realized_pnl_and_close_reason():

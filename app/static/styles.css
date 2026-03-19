@@ -426,6 +426,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 
 .strategy-wizard-panel{max-width:980px}
 .strategy-top-layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,.95fr);gap:14px;align-items:start}
+.strategy-side-stack{display:grid;gap:14px;align-content:start}
 .strategy-inline-help{display:none;align-items:center;justify-content:center;width:22px;height:22px;border-radius:999px;border:1px solid rgba(240,185,11,.5);color:#ffe08a;font-weight:800;text-decoration:none;line-height:1}
 .strategy-inline-help:hover{background:rgba(240,185,11,.15)}
 .wizard-step-nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
@@ -490,13 +491,28 @@ tr:hover td{background:rgba(255,255,255,.02)}
   border-radius:16px;
   background:rgba(7,9,14,.62);
   min-width:0;
+  overflow:hidden;
 }
-.quantum-metric small{display:block;color:#a7adb8}
-.quantum-metric strong{display:block;margin-top:6px;font-size:clamp(18px,2vw,24px);color:#f5f7fa;line-height:1.15;overflow-wrap:anywhere;word-break:break-word}
+.quantum-metric small{display:block;color:#a7adb8;font-size:clamp(12px,1.1vw,14px);line-height:1.3}
+.quantum-metric strong{display:block;margin-top:6px;font-size:clamp(17px,1.75vw,22px);color:#f5f7fa;line-height:1.12;overflow-wrap:anywhere;word-break:break-word;text-wrap:balance}
+#quant-last-heartbeat,
+#quant-sync-status{font-size:clamp(15px,1.45vw,20px)}
+#quant-health-score,
+#quant-live-connectors,
+#risk-health-score,
+#risk-open-heat,
+#risk-drawdown,
+#risk-kill-switch{font-size:clamp(20px,2.1vw,28px)}
 .quantum-status-strip,
 .quantum-report-list{
   display:grid;
   gap:10px;
+}
+.decision-telemetry-toolbar{
+  display:grid;
+  grid-template-columns:140px minmax(0,1fr);
+  gap:10px;
+  margin:10px 0 2px;
 }
 .quantum-chip-row{
   display:flex;
@@ -539,7 +555,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .symbol-picker-shell.is-disabled{opacity:.7}
 .strategy-guidance-card{padding:12px;border:1px solid rgba(240,185,11,.22);border-radius:14px;background:linear-gradient(180deg,rgba(240,185,11,.08),rgba(15,15,15,.96));display:grid;gap:6px}
 .strategy-guidance-card strong{color:#ffe08a}
+.strategy-guidance-card h3,
+.strategy-guidance-card h4{margin:0;color:#fff7d1}
 .strategy-guidance-card ul{margin:0;padding-left:18px;color:#d1d5db}
+.strategy-guidance-card li{margin-bottom:6px}
+.strategy-guidance-sidebar{position:sticky;top:96px}
+.strategy-guidance-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.strategy-guidance-kpi{padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(10,10,12,.5)}
+.strategy-guidance-kpi small{display:block;color:#a7adb8;margin-bottom:4px}
+.strategy-guidance-kpi strong{display:block;color:#f5f7fa;font-size:15px;line-height:1.25}
 .quantum-report-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
@@ -561,8 +585,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
   .admin-command-grid,
   .quantum-report-grid,
   .quantum-metrics-grid{grid-template-columns:1fr}
+  .decision-telemetry-toolbar,
   .symbol-picker-layout{grid-template-columns:1fr}
   .symbol-picker-actions{grid-auto-flow:column;justify-content:flex-start}
+  .strategy-guidance-kpis{grid-template-columns:1fr}
+  .strategy-guidance-sidebar{position:static}
 }
 
 #global-toast-host{
