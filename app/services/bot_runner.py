@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from app.db import SessionLocal
 from app.models import BotSession, Connector
+from app.services.position_lifecycle import run_position_lifecycle
 from app.services.trading import run_strategy
 
 logger = logging.getLogger("trading_saas.bot_runner")
@@ -20,6 +21,7 @@ def _now_utc() -> datetime:
 
 def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
     now = now or _now_utc()
+    run_position_lifecycle(db)
     sessions = db.query(BotSession).filter(BotSession.is_active.is_(True)).order_by(BotSession.id.asc()).all()
     processed = 0
 
