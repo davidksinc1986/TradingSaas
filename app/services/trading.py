@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 
 from app.security import decrypt_payload
-from app.services.connector_state import ensure_connector_market_type_state
+from app.services.connector_state import build_runtime_connector, ensure_connector_market_type_state, resolve_runtime_market_type
 
 try:
     import ccxt
@@ -885,6 +885,7 @@ def run_strategy(
     dynamic_symbol_limit: int | None = None,
     run_source: str = "manual",
     bot_session_id: int | None = None,
+    market_type: str | None = None,
 ):
     import json
 
@@ -915,23 +916,25 @@ def run_strategy(
             results.append({"connector_id": connector_id, "status": "skipped", "reason": "connector_disabled_or_missing"})
             continue
         ensure_connector_market_type_state(connector, persist=True, db=db)
+        connector_market_type = resolve_runtime_market_type(connector, requested_market_type=market_type)
+        runtime_connector = build_runtime_connector(connector, market_type=connector_market_type)
 
-        client = get_connector_client(connector)
+        client = get_connector_client(runtime_connector)
         lifecycle_meta = run_position_lifecycle(db, connector_ids=[connector.id])
         selected_symbols, scanner_meta = select_symbols_for_run(
             connector_id=connector.id,
             timeframe=timeframe,
             fallback_symbols=symbols,
-            cfg=connector.config_json or {},
-            connector=connector,
+            cfg=runtime_connector.config_json or {},
+            connector=runtime_connector,
             force_dynamic=str(symbol_source_mode or "manual").lower() == "dynamic",
             max_symbols_override=dynamic_symbol_limit,
         )
-        sync_meta = sync_positions_with_exchange(db, connector, selected_symbols)
+        sync_meta = sync_positions_with_exchange(db, runtime_connector, selected_symbols)
 
         for symbol in selected_symbols:
             decision_reasons: list[str] = []
-            market_result = fetch_ohlcv_frame(connector=connector, symbol=symbol, timeframe=timeframe, limit=220)
+            market_result = fetch_ohlcv_frame(connector=runtime_connector, symbol=symbol, timeframe=timeframe, limit=220)
             frame = market_result.frame
             notes = {
                 "run_source": run_source,
@@ -968,7 +971,6 @@ def run_strategy(
                 raise RuntimeError(f"strategy {strategy_slug} not found")
 
             rule = get_strategy_rule(strategy_slug)
-            connector_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
             if connector_market_type not in rule.get("market_types", ["spot", "futures"]):
                 decision_reasons.append("strategy_market_mismatch")
 

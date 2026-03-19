@@ -41,7 +41,7 @@ class _FakeDB:
         self.commits += 1
 
 
-def test_execute_due_bot_sessions_prefers_connector_market_type_over_stale_session(monkeypatch):
+def test_execute_due_bot_sessions_keeps_session_market_type_isolated_from_connector(monkeypatch):
     connector = SimpleNamespace(
         id=10,
         user_id=4,
@@ -82,17 +82,20 @@ def test_execute_due_bot_sessions_prefers_connector_market_type_over_stale_sessi
     db = _FakeDB(session, connector)
 
     monkeypatch.setattr(bot_runner, "run_position_lifecycle", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        bot_runner,
-        "run_strategy",
-        lambda **kwargs: [{"connector_id": kwargs["connector_ids"][0], "status": "ok"}],
-    )
+    captured = {}
+
+    def _run_strategy(**kwargs):
+        captured.update(kwargs)
+        return [{"connector_id": kwargs["connector_ids"][0], "status": "ok"}]
+
+    monkeypatch.setattr(bot_runner, "run_strategy", _run_strategy)
 
     processed = bot_runner.execute_due_bot_sessions(db, now=datetime(2026, 3, 19, 18, 30, 0))
 
     assert processed == 1
-    assert connector.market_type == "futures"
+    assert connector.market_type == "spot"
     assert connector.config_json["market_type"] == "futures"
     assert connector.config_json["defaultType"] == "future"
-    assert session.market_type == "futures"
+    assert session.market_type == "spot"
+    assert captured["market_type"] == "spot"
     assert session.last_status == "ok"

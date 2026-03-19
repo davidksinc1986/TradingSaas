@@ -494,6 +494,7 @@ async function publishCurrentStrategyTemplate(){
   const name=prompt('Nombre de la estrategia pública:','Mi estrategia');
   if(!name)return;
   const config={
+    market_type:String(fd.get('market_type')||resolveEffectiveRunMarketType()||'spot'),
     strategy_slug:fd.get('strategy_slug'),
     timeframe:fd.get('timeframe'),
     risk_per_trade:Number(fd.get('risk_per_trade_percent')||3)/100,

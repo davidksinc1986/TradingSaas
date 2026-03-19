@@ -120,7 +120,7 @@ def test_list_connectors_never_returns_500_when_connector_is_corrupted(monkeypat
     assert alerts and alerts[0][0] == "API /api/connectors serialization"
 
 
-def test_list_bot_sessions_prefers_resolved_market_type_from_connector_config(monkeypatch):
+def test_list_bot_sessions_keeps_explicit_session_market_type(monkeypatch):
     connector = SimpleNamespace(
         id=44,
         label="Cuenta Binance Futures",
@@ -166,7 +166,7 @@ def test_list_bot_sessions_prefers_resolved_market_type_from_connector_config(mo
     assert rows[0]["market_type"] == "futures"
 
 
-def test_list_bot_sessions_ignores_stale_session_market_type_when_connector_resolves_futures(monkeypatch):
+def test_list_bot_sessions_does_not_overwrite_session_market_type_from_connector_defaults(monkeypatch):
     connector = SimpleNamespace(
         id=45,
         label="Cuenta Binance Futures",
@@ -209,7 +209,7 @@ def test_list_bot_sessions_ignores_stale_session_market_type_when_connector_reso
 
     rows = api.list_bot_sessions(db=_FakeDB([session]), user=SimpleNamespace(id=7))
 
-    assert rows[0]["market_type"] == "futures"
+    assert rows[0]["market_type"] == "spot"
 
 
 def test_dashboard_returns_safe_payload_when_aggregation_fails(monkeypatch):
