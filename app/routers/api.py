@@ -45,6 +45,7 @@ from app.services.connector_state import (
     ensure_connector_market_type_state,
     normalize_market_type,
     resolve_connector_market_type,
+    resolve_runtime_market_type,
     sync_connector_config_market_type,
 )
 from app.services.connectors import get_client
@@ -133,7 +134,14 @@ def _sync_connector_config_market_type(config: dict | None, market_type: str) ->
     return sync_connector_config_market_type(config, market_type)
 
 
-def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int], strategy_slug: str) -> list[Connector]:
+def _validate_strategy_connectors(
+    db,
+    *,
+    user_id: int,
+    connector_ids: list[int],
+    strategy_slug: str,
+    market_type: str | None = None,
+) -> list[Connector]:
     requested_ids = [int(connector_id) for connector_id in connector_ids]
     if not requested_ids:
         raise HTTPException(status_code=400, detail="Selecciona al menos un conector habilitado")
@@ -153,15 +161,11 @@ def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int],
     incompatible = [
         connector
         for connector in connectors
-        if _resolve_connector_market_type(
-            platform=str(getattr(connector, "platform", "") or ""),
-            market_type=getattr(connector, "market_type", None),
-            config=getattr(connector, "config_json", None),
-        ) not in allowed_market_types
+        if resolve_runtime_market_type(connector, requested_market_type=market_type) not in allowed_market_types
     ]
     if incompatible:
         detail = ", ".join(
-            f"{connector.label} ({connector.platform}/{connector.market_type})"
+            f"{connector.label} ({connector.platform}/{resolve_runtime_market_type(connector, requested_market_type=market_type)})"
             for connector in incompatible
         )
         raise HTTPException(
@@ -565,23 +569,13 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     if control.managed_by_admin and payload.strategy_slug not in allowed:
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
 
-    if payload.market_type is not None:
-        requested_connectors = db.query(Connector).filter(
-            Connector.user_id == user.id,
-            Connector.id.in_(payload.connector_ids),
-            Connector.is_enabled.is_(True),
-        ).all()
-        for connector in requested_connectors:
-            connector.market_type = _resolve_connector_market_type(
-                platform=connector.platform,
-                market_type=payload.market_type,
-                config=connector.config_json,
-            )
-            connector.config_json = _sync_connector_config_market_type(connector.config_json, connector.market_type)
-            ensure_connector_market_type_state(connector)
-        db.commit()
-
-    _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
+    _validate_strategy_connectors(
+        db,
+        user_id=user.id,
+        connector_ids=payload.connector_ids,
+        strategy_slug=payload.strategy_slug,
+        market_type=payload.market_type,
+    )
 
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
@@ -611,6 +605,7 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         symbol_source_mode=payload.symbol_source_mode,
         dynamic_symbol_limit=payload.dynamic_symbol_limit,
         run_source="manual",
+        market_type=payload.market_type,
     )
     status_counts: dict[str, int] = {}
     for item in result:
@@ -665,9 +660,12 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
         try:
             connector = session.connector
             if connector:
-                resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+                resolved_market_type = resolve_runtime_market_type(
+                    connector,
+                    requested_market_type=getattr(session, "market_type", None),
+                )
             else:
-                resolved_market_type = "spot"
+                resolved_market_type = _normalize_market_type(getattr(session, "market_type", None) or "spot")
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
             capital = _safe_float(getattr(session.user, "fixed_trade_amount_usd", 0) or config.get("allocation_value", config.get("default_quantity", 0)) or 0)
@@ -773,18 +771,18 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     ).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Enabled connector not found")
-    if payload.market_type is not None:
-        connector.market_type = _resolve_connector_market_type(
-            platform=connector.platform,
-            market_type=payload.market_type,
-            config=connector.config_json,
-        )
-        connector.config_json = _sync_connector_config_market_type(connector.config_json, connector.market_type)
-        ensure_connector_market_type_state(connector)
-        db.commit()
-    resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+    resolved_market_type = resolve_runtime_market_type(
+        connector,
+        requested_market_type=payload.market_type,
+    )
 
-    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
+    _validate_strategy_connectors(
+        db,
+        user_id=user.id,
+        connector_ids=[connector.id],
+        strategy_slug=payload.strategy_slug,
+        market_type=resolved_market_type,
+    )
 
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
@@ -793,7 +791,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
-        market_type=_normalize_market_type(getattr(payload, "market_type", None) or resolved_market_type),
+        market_type=resolved_market_type,
         strategy_slug=payload.strategy_slug,
         timeframe=normalized_timeframe,
         symbols_json={
@@ -862,7 +860,14 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
     if payload.strategy_slug is not None:
         if control.managed_by_admin and payload.strategy_slug not in allowed:
             raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
-        _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
+        effective_market_type = _normalize_market_type(payload.market_type or session.market_type)
+        _validate_strategy_connectors(
+            db,
+            user_id=user.id,
+            connector_ids=[session.connector_id],
+            strategy_slug=payload.strategy_slug,
+            market_type=effective_market_type,
+        )
         session.strategy_slug = payload.strategy_slug
     if payload.timeframe is not None:
         normalized_timeframe = _normalize_timeframe(payload.timeframe)
@@ -877,14 +882,10 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         connector = db.query(Connector).filter(Connector.id == session.connector_id, Connector.user_id == user.id).first()
         if not connector:
             raise HTTPException(status_code=404, detail="Enabled connector not found")
-        connector.market_type = _resolve_connector_market_type(
-            platform=connector.platform,
-            market_type=payload.market_type,
-            config=connector.config_json,
+        session.market_type = resolve_runtime_market_type(
+            connector,
+            requested_market_type=payload.market_type,
         )
-        connector.config_json = _sync_connector_config_market_type(connector.config_json, connector.market_type)
-        ensure_connector_market_type_state(connector)
-        session.market_type = connector.market_type
     if payload.min_ml_probability is not None:
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:
@@ -916,9 +917,6 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     db.commit()
     connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
-    if connector:
-        session.market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
-        db.commit()
     _notify_user_info(
         user,
         title="Bot actualizado",
@@ -963,6 +961,10 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
     cloned = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        market_type=resolve_runtime_market_type(
+            connector,
+            requested_market_type=getattr(source, "market_type", None),
+        ),
         strategy_slug=source.strategy_slug,
         timeframe=source.timeframe,
         symbols_json={
@@ -1179,9 +1181,14 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         raise HTTPException(status_code=404, detail="Enabled connector not found")
 
     cfg = template.config_json or {}
+    resolved_market_type = resolve_runtime_market_type(
+        connector,
+        requested_market_type=cfg.get("market_type"),
+    )
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        market_type=resolved_market_type,
         strategy_slug=cfg.get("strategy_slug", "ema_rsi"),
         timeframe=cfg.get("timeframe", "5m"),
         symbols_json={"symbols": payload.symbols},

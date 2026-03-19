@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -69,3 +70,35 @@ def ensure_connector_market_type_state(connector, *, persist: bool = False, db=N
     if persist and changed and db is not None:
         db.add(connector)
     return resolved
+
+
+def resolve_runtime_market_type(
+    connector,
+    *,
+    requested_market_type: str | None = None,
+    fallback_market_type: str | None = None,
+) -> str:
+    return resolve_connector_market_type(
+        platform=str(getattr(connector, "platform", "") or ""),
+        market_type=requested_market_type or fallback_market_type or getattr(connector, "market_type", None),
+        config=getattr(connector, "config_json", None),
+    )
+
+
+def build_runtime_connector(connector, *, market_type: str | None = None):
+    runtime_market_type = resolve_runtime_market_type(connector, requested_market_type=market_type)
+    runtime_config = sync_connector_config_market_type(getattr(connector, "config_json", None), runtime_market_type)
+    payload = {
+        "id": getattr(connector, "id", None),
+        "user_id": getattr(connector, "user_id", None),
+        "platform": getattr(connector, "platform", None),
+        "label": getattr(connector, "label", None),
+        "mode": getattr(connector, "mode", None),
+        "market_type": runtime_market_type,
+        "is_enabled": getattr(connector, "is_enabled", None),
+        "symbols_json": dict(getattr(connector, "symbols_json", None) or {}),
+        "config_json": runtime_config,
+        "encrypted_secret_blob": getattr(connector, "encrypted_secret_blob", None),
+        "created_at": getattr(connector, "created_at", None),
+    }
+    return SimpleNamespace(**payload)

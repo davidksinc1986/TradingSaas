@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from app.db import SessionLocal
 from app.models import BotSession, Connector
-from app.services.connector_state import ensure_connector_market_type_state, normalize_market_type, sync_connector_config_market_type
+from app.services.connector_state import ensure_connector_market_type_state, normalize_market_type, resolve_runtime_market_type
 from app.services.position_lifecycle import run_position_lifecycle
 from app.services.trading import run_strategy
 
@@ -41,17 +41,14 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
 
         connector_market_type = ensure_connector_market_type_state(connector, persist=True, db=db) if connector else "spot"
         session_market_type = normalize_market_type(getattr(session, "market_type", None))
-        resolved_market_type = connector_market_type or session_market_type or "spot"
+        resolved_market_type = resolve_runtime_market_type(
+            connector,
+            requested_market_type=session_market_type,
+            fallback_market_type=connector_market_type,
+        ) if connector else (session_market_type or "spot")
 
         if session_market_type != resolved_market_type:
             session.market_type = resolved_market_type
-        if connector and getattr(connector, "market_type", None) != resolved_market_type:
-            connector.market_type = resolved_market_type
-            connector.config_json = sync_connector_config_market_type(
-                getattr(connector, "config_json", None),
-                resolved_market_type,
-            )
-            ensure_connector_market_type_state(connector, persist=True, db=db)
 
         symbols = (session.symbols_json or {}).get("symbols", [])
         symbol_source_mode = str((session.symbols_json or {}).get("symbol_source_mode") or "manual")
@@ -91,6 +88,7 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
                 dynamic_symbol_limit=int(dynamic_symbol_limit) if dynamic_symbol_limit else None,
                 run_source="bot",
                 bot_session_id=session.id,
+                market_type=resolved_market_type,
             )
             session.last_status = "ok"
             session.last_error = None
