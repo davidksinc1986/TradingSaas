@@ -45,6 +45,7 @@ from app.services.market import price_check
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
 from app.services.bot_runner import execute_due_bot_sessions
+from app.services.position_lifecycle import trigger_kill_switch
 from app.services.trading import activity_metrics, dashboard_data, run_strategy, sync_positions_with_exchange
 from app.services.strategies import ALL_STRATEGIES
 
@@ -1077,9 +1078,21 @@ def reconcile_connector(connector_id: int, payload: dict | None = None, db=Depen
     _notify_user_info(
         user,
         title="Reconciliación ejecutada",
-        detail=f"{connector.label}: {result.get('matched_positions', 0)} posiciones conciliadas y {result.get('closed_positions', 0)} cerradas por sync.",
+        detail=f"{connector.label}: {len(result.get('resolved', []))} símbolos reconciliados y {len(result.get('orphaned', []))} posiciones huérfanas detectadas.",
         connector_label=connector.label,
         platform=connector.platform,
+    )
+    return result
+
+
+@router.post("/risk/kill-switch")
+def risk_kill_switch(payload: dict | None = None, db=Depends(get_db), user=Depends(current_user)):
+    connector_ids = [int(item) for item in ((payload or {}).get("connector_ids") or [])]
+    result = trigger_kill_switch(db, connector_ids=connector_ids or None, reason="manual")
+    _notify_user_info(
+        user,
+        title="Kill switch ejecutado",
+        detail=f"Se intentó cerrar {len(result.get('closed', [])) + len(result.get('failed', []))} posiciones abiertas.",
     )
     return result
 

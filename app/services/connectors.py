@@ -194,6 +194,10 @@ class BaseConnectorClient:
             "side": None,
         }
 
+    def list_open_positions(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+        symbols = list(symbols or [])
+        return [self.fetch_position_context(symbol) for symbol in symbols if symbol]
+
     def fetch_available_balance(self) -> dict[str, Any]:
         if self.connector.mode == "live":
             return {
@@ -762,6 +766,11 @@ class CCXTConnectorClient(BaseConnectorClient):
 
         if market_type == "spot":
             balance = exchange.fetch_balance()
+            ticker = {}
+            try:
+                ticker = exchange.fetch_ticker(symbol)
+            except Exception:
+                ticker = {}
             base = market.get("base")
             asset_row = (balance or {}).get(base) or {}
             free_qty = float(asset_row.get("free") or 0.0)
@@ -778,6 +787,7 @@ class CCXTConnectorClient(BaseConnectorClient):
                 "spot_base_total": total_qty,
                 "net_contracts": 0.0,
                 "side": "long" if total_qty > 0 else None,
+                "last_price": float(ticker.get("last") or ticker.get("close") or 0.0),
             }
 
         try:
@@ -814,6 +824,17 @@ class CCXTConnectorClient(BaseConnectorClient):
         elif net_contracts < 0:
             detected_side = "short"
 
+        entry_price = 0.0
+        mark_price = 0.0
+        for pos in positions or []:
+            info = pos.get("info") or {}
+            if symbol != pos.get("symbol", symbol):
+                pass
+            entry_price = float(pos.get("entryPrice") or info.get("entryPrice") or info.get("avgPrice") or entry_price or 0.0)
+            mark_price = float(pos.get("markPrice") or info.get("markPrice") or info.get("mark_price") or mark_price or 0.0)
+            if entry_price or mark_price:
+                break
+
         return {
             "market_type": "futures",
             "symbol": symbol,
@@ -825,7 +846,53 @@ class CCXTConnectorClient(BaseConnectorClient):
             "spot_base_total": 0.0,
             "net_contracts": float(net_contracts),
             "side": detected_side,
+            "entry_price": entry_price,
+            "mark_price": mark_price,
+            "last_price": mark_price,
         }
+
+    def list_open_positions(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        exchange = self.build_exchange()
+        symbols = [str(symbol).strip() for symbol in (symbols or []) if str(symbol).strip()]
+
+        if market_type == "spot":
+            return [self.fetch_position_context(symbol) for symbol in symbols]
+
+        try:
+            positions = exchange.fetch_positions(symbols or None)
+        except Exception:
+            positions = []
+
+        results: list[dict[str, Any]] = []
+        for pos in positions or []:
+            info = pos.get("info") or {}
+            raw_symbol = pos.get("symbol") or info.get("symbol")
+            if not raw_symbol:
+                continue
+            raw_amt = pos.get("contracts") or pos.get("positionAmt") or info.get("positionAmt") or info.get("contracts") or 0
+            try:
+                amt = float(raw_amt or 0.0)
+            except Exception:
+                amt = 0.0
+            side = (pos.get("side") or info.get("positionSide") or "").lower()
+            if side == "short" and amt > 0:
+                amt = -amt
+            if amt == 0:
+                continue
+            results.append({
+                "market_type": market_type,
+                "symbol": raw_symbol,
+                "has_position": True,
+                "net_contracts": amt,
+                "side": "long" if amt > 0 else "short",
+                "entry_price": float(pos.get("entryPrice") or info.get("entryPrice") or info.get("avgPrice") or 0.0),
+                "mark_price": float(pos.get("markPrice") or info.get("markPrice") or info.get("mark_price") or 0.0),
+                "last_price": float(pos.get("markPrice") or info.get("markPrice") or info.get("mark_price") or 0.0),
+                "spot_base_total": 0.0,
+                "spot_base_free": 0.0,
+            })
+        return results
 
     def _resolve_fill_price(self, order: dict[str, Any], price_hint: float) -> float:
         average = order.get("average")
@@ -1172,6 +1239,78 @@ class CCXTConnectorClient(BaseConnectorClient):
 
 
 class MT5ConnectorClient(BaseConnectorClient):
+    def fetch_position_context(self, symbol: str) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return super().fetch_position_context(symbol)
+
+        self._ensure_session()
+        try:
+            positions = mt5.positions_get(symbol=symbol) or []
+            net_volume = 0.0
+            side = None
+            entry_price = 0.0
+            last_price = 0.0
+            for item in positions:
+                data = item._asdict() if hasattr(item, "_asdict") else {}
+                volume = float(data.get("volume") or getattr(item, "volume", 0.0) or 0.0)
+                pos_type = int(data.get("type") or getattr(item, "type", 0) or 0)
+                signed = volume if pos_type == getattr(mt5, "POSITION_TYPE_BUY", 0) else -volume
+                net_volume += signed
+                entry_price = float(data.get("price_open") or getattr(item, "price_open", 0.0) or entry_price or 0.0)
+                last_price = float(data.get("price_current") or getattr(item, "price_current", 0.0) or last_price or 0.0)
+            if net_volume > 0:
+                side = "long"
+            elif net_volume < 0:
+                side = "short"
+            return {
+                "market_type": getattr(self.connector, "market_type", "forex"),
+                "symbol": symbol,
+                "found": True,
+                "has_position": net_volume != 0,
+                "spot_base_free": 0.0,
+                "spot_base_total": 0.0,
+                "net_contracts": float(net_volume),
+                "side": side,
+                "entry_price": entry_price,
+                "last_price": last_price,
+            }
+        finally:
+            self._shutdown()
+
+    def list_open_positions(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+        if self.connector.mode != "live":
+            return super().list_open_positions(symbols)
+
+        self._ensure_session()
+        try:
+            positions = mt5.positions_get() or []
+            results = []
+            allowed = {str(symbol).strip() for symbol in (symbols or []) if str(symbol).strip()}
+            for item in positions:
+                data = item._asdict() if hasattr(item, "_asdict") else {}
+                symbol = data.get("symbol") or getattr(item, "symbol", None)
+                if not symbol or (allowed and symbol not in allowed):
+                    continue
+                volume = float(data.get("volume") or getattr(item, "volume", 0.0) or 0.0)
+                pos_type = int(data.get("type") or getattr(item, "type", 0) or 0)
+                signed = volume if pos_type == getattr(mt5, "POSITION_TYPE_BUY", 0) else -volume
+                if signed == 0:
+                    continue
+                results.append({
+                    "market_type": getattr(self.connector, "market_type", "forex"),
+                    "symbol": symbol,
+                    "has_position": True,
+                    "net_contracts": float(signed),
+                    "side": "long" if signed > 0 else "short",
+                    "entry_price": float(data.get("price_open") or getattr(item, "price_open", 0.0) or 0.0),
+                    "last_price": float(data.get("price_current") or getattr(item, "price_current", 0.0) or 0.0),
+                    "ticket": data.get("ticket") or getattr(item, "ticket", None),
+                    "spot_base_total": 0.0,
+                    "spot_base_free": 0.0,
+                })
+            return results
+        finally:
+            self._shutdown()
     def fetch_available_balance(self) -> dict[str, Any]:
         if self.connector.mode != "live":
             return super().fetch_available_balance()

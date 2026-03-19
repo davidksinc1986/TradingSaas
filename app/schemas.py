@@ -46,10 +46,16 @@ class StrategyRiskMixin(BaseModel):
         tp_value = float(getattr(self, "take_profit_value", 0) or 0)
         sl_value = float(getattr(self, "stop_loss_value", 0) or 0)
 
-        if sl_mode == "percent" and sl_value > 1.5:
-            raise ValueError("Stop loss porcentual no puede superar 1.5%")
+        trailing_value = float(getattr(self, "trailing_stop_value", 0) or 0)
+
+        if sl_value <= 0:
+            raise ValueError("Toda posición debe incluir stop loss obligatorio")
         if tp_mode == sl_mode and tp_value > 0 and sl_value >= tp_value:
             raise ValueError("Stop loss debe ser menor al take profit cuando usan la misma unidad")
+        if sl_mode == "percent" and sl_value > 1.5:
+            raise ValueError("Stop loss porcentual no puede superar 1.5%")
+        if tp_value <= 0 and trailing_value <= 0:
+            raise ValueError("Toda posición debe incluir take profit o trailing stop")
         return self
 
 

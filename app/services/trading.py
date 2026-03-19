@@ -809,75 +809,14 @@ def _trade_amount_cap(user, available_balance: float, price: float) -> float:
 
 
 def sync_positions_with_exchange(db, connector, symbols: list[str] | None = None) -> dict[str, Any]:
-    from datetime import datetime
+    from app.services.position_lifecycle import reconcile_positions_with_exchange
 
-    from app.models import OpenPosition
-    from app.services.connectors import get_client as get_connector_client
-
-    client = get_connector_client(connector)
-    tracked = list(symbols or [])
-    open_rows = db.query(OpenPosition).filter(
-        OpenPosition.connector_id == connector.id,
-        OpenPosition.is_open.is_(True),
-    ).all()
-    tracked.extend([row.symbol for row in open_rows])
-    tracked = sorted({str(item).strip() for item in tracked if str(item).strip()})
-
-    resolved = []
-    inconsistencies = 0
-    now = datetime.utcnow()
-
-    for symbol in tracked:
-        context = client.fetch_position_context(symbol)
-        db_rows = [row for row in open_rows if row.symbol == symbol]
-        exchange_has_position = bool(context.get("has_position"))
-
-        if db_rows and not exchange_has_position:
-            inconsistencies += len(db_rows)
-            for row in db_rows:
-                row.is_open = False
-                row.closed_at = now
-                meta = row.meta_json or {}
-                meta["last_sync"] = now.isoformat()
-                meta["sync_resolution"] = "closed_in_db_after_exchange_absence"
-                meta["exchange_context"] = context
-                row.meta_json = meta
-                resolved.append({"symbol": symbol, "action": "closed_db_position"})
-        elif not db_rows and exchange_has_position:
-            inconsistencies += 1
-            db.add(OpenPosition(
-                user_id=connector.user_id,
-                connector_id=connector.id,
-                platform=connector.platform,
-                market_type=getattr(connector, "market_type", "spot"),
-                symbol=symbol,
-                position_side=context.get("side") or "long",
-                entry_price=0.0,
-                current_qty=abs(_safe_float(context.get("net_contracts") or context.get("spot_base_total"))),
-                is_open=True,
-                meta_json={
-                    "created_by_sync": True,
-                    "last_sync": now.isoformat(),
-                    "exchange_context": context,
-                },
-            ))
-            resolved.append({"symbol": symbol, "action": "created_db_position_from_exchange"})
-        else:
-            for row in db_rows:
-                row.current_qty = abs(_safe_float(context.get("net_contracts") or context.get("spot_base_total")))
-                meta = row.meta_json or {}
-                meta["last_sync"] = now.isoformat()
-                meta["exchange_context"] = context
-                row.meta_json = meta
-
-    db.commit()
-    return {
-        "connector_id": connector.id,
-        "symbols_checked": tracked,
-        "resolved": resolved,
-        "inconsistencies": inconsistencies,
-        "synced_at": now.isoformat(),
-    }
+    result = reconcile_positions_with_exchange(db, connector, close_orphans=True)
+    result["symbols_checked"] = sorted({*(symbols or []), *[item.get("symbol") for item in result.get("resolved", []) if item.get("symbol")]})
+    result["inconsistencies"] = len(result.get("orphaned") or []) + len([
+        item for item in result.get("resolved", []) if item.get("action") != "matched"
+    ])
+    return result
 
 
 def run_strategy(
@@ -912,6 +851,7 @@ def run_strategy(
     from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
     from app.services.connectors import BaseConnectorClient, get_client as get_connector_client
     from app.services.market import fetch_ohlcv_frame
+    from app.services.position_lifecycle import initialize_position_lifecycle, run_position_lifecycle, validate_exit_policy
     from app.services.ml import train_and_score
     from app.services.risk import position_size
     from app.services.scanner import select_symbols_for_run
@@ -930,6 +870,7 @@ def run_strategy(
             continue
 
         client = get_connector_client(connector)
+        lifecycle_meta = run_position_lifecycle(db, connector_ids=[connector.id])
         selected_symbols, scanner_meta = select_symbols_for_run(
             connector_id=connector.id,
             timeframe=timeframe,
@@ -948,6 +889,7 @@ def run_strategy(
                 "bot_session_id": bot_session_id,
                 "scanner": scanner_meta,
                 "sync": sync_meta,
+                "lifecycle": lifecycle_meta,
                 "market_data": market_result.meta,
                 "candle": _candle_payload(frame),
                 "decision_reasons": decision_reasons,
@@ -1241,7 +1183,7 @@ def run_strategy(
                 existing_position.last_trade_log_id = trade_run.id
                 close_reason = "spot_sell"
             else:
-                db.add(OpenPosition(
+                new_position = OpenPosition(
                     user_id=user.id,
                     connector_id=connector.id,
                     platform=connector.platform,
@@ -1260,7 +1202,26 @@ def run_strategy(
                         "last_sync": sync_meta.get("synced_at"),
                         "market_data_source": market_result.meta.get("source"),
                     },
-                ))
+                )
+                initialize_position_lifecycle(
+                    new_position,
+                    strategy_slug=strategy_slug,
+                    timeframe=timeframe,
+                    take_profit_mode=take_profit_mode,
+                    take_profit_value=take_profit_value,
+                    stop_loss_mode=stop_loss_mode,
+                    stop_loss_value=stop_loss_value,
+                    trailing_stop_mode=trailing_stop_mode,
+                    trailing_stop_value=trailing_stop_value,
+                    indicator_exit_enabled=indicator_exit_enabled,
+                    indicator_exit_rule=indicator_exit_rule,
+                    bot_session_id=bot_session_id,
+                    run_source=run_source,
+                )
+                policy_ok, policy_errors = validate_exit_policy((new_position.meta_json or {}).get("exit_policy") or {})
+                if not policy_ok:
+                    raise RuntimeError(f"critical_missing_exit_policy:{','.join(policy_errors)}")
+                db.add(new_position)
 
             db.add(TradeLog(
                 user_id=user.id,
