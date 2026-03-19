@@ -86,6 +86,19 @@
           </div>
           <span class="pill tiny" id="decision-report-state">0 eventos</span>
         </div>
+        <p class="hint">La telemetría de decisión resume qué evaluó el motor, qué decidió y por qué terminó ejecutando, esperando o descartando una señal. Úsala para detectar sesgos, revisar calidad de datos y ajustar estrategia + timeframe antes de operar live.</p>
+        <div class="decision-telemetry-toolbar">
+          <label>Ventana
+            <select id="decision-telemetry-limit">
+              <option value="20">20 eventos</option>
+              <option value="50" selected>50 eventos</option>
+              <option value="100">100 eventos</option>
+            </select>
+          </label>
+          <label>Filtrar símbolo
+            <input id="decision-telemetry-symbol" type="search" placeholder="Ej. BTC/USDT">
+          </label>
+        </div>
         <div id="decision-breakdown-panel" class="quantum-report-list"></div>
       </article>
 
@@ -224,7 +237,7 @@
             <label>Conectores disponibles para ejecutar
               <select id="run-connector-select" multiple size="5"></select>
             </label>
-            <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
+            <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple). Para activar un bot 24/7 debes dejar exactamente un conector seleccionado para evitar ejecuciones en la app/mercado equivocados.</small>
             <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
             <div class="symbol-picker-shell">
               <div class="row-between">
@@ -272,7 +285,6 @@
             <input name="max_open_positions" type="number" min="1" max="20" value="1">
             <small class="hint">Solo contará posiciones realmente abiertas del conector seleccionado.</small>
           </label>
-          <div id="strategy-dynamic-guidance" class="strategy-guidance-card"></div>
           </div>
           <div class="wizard-step" data-wizard-content="3">
           <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
@@ -304,17 +316,24 @@
         </form>
       </div>
 
-      <div class="card strategy-library-card compact" id="strategy-library-panel">
-        <div class="row-between">
-          <h2>Estrategias disponibles</h2>
-          <small class="hint">Click para ver explicación rápida</small>
+      <div class="strategy-side-stack">
+        <div class="card strategy-guidance-card strategy-guidance-sidebar" id="strategy-dynamic-guidance">
+          <strong>Guía dinámica</strong>
+          <p class="hint">Selecciona conector, estrategia y timeframe para recibir una configuración sugerida.</p>
         </div>
-        <div id="strategy-library" class="stack"></div>
-        <div class="row-wrap" style="margin-top:8px;">
-          <button class="btn" type="button" id="publish-template-btn">Publicar estrategia actual</button>
-          <button class="btn" type="button" id="refresh-template-pool-btn">Ver pool público</button>
+
+        <div class="card strategy-library-card compact" id="strategy-library-panel">
+          <div class="row-between">
+            <h2>Estrategias disponibles</h2>
+            <small class="hint">Click para ver explicación rápida</small>
+          </div>
+          <div id="strategy-library" class="stack"></div>
+          <div class="row-wrap" style="margin-top:8px;">
+            <button class="btn" type="button" id="publish-template-btn">Publicar estrategia actual</button>
+            <button class="btn" type="button" id="refresh-template-pool-btn">Ver pool público</button>
+          </div>
+          <div id="template-pool" class="stack" style="margin-top:8px;"></div>
         </div>
-        <div id="template-pool" class="stack" style="margin-top:8px;"></div>
       </div>
     </div>
 
