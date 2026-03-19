@@ -179,6 +179,78 @@ def _validate_strategy_connectors(
     return [connectors_by_id[connector_id] for connector_id in requested_ids]
 
 
+def _resolve_session_trade_amount_settings(payload, *, user: User) -> dict[str, float | str | None]:
+    mode = str(getattr(payload, "trade_amount_mode", "inherit") or "inherit").strip().lower()
+    amount_per_trade = getattr(payload, "amount_per_trade", None)
+    amount_percentage = getattr(payload, "amount_percentage", None)
+
+    if mode == "inherit":
+        return {
+            "trade_amount_mode": None,
+            "amount_per_trade": None,
+            "amount_percentage": None,
+        }
+
+    if mode == "fixed_usd":
+        amount = _safe_float(amount_per_trade, 0.0)
+        if amount <= 0:
+            raise HTTPException(status_code=400, detail="Debes indicar una cantidad fija válida por trade")
+        return {
+            "trade_amount_mode": "fixed_usd",
+            "amount_per_trade": amount,
+            "amount_percentage": None,
+        }
+
+    if mode == "balance_percent":
+        percent = _safe_float(amount_percentage, 0.0)
+        if percent <= 0 or percent > 100:
+            raise HTTPException(status_code=400, detail="El porcentaje por trade debe estar entre 0 y 100")
+        return {
+            "trade_amount_mode": "balance_percent",
+            "amount_per_trade": None,
+            "amount_percentage": percent,
+        }
+
+    inherited_mode = str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
+    return {
+        "trade_amount_mode": inherited_mode,
+        "amount_per_trade": _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0) if inherited_mode == "fixed_usd" else None,
+        "amount_percentage": _safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) if inherited_mode == "balance_percent" else None,
+    }
+
+
+def _session_trade_amount_summary(session, *, user: User, connector_config: dict | None = None) -> dict[str, float | str]:
+    connector_config = connector_config or {}
+    mode = str(getattr(session, "trade_amount_mode", None) or getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
+    fixed_amount = _safe_float(
+        getattr(session, "amount_per_trade", None)
+        if getattr(session, "amount_per_trade", None) is not None
+        else getattr(user, "fixed_trade_amount_usd", connector_config.get("allocation_value", connector_config.get("default_quantity", 0))),
+        0.0,
+    )
+    percentage = _safe_float(
+        getattr(session, "amount_percentage", None)
+        if getattr(session, "amount_percentage", None) is not None
+        else getattr(user, "trade_balance_percent", 10.0),
+        0.0,
+    )
+    if mode == "balance_percent":
+        return {
+            "trade_amount_mode": mode,
+            "capital_per_operation": percentage,
+            "capital_display_value": percentage,
+            "capital_display_unit": "%",
+            "capital_display_mode": "balance_percent",
+        }
+    return {
+        "trade_amount_mode": "fixed_usd",
+        "capital_per_operation": fixed_amount,
+        "capital_display_value": fixed_amount,
+        "capital_display_unit": str((connector_config or {}).get("quote_asset", "USDT")).upper(),
+        "capital_display_mode": "fixed_usd",
+    }
+
+
 def _safe_float(value, fallback: float = 0.0) -> float:
     try:
         parsed = float(value)
@@ -579,6 +651,7 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
 
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+    trade_amount_settings = _resolve_session_trade_amount_settings(payload, user=user)
 
     result = run_strategy(
         db=db,
@@ -606,6 +679,9 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         dynamic_symbol_limit=payload.dynamic_symbol_limit,
         run_source="manual",
         market_type=payload.market_type,
+        trade_amount_mode=trade_amount_settings["trade_amount_mode"],
+        fixed_trade_amount_usd=trade_amount_settings["amount_per_trade"],
+        trade_balance_percent=trade_amount_settings["amount_percentage"],
     )
     status_counts: dict[str, int] = {}
     for item in result:
@@ -668,7 +744,8 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 resolved_market_type = _normalize_market_type(getattr(session, "market_type", None) or "spot")
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
-            capital = _safe_float(getattr(session.user, "fixed_trade_amount_usd", 0) or config.get("allocation_value", config.get("default_quantity", 0)) or 0)
+            session_user = getattr(session, "user", None) or user
+            capital_summary = _session_trade_amount_summary(session, user=session_user, connector_config=config)
             payload.append({
                 "id": session.id,
                 "connector_id": session.connector_id,
@@ -685,6 +762,9 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "dynamic_symbol_limit": int((session.symbols_json or {}).get("dynamic_symbol_limit") or len(symbols) or 1),
                 "interval_minutes": session.interval_minutes,
                 "risk_per_trade": session.risk_per_trade,
+                "trade_amount_mode": capital_summary["trade_amount_mode"],
+                "amount_per_trade": _safe_float(getattr(session, "amount_per_trade", None)),
+                "amount_percentage": _safe_float(getattr(session, "amount_percentage", None)),
                 "min_ml_probability": session.min_ml_probability,
                 "take_profit_mode": session.take_profit_mode,
                 "take_profit_value": session.take_profit_value,
@@ -703,8 +783,11 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "next_run_at": _safe_iso(session.next_run_at),
                 "last_status": session.last_status,
                 "last_error": session.last_error,
-                "capital_per_operation": capital,
-                "capital_currency": "USDT",
+                "capital_per_operation": capital_summary["capital_per_operation"],
+                "capital_display_value": capital_summary["capital_display_value"],
+                "capital_display_unit": capital_summary["capital_display_unit"],
+                "capital_display_mode": capital_summary["capital_display_mode"],
+                "capital_currency": capital_summary["capital_display_unit"],
                 "created_at": _safe_iso(session.created_at),
             })
         except Exception as exc:
@@ -725,6 +808,9 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "dynamic_symbol_limit": 1,
                 "interval_minutes": getattr(session, "interval_minutes", 5),
                 "risk_per_trade": _safe_float(getattr(session, "risk_per_trade", 0.0)),
+                "trade_amount_mode": "fixed_usd",
+                "amount_per_trade": _safe_float(getattr(session, "amount_per_trade", 0.0)),
+                "amount_percentage": _safe_float(getattr(session, "amount_percentage", 0.0)),
                 "min_ml_probability": _safe_float(getattr(session, "min_ml_probability", 0.0)),
                 "take_profit_mode": "percent",
                 "take_profit_value": 1.5,
@@ -744,6 +830,9 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "last_status": "error",
                 "last_error": "No se pudo serializar esta sesión. Revisa configuración y logs.",
                 "capital_per_operation": 0.0,
+                "capital_display_value": 0.0,
+                "capital_display_unit": "USDT",
+                "capital_display_mode": "fixed_usd",
                 "capital_currency": "USDT",
                 "created_at": _safe_iso(getattr(session, "created_at", None)),
             })
@@ -786,6 +875,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
 
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+    trade_amount_settings = _resolve_session_trade_amount_settings(payload, user=user)
 
     normalized_timeframe = _normalize_timeframe(payload.timeframe)
     session = BotSession(
@@ -801,6 +891,9 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         },
         interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
         risk_per_trade=risk_value,
+        trade_amount_mode=trade_amount_settings["trade_amount_mode"],
+        amount_per_trade=trade_amount_settings["amount_per_trade"],
+        amount_percentage=trade_amount_settings["amount_percentage"],
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
         take_profit_mode=payload.take_profit_mode,
@@ -820,18 +913,21 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         next_run_at=datetime.utcnow(),
     )
     db.add(session)
+    db.flush()
+    session_id = session.id
+    session_strategy = session.strategy_slug
+    session_timeframe = session.timeframe
     db.commit()
-    db.refresh(session)
 
     _notify_user_info(
         user,
         title="Bot 24/7 activado",
-        detail=f"Sesión #{session.id} creada con estrategia {session.strategy_slug} en timeframe {session.timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
+        detail=f"Sesión #{session_id} creada con estrategia {session_strategy} en timeframe {session_timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
         connector_label=connector.label,
         platform=connector.platform,
     )
 
-    return {"ok": True, "session_id": session.id}
+    return {"ok": True, "session_id": session_id}
 
 
 @router.put("/bot-sessions/{session_id}")
@@ -878,6 +974,15 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     if payload.risk_per_trade is not None:
         session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    if (
+        payload.trade_amount_mode is not None
+        or payload.amount_per_trade is not None
+        or payload.amount_percentage is not None
+    ):
+        trade_amount_settings = _resolve_session_trade_amount_settings(payload, user=user)
+        session.trade_amount_mode = trade_amount_settings["trade_amount_mode"]
+        session.amount_per_trade = trade_amount_settings["amount_per_trade"]
+        session.amount_percentage = trade_amount_settings["amount_percentage"]
     if payload.market_type is not None:
         connector = db.query(Connector).filter(Connector.id == session.connector_id, Connector.user_id == user.id).first()
         if not connector:
@@ -973,6 +1078,9 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         },
         interval_minutes=source.interval_minutes,
         risk_per_trade=source.risk_per_trade,
+        trade_amount_mode=getattr(source, "trade_amount_mode", None),
+        amount_per_trade=getattr(source, "amount_per_trade", None),
+        amount_percentage=getattr(source, "amount_percentage", None),
         min_ml_probability=source.min_ml_probability,
         use_live_if_available=source.use_live_if_available,
         take_profit_mode=source.take_profit_mode,
@@ -991,16 +1099,17 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         last_status="cloned",
     )
     db.add(cloned)
+    db.flush()
+    cloned_id = cloned.id
     db.commit()
-    db.refresh(cloned)
     _notify_user_info(
         user,
         title="Bot clonado",
-        detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned.id}.",
+        detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned_id}.",
         connector_label=connector.label,
         platform=connector.platform,
     )
-    return {"ok": True, "session_id": cloned.id}
+    return {"ok": True, "session_id": cloned_id}
 
 
 @router.get("/connectors/{connector_id}/symbols-catalog")
@@ -1117,7 +1226,11 @@ def create_strategy_template(payload: StrategyTemplateCreate, db=Depends(get_db)
         config = {
             "strategy_slug": source.strategy_slug,
             "timeframe": source.timeframe,
+            "market_type": getattr(source, "market_type", "spot"),
             "risk_per_trade": source.risk_per_trade,
+            "trade_amount_mode": getattr(source, "trade_amount_mode", None),
+            "amount_per_trade": getattr(source, "amount_per_trade", None),
+            "amount_percentage": getattr(source, "amount_percentage", None),
             "min_ml_probability": source.min_ml_probability,
             "use_live_if_available": source.use_live_if_available,
             "take_profit_mode": source.take_profit_mode,
@@ -1194,6 +1307,9 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         symbols_json={"symbols": payload.symbols},
         interval_minutes=int(cfg.get("interval_minutes", _interval_from_timeframe(cfg.get("timeframe", "5m"), 5))),
         risk_per_trade=float(cfg.get("risk_per_trade", 0.03)),
+        trade_amount_mode=cfg.get("trade_amount_mode"),
+        amount_per_trade=_safe_float(cfg.get("amount_per_trade")) if cfg.get("amount_per_trade") is not None else None,
+        amount_percentage=_safe_float(cfg.get("amount_percentage")) if cfg.get("amount_percentage") is not None else None,
         min_ml_probability=float(cfg.get("min_ml_probability", 0.58)),
         use_live_if_available=bool(cfg.get("use_live_if_available", False)),
         take_profit_mode=cfg.get("take_profit_mode", "percent"),

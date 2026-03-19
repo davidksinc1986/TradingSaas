@@ -800,12 +800,53 @@ def _candle_payload(df) -> dict[str, Any]:
     }
 
 
-def _trade_amount_cap(user, available_balance: float, price: float) -> float:
-    mode = str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
+def _resolve_trade_amount_config(
+    user,
+    *,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
+) -> dict[str, float | str]:
+    mode = str(trade_amount_mode or getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
     if mode == "balance_percent":
-        budget = available_balance * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)
+        return {
+            "mode": "balance_percent",
+            "fixed_trade_amount_usd": 0.0,
+            "trade_balance_percent": _safe_float(
+                trade_balance_percent if trade_balance_percent is not None else getattr(user, "trade_balance_percent", 10.0),
+                10.0,
+            ),
+        }
+    return {
+        "mode": "fixed_usd",
+        "fixed_trade_amount_usd": _safe_float(
+            fixed_trade_amount_usd if fixed_trade_amount_usd is not None else getattr(user, "fixed_trade_amount_usd", 10.0),
+            10.0,
+        ),
+        "trade_balance_percent": 0.0,
+    }
+
+
+def _trade_amount_cap(
+    user,
+    available_balance: float,
+    price: float,
+    *,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
+) -> float:
+    sizing = _resolve_trade_amount_config(
+        user,
+        trade_amount_mode=trade_amount_mode,
+        fixed_trade_amount_usd=fixed_trade_amount_usd,
+        trade_balance_percent=trade_balance_percent,
+    )
+    mode = str(sizing["mode"]).lower()
+    if mode == "balance_percent":
+        budget = available_balance * (_safe_float(sizing["trade_balance_percent"], 10.0) / 100.0)
     else:
-        budget = _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
+        budget = _safe_float(sizing["fixed_trade_amount_usd"], 10.0)
     if available_balance > 0:
         budget = min(max(budget, 10.0), available_balance)
     return max(budget / max(price, 0.0000001), 0.0)
@@ -886,6 +927,9 @@ def run_strategy(
     run_source: str = "manual",
     bot_session_id: int | None = None,
     market_type: str | None = None,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
 ):
     import json
 
@@ -907,6 +951,12 @@ def run_strategy(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise RuntimeError(f"user {user_id} not found")
+    trade_amount_config = _resolve_trade_amount_config(
+        user,
+        trade_amount_mode=trade_amount_mode,
+        fixed_trade_amount_usd=fixed_trade_amount_usd,
+        trade_balance_percent=trade_balance_percent,
+    )
 
     results: list[dict[str, Any]] = []
 
@@ -1098,7 +1148,14 @@ def run_strategy(
             )
 
             risk_qty = position_size(_safe_float(balance.get("available_balance"), 0.0), risk_per_trade, price, stop_pct)
-            budget_cap_qty = _trade_amount_cap(user, _safe_float(balance.get("available_balance"), 0.0), price)
+            budget_cap_qty = _trade_amount_cap(
+                user,
+                _safe_float(balance.get("available_balance"), 0.0),
+                price,
+                trade_amount_mode=str(trade_amount_config["mode"]),
+                fixed_trade_amount_usd=_safe_float(trade_amount_config["fixed_trade_amount_usd"], 0.0),
+                trade_balance_percent=_safe_float(trade_amount_config["trade_balance_percent"], 0.0),
+            )
             quantity = min(risk_qty, budget_cap_qty) if budget_cap_qty > 0 else risk_qty
 
             guardrails = RiskGuardrails.from_config(
@@ -1356,12 +1413,15 @@ def run_strategy(
                     "capital_allocated": round(
                         min(
                             _safe_float(balance.get("available_balance"), 0.0),
-                            _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
-                            if str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower() == "fixed_usd"
-                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)),
+                            _safe_float(trade_amount_config["fixed_trade_amount_usd"], 10.0)
+                            if str(trade_amount_config["mode"]).lower() == "fixed_usd"
+                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(trade_amount_config["trade_balance_percent"], 10.0) / 100.0)),
                         ),
                         8,
                     ),
+                    "trade_amount_mode": trade_amount_config["mode"],
+                    "trade_amount_fixed_usd": trade_amount_config["fixed_trade_amount_usd"],
+                    "trade_amount_percent": trade_amount_config["trade_balance_percent"],
                     "market_data": market_result.meta,
                     "pretrade": pretrade,
                     "balance": balance,

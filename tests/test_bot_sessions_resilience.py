@@ -23,9 +23,23 @@ class _FakeQuery:
 class _FakeDB:
     def __init__(self, sessions):
         self._sessions = sessions
+        self.flushed = 0
+        self.commits = 0
 
     def query(self, *_args, **_kwargs):
         return _FakeQuery(self._sessions)
+
+    def add(self, obj):
+        self._sessions.append(obj)
+
+    def flush(self):
+        self.flushed += 1
+        for index, item in enumerate(self._sessions, start=1):
+            if getattr(item, "id", None) is None:
+                item.id = index
+
+    def commit(self):
+        self.commits += 1
 
 
 class _ExplosiveConnector:
@@ -210,6 +224,123 @@ def test_list_bot_sessions_does_not_overwrite_session_market_type_from_connector
     rows = api.list_bot_sessions(db=_FakeDB([session]), user=SimpleNamespace(id=7))
 
     assert rows[0]["market_type"] == "spot"
+
+
+def test_list_bot_sessions_uses_session_trade_amount_overrides(monkeypatch):
+    connector = SimpleNamespace(
+        id=46,
+        label="Cuenta Bybit",
+        platform="bybit",
+        mode="live",
+        market_type="futures",
+        config_json={"market_type": "futures"},
+    )
+    session = SimpleNamespace(
+        id=23,
+        connector_id=46,
+        connector=connector,
+        user=SimpleNamespace(trade_amount_mode="fixed_usd", fixed_trade_amount_usd=10000, trade_balance_percent=12),
+        strategy_slug="momentum_breakout",
+        timeframe="15m",
+        symbols_json={"symbols": ["BTC/USDT"]},
+        interval_minutes=15,
+        risk_per_trade=0.01,
+        trade_amount_mode="balance_percent",
+        amount_per_trade=None,
+        amount_percentage=3.5,
+        min_ml_probability=0.55,
+        take_profit_mode="percent",
+        take_profit_value=1.2,
+        stop_loss_mode="percent",
+        stop_loss_value=0.6,
+        trailing_stop_mode="percent",
+        trailing_stop_value=0.4,
+        indicator_exit_enabled=False,
+        indicator_exit_rule="macd_cross",
+        leverage_profile="balanced",
+        max_open_positions=1,
+        compound_growth_enabled=False,
+        atr_volatility_filter_enabled=True,
+        is_active=True,
+        last_run_at=None,
+        next_run_at=None,
+        last_status="queued",
+        last_error=None,
+        created_at=None,
+        market_type="futures",
+    )
+
+    rows = api.list_bot_sessions(db=_FakeDB([session]), user=SimpleNamespace(id=7, trade_amount_mode="fixed_usd", fixed_trade_amount_usd=10000, trade_balance_percent=12))
+
+    assert rows[0]["trade_amount_mode"] == "balance_percent"
+    assert rows[0]["capital_per_operation"] == 3.5
+    assert rows[0]["capital_display_unit"] == "%"
+
+
+def test_create_bot_session_flushes_and_returns_session_id_without_refresh(monkeypatch):
+    connector = SimpleNamespace(
+        id=77,
+        user_id=5,
+        label="Bybit Futures",
+        platform="bybit",
+        mode="live",
+        market_type="futures",
+        config_json={"market_type": "futures"},
+        is_enabled=True,
+    )
+
+    class _CreateQuery:
+        def __init__(self, row):
+            self.row = row
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return self.row
+
+    class _CreateDB(_FakeDB):
+        def __init__(self, connector_row):
+            super().__init__([])
+            self.connector_row = connector_row
+
+        def query(self, model, *_args, **_kwargs):
+            if getattr(model, "__name__", "") == "Connector":
+                return _CreateQuery(self.connector_row)
+            return _CreateQuery(None)
+
+    db = _CreateDB(connector)
+    notifications = []
+    monkeypatch.setattr(api, "_ensure_strategy_control", lambda *_args, **_kwargs: SimpleNamespace(managed_by_admin=False, allowed_strategies_json={"items": api.ALL_STRATEGIES}))
+    monkeypatch.setattr(api, "_validate_strategy_connectors", lambda *_args, **_kwargs: [connector])
+    monkeypatch.setattr(api, "_notify_user_info", lambda *_args, **_kwargs: notifications.append(True))
+
+    payload = api.BotSessionCreate(
+        connector_id=77,
+        market_type="futures",
+        symbols=["BTC/USDT"],
+        timeframe="15m",
+        strategy_slug="momentum_breakout",
+        risk_per_trade=1,
+        trade_amount_mode="fixed_usd",
+        amount_per_trade=125,
+        min_ml_probability=55,
+        interval_minutes=15,
+        take_profit_mode="percent",
+        take_profit_value=1.2,
+        stop_loss_mode="percent",
+        stop_loss_value=0.6,
+        trailing_stop_mode="percent",
+        trailing_stop_value=0.4,
+    )
+
+    result = api.create_bot_session(payload=payload, db=db, user=SimpleNamespace(id=5, trade_amount_mode="fixed_usd", fixed_trade_amount_usd=10, trade_balance_percent=10, alert_language="es"))
+
+    assert result["ok"] is True
+    assert result["session_id"] == 1
+    assert db.flushed == 1
+    assert db.commits == 1
+    assert notifications
 
 
 def test_dashboard_returns_safe_payload_when_aggregation_fails(monkeypatch):
