@@ -74,6 +74,9 @@ def ensure_schema_updates(db):
 
     add_missing_columns("bot_sessions", {
         "market_type": "ALTER TABLE bot_sessions ADD COLUMN market_type VARCHAR(20) DEFAULT 'spot'",
+        "trade_amount_mode": "ALTER TABLE bot_sessions ADD COLUMN trade_amount_mode VARCHAR(20)",
+        "amount_per_trade": "ALTER TABLE bot_sessions ADD COLUMN amount_per_trade FLOAT",
+        "amount_percentage": "ALTER TABLE bot_sessions ADD COLUMN amount_percentage FLOAT",
         "stop_loss_mode": "ALTER TABLE bot_sessions ADD COLUMN stop_loss_mode VARCHAR(20) DEFAULT 'percent'",
         "stop_loss_value": "ALTER TABLE bot_sessions ADD COLUMN stop_loss_value FLOAT DEFAULT 1.0",
         "take_profit_mode": "ALTER TABLE bot_sessions ADD COLUMN take_profit_mode VARCHAR(20) DEFAULT 'percent'",
