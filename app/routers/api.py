@@ -1013,6 +1013,22 @@ def dashboard(db=Depends(get_db), user=Depends(current_user)):
             "statuses": {},
             "latest_trades": [],
             "limits": [],
+            "risk_summary": {
+                "open_positions": 0,
+                "open_notional": 0.0,
+                "estimated_open_risk": 0.0,
+                "largest_position_pct": 0.0,
+                "daily_realized_pnl": 0.0,
+                "rolling_drawdown_pct": 0.0,
+                "degraded_data_runs": 0,
+                "kill_switch_armed": False,
+                "health_score": 100.0,
+                "alerts": [],
+                "suggestions": [],
+                "by_symbol": [],
+                "guardrails": {},
+            },
+            "insights": [],
         }
     safe_trades = []
     for trade in data.get("latest_trades", []):

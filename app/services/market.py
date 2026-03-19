@@ -14,6 +14,10 @@ class MarketFrameResult:
     meta: dict[str, Any]
 
 
+_MARKET_CACHE: dict[tuple[Any, ...], tuple[datetime, MarketFrameResult]] = {}
+_CACHE_TTL_SECONDS = 15
+
+
 def synthetic_ohlcv(symbol: str, periods: int = 300, timeframe: str = "1h") -> pd.DataFrame:
     seed_bias = (sum(ord(c) for c in symbol) % 17) / 1000
     drift = 0.0005 + seed_bias
@@ -92,8 +96,67 @@ def _market_data_health(frame: pd.DataFrame, timeframe: str) -> dict[str, Any]:
     }
 
 
-def fetch_ohlcv_frame(connector, symbol: str, timeframe: str = "1h", limit: int = 300) -> MarketFrameResult:
+def detect_market_anomalies(frame: pd.DataFrame) -> dict[str, Any]:
+    issues: list[str] = []
+    metrics: dict[str, Any] = {}
+    if frame.empty:
+        return {"severity": "critical", "issues": ["empty_frame"], "metrics": metrics}
+
+    invalid_ohlc = int(((frame["high"] < frame[["open", "close"]].max(axis=1)) | (frame["low"] > frame[["open", "close"]].min(axis=1))).sum())
+    non_positive = int((frame[["open", "high", "low", "close"]] <= 0).sum().sum())
+    zero_volume = int((frame["volume"] <= 0).sum()) if "volume" in frame else 0
+    close = frame["close"].astype(float)
+    returns = close.pct_change().abs().dropna()
+    outlier_moves = int((returns > 0.25).sum())
+
+    metrics.update({
+        "invalid_ohlc_rows": invalid_ohlc,
+        "non_positive_cells": non_positive,
+        "zero_volume_rows": zero_volume,
+        "outlier_moves": outlier_moves,
+        "rows": int(len(frame.index)),
+    })
+
+    if invalid_ohlc:
+        issues.append("ohlc_consistency_broken")
+    if non_positive:
+        issues.append("non_positive_prices")
+    if zero_volume and zero_volume >= max(len(frame.index) // 5, 3):
+        issues.append("volume_degraded")
+    if outlier_moves:
+        issues.append("abnormal_price_jumps")
+
+    severity = "ok"
+    if any(item in issues for item in {"ohlc_consistency_broken", "non_positive_prices"}):
+        severity = "critical"
+    elif issues:
+        severity = "high" if outlier_moves >= 2 else "warning"
+    return {"severity": severity, "issues": issues, "metrics": metrics}
+
+
+def _cache_key(connector, symbol: str, timeframe: str, limit: int) -> tuple[Any, ...]:
+    return (
+        getattr(connector, "id", None),
+        getattr(connector, "platform", None),
+        getattr(connector, "mode", None),
+        getattr(connector, "market_type", None),
+        symbol,
+        timeframe,
+        int(limit),
+    )
+
+
+def fetch_ohlcv_frame(connector, symbol: str, timeframe: str = "1h", limit: int = 300, *, use_cache: bool = True) -> MarketFrameResult:
     from app.services.connectors import CCXTConnectorClient, get_client
+
+    now = datetime.utcnow()
+    cache_key = _cache_key(connector, symbol, timeframe, limit)
+    if use_cache:
+        cached = _MARKET_CACHE.get(cache_key)
+        if cached and (now - cached[0]).total_seconds() <= _CACHE_TTL_SECONDS:
+            frame, meta = cached[1].frame.copy(), dict(cached[1].meta)
+            meta["cache"] = {"hit": True, "ttl_seconds": _CACHE_TTL_SECONDS, "cached_at": cached[0].isoformat()}
+            return MarketFrameResult(frame=frame, meta=meta)
 
     client = get_client(connector)
     normalized_symbol = symbol
@@ -107,47 +170,51 @@ def fetch_ohlcv_frame(connector, symbol: str, timeframe: str = "1h", limit: int 
         symbol_meta = {"input_symbol": symbol, "normalized_symbol": symbol, "found": False, "error": str(exc)}
         notes.append(f"normalize_symbol_failed:{exc}")
 
+    frame = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    exchange_price = None
+    difference_pct = None
+
     if connector.mode == "live" and isinstance(client, CCXTConnectorClient):
         try:
             exchange = client.build_exchange()
             raw_rows = exchange.fetch_ohlcv(normalized_symbol, timeframe=timeframe, limit=limit)
             frame = _normalize_ohlcv_frame(raw_rows)
             if not frame.empty:
+                source = "exchange_ohlcv"
                 ticker = exchange.fetch_ticker(normalized_symbol)
-                last_price = float(ticker.get("last") or ticker.get("close") or frame.iloc[-1]["close"])
+                exchange_price = float(ticker.get("last") or ticker.get("close") or frame.iloc[-1]["close"])
                 bot_price = float(frame.iloc[-1]["close"])
-                difference_pct = abs(bot_price - last_price) / max(last_price, 0.0000001) * 100.0
-                return MarketFrameResult(
-                    frame=frame,
-                    meta={
-                        "source": "exchange_ohlcv",
-                        "symbol": normalized_symbol,
-                        "symbol_meta": symbol_meta,
-                        "exchange_price": last_price,
-                        "bot_price": bot_price,
-                        "difference_pct": round(difference_pct, 6),
-                        "health": _market_data_health(frame, timeframe),
-                        "notes": notes,
-                    },
-                )
-            notes.append("empty_exchange_ohlcv")
+                difference_pct = abs(bot_price - exchange_price) / max(exchange_price, 0.0000001) * 100.0
+            else:
+                notes.append("empty_exchange_ohlcv")
         except Exception as exc:
             notes.append(f"exchange_ohlcv_failed:{exc}")
 
-    frame = synthetic_ohlcv(symbol=normalized_symbol, periods=limit, timeframe=timeframe)
-    return MarketFrameResult(
+    if frame.empty:
+        frame = synthetic_ohlcv(symbol=normalized_symbol, periods=limit, timeframe=timeframe)
+
+    health = _market_data_health(frame, timeframe)
+    anomalies = detect_market_anomalies(frame)
+    if source == "synthetic_fallback" and getattr(connector, "mode", "paper") == "live":
+        notes.append("live_connector_using_synthetic_fallback")
+
+    result = MarketFrameResult(
         frame=frame,
         meta={
             "source": source,
             "symbol": normalized_symbol,
             "symbol_meta": symbol_meta,
-            "exchange_price": None,
+            "exchange_price": exchange_price,
             "bot_price": float(frame.iloc[-1]["close"]) if not frame.empty else None,
-            "difference_pct": None,
-            "health": _market_data_health(frame, timeframe),
-            "notes": notes or ["using_synthetic_data"],
+            "difference_pct": round(difference_pct, 6) if difference_pct is not None else None,
+            "health": health,
+            "anomalies": anomalies,
+            "notes": notes or (["using_synthetic_data"] if source == "synthetic_fallback" else []),
+            "cache": {"hit": False, "ttl_seconds": _CACHE_TTL_SECONDS, "cached_at": now.isoformat()},
         },
     )
+    _MARKET_CACHE[cache_key] = (now, result)
+    return result
 
 
 def price_check(connector, symbol: str, timeframe: str = "1h") -> dict[str, Any]:
@@ -184,6 +251,8 @@ def price_check(connector, symbol: str, timeframe: str = "1h") -> dict[str, Any]
         "exchange_price": float(meta.get("exchange_price") or 0.0) if meta.get("exchange_price") is not None else None,
         "difference_pct": meta.get("difference_pct"),
         "health": meta.get("health") or {},
+        "anomalies": meta.get("anomalies") or {},
+        "cache": meta.get("cache") or {},
         "last_candle_timestamp": frame.iloc[-1]["timestamp"].isoformat() if not frame.empty else None,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "notes": meta.get("notes") or [],
