@@ -66,6 +66,10 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
                 trailing_stop_value=session.trailing_stop_value,
                 indicator_exit_enabled=session.indicator_exit_enabled,
                 indicator_exit_rule=session.indicator_exit_rule,
+                leverage_profile=session.leverage_profile,
+                max_open_positions=max(int(session.max_open_positions or 1), 1),
+                compound_growth_enabled=bool(session.compound_growth_enabled),
+                atr_volatility_filter_enabled=bool(session.atr_volatility_filter_enabled),
                 run_source="bot",
                 bot_session_id=session.id,
             )

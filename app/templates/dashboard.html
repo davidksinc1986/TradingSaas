@@ -37,7 +37,10 @@
         <small class="quantum-label">Quantum Mission Control</small>
         <h2>Estado táctico del sistema</h2>
       </div>
-      <span class="pill" id="quant-health-pill">Inicializando</span>
+      <div class="row-wrap">
+        <button class="btn btn-sm" type="button" id="refresh-quantum-btn">Refresh</button>
+        <span class="pill" id="quant-health-pill">Inicializando</span>
+      </div>
     </div>
     <div class="quantum-metrics-grid">
       <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
@@ -76,7 +79,10 @@
         <small class="quantum-label">Risk radar</small>
         <h2>Riesgo visible en 3 segundos</h2>
       </div>
-      <span class="pill tiny" id="risk-radar-state">Estable</span>
+      <div class="row-wrap">
+        <button class="btn btn-sm" type="button" id="refresh-risk-radar-btn">Refresh</button>
+        <span class="pill tiny" id="risk-radar-state">Estable</span>
+      </div>
     </div>
     <div class="quantum-metrics-grid">
       <div class="quantum-metric"><small>Health</small><strong id="risk-health-score">100%</strong></div>
@@ -212,6 +218,13 @@
             </label>
             <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
             <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+            <label>Modo de selección de símbolos
+              <select name="symbol_source_mode" id="symbol-source-mode">
+                <option value="manual">Manual</option>
+                <option value="dynamic">Dinámico desde la app seleccionada</option>
+              </select>
+            </label>
+            <small class="hint" id="symbol-source-help">Manual: escribe los pares separados por coma. Dinámico: el bot usará el universo del conector o top símbolos disponibles.</small>
             <label>Timeframe<input name="timeframe" value="1h"></label>
             <label>Estrategia <a class="strategy-inline-help" href="#strategy-library-panel" title="Ir a estrategias disponibles">?</a>
               <select name="strategy_slug"></select>
@@ -225,6 +238,10 @@
           </div>
           <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
           <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
+          <label>Máx. posiciones abiertas simultáneas
+            <input name="max_open_positions" type="number" min="1" max="20" value="1">
+            <small class="hint">Solo contará posiciones realmente abiertas del conector seleccionado.</small>
+          </label>
           </div>
           <div class="wizard-step" data-wizard-content="3">
           <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
@@ -244,7 +261,6 @@
           </label>
           <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
           <input type="hidden" name="leverage_profile" value="none">
-          <input type="hidden" name="max_open_positions" value="1">
           <input type="hidden" name="compound_growth_enabled" value="false">
           <input type="hidden" name="atr_volatility_filter_enabled" value="true">
           </div>
@@ -306,7 +322,7 @@
           <h2>Bots activos (24/7)</h2>
           <div style="display:flex;gap:8px;"><button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button><button class="btn" type="button" id="copy-selected-bot-btn">Copiar bot seleccionado</button></div>
         </div>
-        <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación.</small>
+        <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación en USDT/USD.</small>
         <div class="table-wrap" style="margin-top:10px;">
           <table id="bot-sessions-table">
             <thead>

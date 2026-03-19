@@ -805,6 +805,8 @@ def _trade_amount_cap(user, available_balance: float, price: float) -> float:
         budget = available_balance * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)
     else:
         budget = _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
+    if available_balance > 0:
+        budget = min(max(budget, 10.0), available_balance)
     return max(budget / max(price, 0.0000001), 0.0)
 
 
@@ -966,6 +968,7 @@ def run_strategy(
                 OpenPosition.connector_id == connector.id,
                 OpenPosition.is_open.is_(True),
             ).all()
+            open_positions = [item for item in open_positions if _safe_float(item.current_qty) > 0]
             open_count = len(open_positions)
             current_open_notional = sum(_safe_float(item.entry_price) * _safe_float(item.current_qty) for item in open_positions)
             current_open_risk = 0.0
@@ -1282,6 +1285,15 @@ def run_strategy(
                     "stop_loss_price": stop_loss_price,
                     "take_profit_price": take_profit_price,
                     "close_reason": close_reason,
+                    "capital_allocated": round(
+                        min(
+                            _safe_float(balance.get("available_balance"), 0.0),
+                            _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
+                            if str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower() == "fixed_usd"
+                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)),
+                        ),
+                        8,
+                    ),
                     "market_data": market_result.meta,
                     "pretrade": pretrade,
                     "balance": balance,
@@ -1327,7 +1339,11 @@ def dashboard_data(db, user_id: int) -> dict[str, Any]:
     latest_trades = trades[:20]
 
     realized_pnl = sum(_safe_float(item.pnl) for item in trades)
-    total_invested = sum(_safe_float(item.quantity) * _safe_float(item.price) for item in trades)
+    total_invested = sum(
+        _safe_float((item.meta_json or {}).get("capital_allocated"))
+        or (_safe_float(item.quantity) * _safe_float(item.price))
+        for item in trades
+    )
     winning_trades = sum(1 for item in trades if _safe_float(item.pnl) > 0)
     losing_trades = sum(1 for item in trades if _safe_float(item.pnl) < 0)
     platforms: dict[str, dict[str, Any]] = {}

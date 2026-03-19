@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -44,7 +45,6 @@ from app.services.connectors import get_client
 from app.services.market import price_check
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
-from app.services.bot_runner import execute_due_bot_sessions
 from app.services.position_lifecycle import trigger_kill_switch
 from app.services.trading import activity_metrics, dashboard_data, run_strategy, sync_positions_with_exchange
 from app.services.strategies import ALL_STRATEGIES
@@ -144,6 +144,18 @@ def _safe_symbols(value) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw if str(item).strip()]
+
+
+def _estimate_trade_investment(trade: TradeLog, user: User) -> float:
+    meta = trade.meta_json or {}
+    capital_allocated = _safe_float(meta.get("capital_allocated"))
+    if capital_allocated > 0:
+        return capital_allocated
+    if str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower() == "fixed_usd":
+        fixed_amount = _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
+        if fixed_amount > 0:
+            return fixed_amount
+    return _safe_float(trade.quantity) * _safe_float(trade.price)
 
 
 def _is_root_admin(user: User) -> bool:
@@ -573,7 +585,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             connector = session.connector
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
-            capital = _safe_float(config.get("allocation_value", config.get("default_quantity", 0)) or 0)
+            capital = _safe_float(getattr(session.user, "fixed_trade_amount_usd", 0) or config.get("allocation_value", config.get("default_quantity", 0)) or 0)
             payload.append({
                 "id": session.id,
                 "connector_id": session.connector_id,
@@ -594,12 +606,17 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "trailing_stop_value": session.trailing_stop_value,
                 "indicator_exit_enabled": session.indicator_exit_enabled,
                 "indicator_exit_rule": session.indicator_exit_rule,
+                "leverage_profile": getattr(session, "leverage_profile", "none"),
+                "max_open_positions": max(int(getattr(session, "max_open_positions", 1) or 1), 1),
+                "compound_growth_enabled": bool(getattr(session, "compound_growth_enabled", False)),
+                "atr_volatility_filter_enabled": bool(getattr(session, "atr_volatility_filter_enabled", True)),
                 "is_active": session.is_active,
                 "last_run_at": _safe_iso(session.last_run_at),
                 "next_run_at": _safe_iso(session.next_run_at),
                 "last_status": session.last_status,
                 "last_error": session.last_error,
                 "capital_per_operation": capital,
+                "capital_currency": "USDT",
                 "created_at": _safe_iso(session.created_at),
             })
         except Exception as exc:
@@ -626,12 +643,17 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "trailing_stop_value": 0.8,
                 "indicator_exit_enabled": False,
                 "indicator_exit_rule": "macd_cross",
+                "leverage_profile": "none",
+                "max_open_positions": 1,
+                "compound_growth_enabled": False,
+                "atr_volatility_filter_enabled": True,
                 "is_active": bool(getattr(session, "is_active", False)),
                 "last_run_at": _safe_iso(getattr(session, "last_run_at", None)),
                 "next_run_at": _safe_iso(getattr(session, "next_run_at", None)),
                 "last_status": "error",
                 "last_error": "No se pudo serializar esta sesión. Revisa configuración y logs.",
                 "capital_per_operation": 0.0,
+                "capital_currency": "USDT",
                 "created_at": _safe_iso(getattr(session, "created_at", None)),
             })
 
@@ -680,18 +702,22 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         trailing_stop_value=payload.trailing_stop_value,
         indicator_exit_enabled=payload.indicator_exit_enabled,
         indicator_exit_rule=payload.indicator_exit_rule,
+        leverage_profile=payload.leverage_profile,
+        max_open_positions=payload.max_open_positions,
+        compound_growth_enabled=payload.compound_growth_enabled,
+        atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
         is_active=True,
-        last_status="scheduled",
+        last_status="queued",
+        next_run_at=datetime.utcnow(),
     )
     db.add(session)
     db.commit()
     db.refresh(session)
 
-    execute_due_bot_sessions(db)
     _notify_user_info(
         user,
         title="Bot 24/7 activado",
-        detail=f"Sesión #{session.id} creada con estrategia {session.strategy_slug} en timeframe {session.timeframe}.",
+        detail=f"Sesión #{session.id} creada con estrategia {session.strategy_slug} en timeframe {session.timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
         connector_label=connector.label,
         platform=connector.platform,
     )
@@ -745,6 +771,14 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.indicator_exit_enabled = payload.indicator_exit_enabled
     if payload.indicator_exit_rule is not None:
         session.indicator_exit_rule = payload.indicator_exit_rule
+    if payload.leverage_profile is not None:
+        session.leverage_profile = payload.leverage_profile
+    if payload.max_open_positions is not None:
+        session.max_open_positions = payload.max_open_positions
+    if payload.compound_growth_enabled is not None:
+        session.compound_growth_enabled = payload.compound_growth_enabled
+    if payload.atr_volatility_filter_enabled is not None:
+        session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
 
     db.commit()
     connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
@@ -806,6 +840,10 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         trailing_stop_value=source.trailing_stop_value,
         indicator_exit_enabled=source.indicator_exit_enabled,
         indicator_exit_rule=source.indicator_exit_rule,
+        leverage_profile=getattr(source, "leverage_profile", "none"),
+        max_open_positions=max(int(getattr(source, "max_open_positions", 1) or 1), 1),
+        compound_growth_enabled=bool(getattr(source, "compound_growth_enabled", False)),
+        atr_volatility_filter_enabled=bool(getattr(source, "atr_volatility_filter_enabled", True)),
         is_active=bool(source.is_active),
         last_status="cloned",
     )
@@ -960,6 +998,10 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         trailing_stop_value=float(cfg.get("trailing_stop_value", 0.9)),
         indicator_exit_enabled=bool(cfg.get("indicator_exit_enabled", False)),
         indicator_exit_rule=cfg.get("indicator_exit_rule", "macd_cross"),
+        leverage_profile=cfg.get("leverage_profile", "none"),
+        max_open_positions=max(int(cfg.get("max_open_positions", 1) or 1), 1),
+        compound_growth_enabled=bool(cfg.get("compound_growth_enabled", False)),
+        atr_volatility_filter_enabled=bool(cfg.get("atr_volatility_filter_enabled", True)),
         is_active=payload.is_active,
         last_status="from_template",
     )
@@ -1175,6 +1217,7 @@ def list_trades(db=Depends(get_db), user=Depends(current_user)):
         "price": t.price,
         "status": t.status,
         "pnl": t.pnl,
+        "investment_amount": round(_estimate_trade_investment(t, user), 8),
         "created_at": t.created_at.isoformat(),
         "meta": t.meta_json,
     } for t in trades]

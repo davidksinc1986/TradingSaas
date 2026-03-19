@@ -69,6 +69,8 @@ code{background:#101010;padding:2px 6px;border-radius:8px}
 .chip-wrap{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .chip{padding:8px 10px;border-radius:999px;border:1px solid var(--line);background:#0f0f0f;color:var(--text);cursor:pointer}
 .modal{position:fixed;inset:0;background:rgba(2,2,2,.75);display:grid;place-items:center;padding:20px;z-index:1200}
+.modal:not(.hidden){overflow:auto}
+.modal-open{overflow:hidden}
 .hidden{display:none}
 .modal-card{width:min(1000px,100%)}
 .modal-head,.row-between,.row-wrap{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
@@ -225,8 +227,8 @@ select[multiple]{min-height:120px}
 
 .card,.btn,.tab-btn,input,select,textarea{transition:all .24s ease}
 .card:hover{border-color:rgba(240,185,11,.28);box-shadow:0 12px 30px rgba(0,0,0,.28)}
-.tab-panel{opacity:0;transform:translateY(8px);transition:opacity .28s ease,transform .28s ease}
-.tab-panel.active{display:block;opacity:1;transform:translateY(0)}
+.tab-panel{opacity:0;transition:opacity .28s ease}
+.tab-panel.active{display:block;opacity:1}
 
 .profile-main-flow{display:grid;gap:14px}
 .profile-cascade-form{gap:14px}
@@ -544,4 +546,24 @@ tr:hover td{background:rgba(255,255,255,.02)}
   .admin-command-grid,
   .quantum-report-grid,
   .quantum-metrics-grid{grid-template-columns:1fr}
+}
+
+#global-toast-host{
+  position:fixed;
+  top:88px;
+  right:20px;
+  z-index:1600;
+  display:grid;
+  gap:10px;
+  width:min(420px,calc(100vw - 32px));
+}
+.global-toast{
+  opacity:0;
+  transform:translateY(-6px);
+  transition:opacity .22s ease,transform .22s ease;
+  box-shadow:0 14px 32px rgba(0,0,0,.35);
+}
+.global-toast.is-visible{
+  opacity:1;
+  transform:translateY(0);
 }
