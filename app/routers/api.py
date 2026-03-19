@@ -30,12 +30,22 @@ from app.schemas import (
     TradingViewWebhook,
 )
 from app.security import encrypt_payload, hash_password
-from app.services.alerts import format_failure_message, format_user_failure_message, normalize_alert_locale, send_telegram_alert_sync, send_user_telegram_alert
+from app.services.alerts import (
+    format_failure_message,
+    format_user_failure_message,
+    format_user_info_message,
+    normalize_alert_locale,
+    send_telegram_alert_sync,
+    send_user_telegram_alert,
+    send_user_telegram_test_alert,
+    user_has_telegram_config,
+)
 from app.services.connectors import get_client
+from app.services.market import price_check
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
 from app.services.bot_runner import execute_due_bot_sessions
-from app.services.trading import activity_metrics, dashboard_data, run_strategy
+from app.services.trading import activity_metrics, dashboard_data, run_strategy, sync_positions_with_exchange
 from app.services.strategies import ALL_STRATEGIES
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -77,6 +87,25 @@ def _normalize_timeframe(value: str) -> str:
     if not clean:
         return "5m"
     return clean
+
+
+def _notify_user_info(user: User, *, title: str, detail: str,
+                      connector_label: str | None = None, platform: str | None = None,
+                      symbol: str | None = None) -> None:
+    try:
+        send_user_telegram_alert(
+            user,
+            format_user_info_message(
+                locale=user.alert_language,
+                title=title,
+                detail=detail,
+                connector_label=connector_label,
+                platform=platform,
+                symbol=symbol,
+            ),
+        )
+    except Exception:
+        logger.exception("Failed sending informational Telegram alert for user_id=%s", getattr(user, "id", "?"))
 
 
 def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
@@ -148,6 +177,7 @@ def me(user=Depends(current_user), db=Depends(get_db)):
         "telegram_chat_id": ("****" if user.telegram_chat_id_encrypted else ""),
         "alert_language": normalize_alert_locale(user.alert_language),
         "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
+        "telegram_ready": user_has_telegram_config(user),
         "trade_amount_mode": user.trade_amount_mode or "fixed_usd",
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
@@ -216,6 +246,7 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         user.trade_balance_percent = percent
 
     db.commit()
+    telegram_ready = user_has_telegram_config(user)
     return {
         "ok": True,
         "id": user.id,
@@ -225,10 +256,24 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         "alert_language": normalize_alert_locale(user.alert_language),
         "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
         "has_telegram_chat_id": bool(user.telegram_chat_id_encrypted),
+        "telegram_ready": telegram_ready,
         "trade_amount_mode": user.trade_amount_mode,
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
     }
+
+
+@router.post("/me/telegram/test")
+def me_telegram_test(db=Depends(get_db), user=Depends(current_user)):
+    _ = db
+    if not user.telegram_alerts_enabled:
+        raise HTTPException(status_code=400, detail="Activa las alertas de Telegram antes de probar el envío")
+    if not user_has_telegram_config(user):
+        raise HTTPException(status_code=400, detail="Faltan bot key o chat id de Telegram")
+    ok = send_user_telegram_test_alert(user)
+    if not ok:
+        raise HTTPException(status_code=502, detail="No se pudo enviar el mensaje de prueba a Telegram")
+    return {"ok": True, "message": "Mensaje de prueba enviado a Telegram"}
 
 
 @router.get("/platform-metadata")
@@ -320,6 +365,13 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
     db.add(connector)
     db.commit()
     db.refresh(connector)
+    _notify_user_info(
+        target_user,
+        title="Conector creado",
+        detail=f"Se creó el conector {connector.label} en modo {connector.mode} para {len(payload.symbols)} símbolos.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
     return {"ok": True, "connector_id": connector.id}
 
 
@@ -354,6 +406,13 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     if payload.is_enabled is not None:
         connector.is_enabled = payload.is_enabled
     db.commit()
+    _notify_user_info(
+        owner,
+        title="Conector actualizado",
+        detail=f"{connector.label} quedó en modo {connector.mode}, mercado {connector.market_type} y estado {'activo' if connector.is_enabled else 'inactivo'}.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
     return {"ok": True}
 
 
@@ -364,8 +423,12 @@ def delete_connector(connector_id: int, db=Depends(get_db), user: User = Depends
         raise HTTPException(status_code=404, detail="Connector not found")
     if connector.user_id != user.id:
         admin_user(user)
+    owner = db.query(User).filter(User.id == connector.user_id).first()
+    detail = f"Se eliminó el conector {connector.label} ({connector.platform})."
     db.delete(connector)
     db.commit()
+    if owner:
+        _notify_user_info(owner, title="Conector eliminado", detail=detail)
     return {"ok": True}
 
 
@@ -377,8 +440,22 @@ def test_connector(connector_id: int, db=Depends(get_db), user=Depends(current_u
     client = get_client(connector)
     try:
         data = client.test_connection()
+        _notify_user_info(
+            user,
+            title="Prueba de conector exitosa",
+            detail=f"{connector.label} respondió correctamente a la prueba de conexión.",
+            connector_label=connector.label,
+            platform=connector.platform,
+        )
         return {"status": "ok", "message": "Connection test completed", "raw": data}
     except Exception as exc:
+        send_user_telegram_alert(user, format_user_failure_message(
+            locale=user.alert_language,
+            scope="connector_test",
+            detail=str(exc),
+            connector_label=connector.label,
+            platform=connector.platform,
+        ))
         return {"status": "error", "message": str(exc), "raw": {"platform": connector.platform}}
 
 
@@ -397,6 +474,13 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
         connector.config_json = current
 
     db.commit()
+    _notify_user_info(
+        user,
+        title="Credenciales actualizadas",
+        detail=f"Se actualizaron credenciales/configuración sensible para {connector.label}.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
     return {"ok": True}
 
 
@@ -433,6 +517,17 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         compound_growth_enabled=payload.compound_growth_enabled,
         atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
         run_source="manual",
+    )
+    status_counts: dict[str, int] = {}
+    for item in result:
+        status = str(item.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    _notify_user_info(
+        user,
+        title="Estrategia ejecutada manualmente",
+        detail=f"{payload.strategy_slug} sobre {len(payload.symbols)} símbolos. Resultado: "
+               + ", ".join(f"{status}={count}" for status, count in sorted(status_counts.items())),
+        symbol=", ".join(payload.symbols[:3]) if payload.symbols else None,
     )
     return {"ok": True, "results": result}
 
@@ -592,6 +687,13 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     db.refresh(session)
 
     execute_due_bot_sessions(db)
+    _notify_user_info(
+        user,
+        title="Bot 24/7 activado",
+        detail=f"Sesión #{session.id} creada con estrategia {session.strategy_slug} en timeframe {session.timeframe}.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
 
     return {"ok": True, "session_id": session.id}
 
@@ -644,6 +746,14 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.indicator_exit_rule = payload.indicator_exit_rule
 
     db.commit()
+    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    _notify_user_info(
+        user,
+        title="Bot actualizado",
+        detail=f"Sesión #{session.id} ahora está {'activa' if session.is_active else 'pausada'} con estrategia {session.strategy_slug} y timeframe {session.timeframe}.",
+        connector_label=connector.label if connector else None,
+        platform=connector.platform if connector else None,
+    )
     return {"ok": True}
 
 
@@ -652,8 +762,17 @@ def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current
     session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Bot session not found")
+    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    detail = f"Se eliminó la sesión #{session.id} con estrategia {session.strategy_slug}."
     db.delete(session)
     db.commit()
+    _notify_user_info(
+        user,
+        title="Bot eliminado",
+        detail=detail,
+        connector_label=connector.label if connector else None,
+        platform=connector.platform if connector else None,
+    )
     return {"ok": True}
 
 
@@ -692,6 +811,13 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
     db.add(cloned)
     db.commit()
     db.refresh(cloned)
+    _notify_user_info(
+        user,
+        title="Bot clonado",
+        detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned.id}.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
     return {"ok": True, "session_id": cloned.id}
 
 
@@ -931,6 +1057,33 @@ def exchange_symbol_rules(connector_id: int, symbols: str | None = None, db=Depe
     }
 
 
+@router.get("/debug/price-check")
+def debug_price_check(connector_id: int, symbol: str, timeframe: str = "1h", db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+    return price_check(connector=connector, symbol=symbol, timeframe=timeframe)
+
+
+@router.post("/connectors/{connector_id}/reconcile")
+def reconcile_connector(connector_id: int, payload: dict | None = None, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    raw_symbols = (payload or {}).get("symbols") or (connector.symbols_json or {}).get("symbols") or []
+    symbols = [str(item).strip() for item in raw_symbols if str(item).strip()]
+    result = sync_positions_with_exchange(db, connector, symbols)
+    _notify_user_info(
+        user,
+        title="Reconciliación ejecutada",
+        detail=f"{connector.label}: {result.get('matched_positions', 0)} posiciones conciliadas y {result.get('closed_positions', 0)} cerradas por sync.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
+    return result
+
+
 @router.get("/market/top-strength")
 async def market_top_strength(limit: int = 10, platform: str | None = None, symbols: str | None = None, range: str = "day", user=Depends(current_user)):
     _ = user
@@ -1067,6 +1220,16 @@ def tradingview_webhook(payload: TradingViewWebhook, db=Depends(get_db)):
         meta_json=meta,
     ))
     db.commit()
+    owner = db.query(User).filter(User.id == connector.user_id).first()
+    if owner:
+        _notify_user_info(
+            owner,
+            title="Webhook recibido",
+            detail=f"TradingView envió una señal {payload.side} y quedó con estado {status}.",
+            connector_label=connector.label,
+            platform=connector.platform,
+            symbol=payload.symbol,
+        )
     return {"ok": True, "message": "Webhook processed", "status": status}
 
 
