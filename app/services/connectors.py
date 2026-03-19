@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from app.security import decrypt_payload
+from app.services.execution_guardrails import (
+    ExecutionReferencePrice,
+    MarketRules,
+    build_validation_decision,
+)
 
 try:
     import ccxt
@@ -16,6 +23,9 @@ try:
     import MetaTrader5 as mt5
 except Exception:
     mt5 = None
+
+
+logger = logging.getLogger("trading_saas.execution")
 
 
 @dataclass
@@ -32,6 +42,66 @@ class BaseConnectorClient:
         self.connector = connector
         self.secrets = decrypt_payload(connector.encrypted_secret_blob)
         self.config = connector.config_json or {}
+
+    def resolve_market_rules(self, symbol: str) -> dict[str, Any]:
+        return MarketRules(
+            exchange=self.connector.platform,
+            symbol=symbol,
+            market_type=getattr(self.connector, "market_type", "spot"),
+            raw_exchange_rules={},
+            normalized_rule_source="base_connector_defaults",
+        ).to_dict()
+
+    def resolve_execution_reference_price(
+        self,
+        symbol: str,
+        *,
+        order_type: str = "market",
+        side: str = "buy",
+        analysis_price: float | None = None,
+    ) -> dict[str, Any]:
+        return ExecutionReferencePrice(
+            value=float(analysis_price) if analysis_price is not None else None,
+            source="analysis_price",
+            used_fallback=True,
+            details={"symbol": symbol, "order_type": order_type, "side": side},
+        ).to_dict()
+
+    def validate_and_adjust_order(
+        self,
+        symbol: str,
+        *,
+        market_type: str | None = None,
+        order_type: str = "market",
+        side: str = "buy",
+        desired_qty: float,
+        desired_price: float | None = None,
+        risk_context: dict[str, Any] | None = None,
+        connector_context: dict[str, Any] | None = None,
+        analysis_price: float | None = None,
+    ) -> dict[str, Any]:
+        execution_reference = self.resolve_execution_reference_price(
+            symbol,
+            order_type=order_type,
+            side=side,
+            analysis_price=analysis_price if analysis_price is not None else desired_price,
+        )
+        market_rules = self.resolve_market_rules(symbol)
+        decision = build_validation_decision(
+            exchange=self.connector.platform,
+            symbol=symbol,
+            market_type=(market_type or getattr(self.connector, "market_type", "spot") or "spot").lower(),
+            order_type=order_type,
+            side=side,
+            desired_qty=desired_qty,
+            desired_price=desired_price,
+            analysis_price=analysis_price if analysis_price is not None else desired_price,
+            execution_reference=ExecutionReferencePrice(**execution_reference),
+            market_rules=MarketRules(**market_rules),
+            risk_context=risk_context,
+            connector_context=connector_context,
+        )
+        return decision.to_dict()
 
     def execute_market(
         self,
@@ -65,13 +135,44 @@ class BaseConnectorClient:
             "found": True,
         }
 
-    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
+    def pretrade_validate(
+        self,
+        symbol: str,
+        quantity: float,
+        price_hint: float,
+        *,
+        side: str = "buy",
+        order_type: str = "market",
+        risk_context: dict[str, Any] | None = None,
+        analysis_price: float | None = None,
+        connector_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        decision = self.validate_and_adjust_order(
+            symbol,
+            market_type=getattr(self.connector, "market_type", "spot"),
+            order_type=order_type,
+            side=side,
+            desired_qty=quantity,
+            desired_price=price_hint,
+            risk_context=risk_context,
+            connector_context=connector_context,
+            analysis_price=analysis_price if analysis_price is not None else price_hint,
+        )
         return {
-            "ok": quantity > 0,
-            "normalized_quantity": float(quantity),
-            "normalized_price": float(price_hint),
-            "reason_code": "ok" if quantity > 0 else "rejected_invalid_quantity",
-            "exchange_filters": {},
+            "ok": bool(decision["is_valid"]),
+            "normalized_quantity": float(decision["normalized_qty"]),
+            "normalized_price": float(decision["normalized_price"] or 0.0) if decision["normalized_price"] is not None else None,
+            "reason_code": decision["skip_reason"] or "ok",
+            "reason_message": decision["skip_reason"],
+            "exchange_filters": {
+                "amount_min": decision["amount_min"],
+                "amount_step": decision["amount_step"],
+                "price_step": decision["price_step"],
+                "min_cost": decision["min_cost"],
+                "final_cost": decision["final_cost"],
+                **(decision.get("diagnostics") or {}),
+            },
+            "validation": decision,
         }
 
     def test_connection(self) -> dict[str, Any]:
@@ -145,10 +246,247 @@ class BaseConnectorClient:
         return {"ok": True, "cancelled": 0, "symbol": symbol}
 
 
+class BaseExchangeAdapter:
+    def __init__(self, connector, config: dict[str, Any]):
+        self.connector = connector
+        self.config = config or {}
+
+    @property
+    def exchange_name(self) -> str:
+        return str(getattr(self.connector, "platform", "unknown") or "unknown").lower()
+
+    def build_market_rules(self, exchange, symbol: str, market: dict[str, Any] | None) -> MarketRules:
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        limits = (market or {}).get("limits") or {}
+        precision = (market or {}).get("precision") or {}
+        amount_limits = limits.get("amount") or {}
+        price_limits = limits.get("price") or {}
+        cost_limits = limits.get("cost") or {}
+        contract_size = (market or {}).get("contractSize") or (market or {}).get("contract_size") or 1
+
+        return MarketRules(
+            exchange=self.exchange_name,
+            symbol=symbol,
+            market_type=market_type,
+            amount_min=self._safe_float(amount_limits.get("min")),
+            amount_max=self._safe_float(amount_limits.get("max")),
+            amount_step=self._step_from_precision(precision.get("amount")),
+            price_min=self._safe_float(price_limits.get("min")),
+            price_max=self._safe_float(price_limits.get("max")),
+            price_step=self._step_from_precision(precision.get("price")),
+            price_precision=self._safe_int(precision.get("price")),
+            amount_precision=self._safe_int(precision.get("amount")),
+            min_cost=self._safe_float(cost_limits.get("min")),
+            max_cost=self._safe_float(cost_limits.get("max")),
+            contract_size=self._safe_float(contract_size, 1.0),
+            requires_cost_for_market_buy=bool((getattr(exchange, "options", {}) or {}).get("createMarketBuyOrderRequiresPrice")),
+            qty_semantics="contracts" if market_type in {"futures", "perpetual", "swap"} and market and market.get("contract") else "base",
+            normalized_rule_source="markets|limits|precision|adapter",
+            raw_exchange_rules=(market or {}).get("info") or {},
+        )
+
+    def resolve_execution_reference_price(
+        self,
+        exchange,
+        symbol: str,
+        *,
+        market: dict[str, Any] | None,
+        market_type: str,
+        order_type: str,
+        side: str,
+        analysis_price: float | None,
+    ) -> ExecutionReferencePrice:
+        details: dict[str, Any] = {"market_type": market_type, "symbol": symbol}
+        best_bid = best_ask = None
+        try:
+            order_book = exchange.fetch_order_book(symbol, limit=5)
+            bids = (order_book or {}).get("bids") or []
+            asks = (order_book or {}).get("asks") or []
+            best_bid = float(bids[0][0]) if bids else None
+            best_ask = float(asks[0][0]) if asks else None
+            details["order_book_top"] = {"bid": best_bid, "ask": best_ask}
+        except Exception as exc:
+            details["order_book_error"] = str(exc)
+
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+        except Exception as exc:
+            details["ticker_error"] = str(exc)
+            ticker = {}
+
+        if market_type in {"futures", "perpetual", "swap"}:
+            mark_candidates = [ticker.get("mark"), ticker.get("markPrice")]
+            for candidate in mark_candidates:
+                if candidate not in (None, "", 0, 0.0):
+                    details["mark_price"] = float(candidate)
+                    break
+
+        preferred = None
+        source = "analysis_price"
+        if order_type.lower() == "market":
+            if side.lower() == "buy":
+                preferred = best_ask or ticker.get("ask")
+                source = "order_book_ask" if best_ask else "ticker_ask"
+            else:
+                preferred = best_bid or ticker.get("bid")
+                source = "order_book_bid" if best_bid else "ticker_bid"
+
+        if preferred in (None, "", 0, 0.0):
+            for key in ("mark", "markPrice", "last", "close", "bid", "ask"):
+                candidate = ticker.get(key)
+                if candidate not in (None, "", 0, 0.0):
+                    preferred = candidate
+                    source = f"ticker_{key}"
+                    break
+
+        if preferred in (None, "", 0, 0.0):
+            preferred = analysis_price
+            source = "analysis_price"
+
+        return ExecutionReferencePrice(
+            value=self._safe_float(preferred),
+            source=source,
+            used_fallback=source == "analysis_price",
+            details=details,
+        )
+
+    def build_order_params(
+        self,
+        *,
+        side: str,
+        market_type: str,
+        reduce_only: bool,
+        validation: dict[str, Any],
+        extra_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        params = dict(extra_params or {})
+        if market_type in {"futures", "perpetual", "swap"} and reduce_only:
+            params["reduceOnly"] = True
+        return params
+
+    def translate_error(self, detail: str) -> str:
+        message = str(detail or "").lower()
+        if "reduceonly" in message or "reduce only" in message:
+            return "exchange_reduce_only_rejected"
+        if "position side" in message or "positionside" in message or "hedge mode" in message:
+            return "exchange_market_type_mismatch"
+        if "min notional" in message or "notional" in message or "min cost" in message:
+            return "exchange_min_cost_failed"
+        if "min qty" in message or "lot_size" in message or "minimum amount" in message or "less than minimum" in message:
+            return "exchange_amount_step_failed"
+        if "precision" in message or "tick size" in message or "invalid price" in message:
+            return "exchange_price_precision_failed"
+        if "invalid quantity" in message or "invalid amount" in message:
+            return "exchange_amount_step_failed"
+        if "insufficient" in message and ("margin" in message or "balance" in message or "fund" in message):
+            return "exchange_insufficient_balance"
+        if "invalid symbol" in message or ("symbol" in message and "invalid" in message):
+            return "exchange_symbol_invalid"
+        if "timed out" in message or "timeout" in message or "temporarily unavailable" in message:
+            return "exchange_timeout"
+        if "network" in message or "connection" in message:
+            return "exchange_network_error"
+        return "exchange_rejected"
+
+    @staticmethod
+    def _safe_float(value: Any, fallback: float | None = None) -> float | None:
+        try:
+            return float(value)
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _safe_int(value: Any, fallback: int | None = None) -> int | None:
+        try:
+            return int(value)
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _step_from_precision(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            numeric = float(value)
+        except Exception:
+            return None
+        if numeric == 0:
+            return 1.0
+        if numeric < 1:
+            return numeric
+        if float(numeric).is_integer():
+            return 10 ** (-int(numeric))
+        return numeric
+
+
+class BinanceExchangeAdapter(BaseExchangeAdapter):
+    def build_market_rules(self, exchange, symbol: str, market: dict[str, Any] | None) -> MarketRules:
+        rules = super().build_market_rules(exchange, symbol, market)
+        filters = (((market or {}).get("info") or {}).get("filters")) or []
+        source_parts = {"markets", "limits", "precision", "adapter"}
+        for item in filters:
+            filter_type = str(item.get("filterType") or "").upper()
+            if filter_type in {"LOT_SIZE", "MARKET_LOT_SIZE"}:
+                rules.amount_min = self._safe_float(item.get("minQty"), rules.amount_min)
+                rules.amount_max = self._safe_float(item.get("maxQty"), rules.amount_max)
+                rules.amount_step = self._safe_float(item.get("stepSize"), rules.amount_step)
+                source_parts.add("filters")
+            elif filter_type == "PRICE_FILTER":
+                rules.price_min = self._safe_float(item.get("minPrice"), rules.price_min)
+                rules.price_max = self._safe_float(item.get("maxPrice"), rules.price_max)
+                rules.price_step = self._safe_float(item.get("tickSize"), rules.price_step)
+                source_parts.add("filters")
+            elif filter_type in {"MIN_NOTIONAL", "NOTIONAL"}:
+                rules.min_cost = self._safe_float(item.get("minNotional") or item.get("notional"), rules.min_cost)
+                source_parts.add("filters")
+        if ((market or {}).get("info") or {}).get("quoteOrderQtyMarketAllowed"):
+            rules.requires_cost_for_market_buy = False
+        rules.normalized_rule_source = "|".join(sorted(source_parts))
+        return rules
+
+    def build_order_params(self, *, side: str, market_type: str, reduce_only: bool, validation: dict[str, Any], extra_params: dict[str, Any] | None = None) -> dict[str, Any]:
+        params = super().build_order_params(side=side, market_type=market_type, reduce_only=reduce_only, validation=validation, extra_params=extra_params)
+        if market_type == "spot" and side.lower() == "buy" and validation.get("requires_cost_for_market_buy") and validation.get("market_buy_cost"):
+            params.setdefault("quoteOrderQty", validation["market_buy_cost"])
+        return params
+
+
+class BybitExchangeAdapter(BaseExchangeAdapter):
+    def build_market_rules(self, exchange, symbol: str, market: dict[str, Any] | None) -> MarketRules:
+        rules = super().build_market_rules(exchange, symbol, market)
+        info = (market or {}).get("info") or {}
+        lot_filter = info.get("lotSizeFilter") or {}
+        price_filter = info.get("priceFilter") or {}
+        rules.amount_min = self._safe_float(lot_filter.get("minOrderQty") or lot_filter.get("minOrderAmt"), rules.amount_min)
+        rules.amount_max = self._safe_float(lot_filter.get("maxOrderQty") or lot_filter.get("maxOrderAmt"), rules.amount_max)
+        rules.amount_step = self._safe_float(lot_filter.get("qtyStep"), rules.amount_step)
+        rules.price_min = self._safe_float(price_filter.get("minPrice"), rules.price_min)
+        rules.price_max = self._safe_float(price_filter.get("maxPrice"), rules.price_max)
+        rules.price_step = self._safe_float(price_filter.get("tickSize"), rules.price_step)
+        rules.min_cost = self._safe_float(lot_filter.get("minNotionalValue") or lot_filter.get("minOrderValue"), rules.min_cost)
+        rules.normalized_rule_source = "markets|limits|precision|adapter|filters"
+        return rules
+
+
+class OKXExchangeAdapter(BaseExchangeAdapter):
+    pass
+
+
 class CCXTConnectorClient(BaseConnectorClient):
     def __init__(self, connector):
         super().__init__(connector)
         self._markets_cache: dict[str, Any] | None = None
+        self.adapter = self._build_adapter()
+
+    def _build_adapter(self) -> BaseExchangeAdapter:
+        platform = str(getattr(self.connector, "platform", "") or "").lower()
+        if platform == "binance":
+            return BinanceExchangeAdapter(self.connector, self.config)
+        if platform == "bybit":
+            return BybitExchangeAdapter(self.connector, self.config)
+        if platform == "okx":
+            return OKXExchangeAdapter(self.connector, self.config)
+        return BaseExchangeAdapter(self.connector, self.config)
 
     def build_exchange(self):
         if ccxt is None:
@@ -193,6 +531,33 @@ class CCXTConnectorClient(BaseConnectorClient):
     def _market(self, exchange, symbol: str) -> dict[str, Any] | None:
         markets = self._load_markets(exchange)
         return markets.get(symbol)
+
+    def resolve_market_rules(self, symbol: str) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        rules = self.adapter.build_market_rules(exchange, symbol, market)
+        return rules.to_dict()
+
+    def resolve_execution_reference_price(
+        self,
+        symbol: str,
+        *,
+        order_type: str = "market",
+        side: str = "buy",
+        analysis_price: float | None = None,
+    ) -> dict[str, Any]:
+        exchange = self.build_exchange()
+        market = self._market(exchange, symbol)
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        return self.adapter.resolve_execution_reference_price(
+            exchange,
+            symbol,
+            market=market,
+            market_type=market_type,
+            order_type=order_type,
+            side=side,
+            analysis_price=analysis_price,
+        ).to_dict()
 
     def normalize_symbol(self, symbol: str) -> dict[str, Any]:
         exchange = self.build_exchange()
@@ -290,59 +655,39 @@ class CCXTConnectorClient(BaseConnectorClient):
             "source": "exchange_futures_balance",
         }
 
-    def pretrade_validate(self, symbol: str, quantity: float, price_hint: float) -> dict[str, Any]:
-        exchange = self.build_exchange()
-        market = self._market(exchange, symbol)
-        normalized_qty, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
-        required_min_qty = 0.0
-        if min_notional > 0 and normalized_price > 0:
-            required_min_qty = self._normalize_amount(exchange, symbol, min_notional / normalized_price)
-
-        exchange_filters = {
-            "min_notional": float(min_notional),
-            "min_qty": float(((market or {}).get("limits") or {}).get("amount", {}).get("min") or 0.0),
-            "step_size": float(((market or {}).get("precision") or {}).get("amount") or 0.0),
-            "tick_size": float(((market or {}).get("precision") or {}).get("price") or 0.0),
-            "required_min_qty_for_notional": float(required_min_qty),
-            "projected_notional": float(normalized_qty * max(normalized_price, 0.0000001)),
-        }
-
-        if normalized_qty <= 0:
-            return {
-                "ok": False,
-                "normalized_quantity": float(normalized_qty),
-                "normalized_price": float(normalized_price),
-                "reason_code": "rejected_invalid_quantity",
-                "exchange_filters": exchange_filters,
-            }
-
-        min_qty = exchange_filters["min_qty"]
-        if min_qty > 0 and normalized_qty < min_qty:
-            return {
-                "ok": False,
-                "normalized_quantity": float(normalized_qty),
-                "normalized_price": float(normalized_price),
-                "reason_code": "skipped_min_qty",
-                "exchange_filters": exchange_filters,
-            }
-
-        notional = normalized_qty * max(normalized_price, 0.0000001)
-        if min_notional > 0 and notional < min_notional:
-            return {
-                "ok": False,
-                "normalized_quantity": float(normalized_qty),
-                "normalized_price": float(normalized_price),
-                "reason_code": "skipped_min_notional",
-                "exchange_filters": exchange_filters,
-            }
-
-        return {
-            "ok": True,
-            "normalized_quantity": float(normalized_qty),
-            "normalized_price": float(normalized_price),
-            "reason_code": "ok",
-            "exchange_filters": exchange_filters,
-        }
+    def validate_and_adjust_order(
+        self,
+        symbol: str,
+        *,
+        market_type: str | None = None,
+        order_type: str = "market",
+        side: str = "buy",
+        desired_qty: float,
+        desired_price: float | None = None,
+        risk_context: dict[str, Any] | None = None,
+        connector_context: dict[str, Any] | None = None,
+        analysis_price: float | None = None,
+    ) -> dict[str, Any]:
+        decision = build_validation_decision(
+            exchange=self.connector.platform,
+            symbol=symbol,
+            market_type=(market_type or getattr(self.connector, "market_type", "spot") or "spot").lower(),
+            order_type=order_type,
+            side=side,
+            desired_qty=desired_qty,
+            desired_price=desired_price,
+            analysis_price=analysis_price if analysis_price is not None else desired_price,
+            execution_reference=ExecutionReferencePrice(**self.resolve_execution_reference_price(
+                symbol,
+                order_type=order_type,
+                side=side,
+                analysis_price=analysis_price if analysis_price is not None else desired_price,
+            )),
+            market_rules=MarketRules(**self.resolve_market_rules(symbol)),
+            risk_context=risk_context,
+            connector_context=connector_context,
+        )
+        return decision.to_dict()
 
     def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
         try:
@@ -356,51 +701,8 @@ class CCXTConnectorClient(BaseConnectorClient):
         except Exception:
             return float(price)
 
-    def _min_notional(self, market: dict[str, Any] | None) -> float:
-        if not market:
-            return 0.0
-        limits = market.get("limits") or {}
-        cost = limits.get("cost") or {}
-        min_cost = cost.get("min")
-        try:
-            return float(min_cost or 0.0)
-        except Exception:
-            return 0.0
-
-    def _apply_exchange_filters(
-        self,
-        exchange,
-        symbol: str,
-        quantity: float,
-        price_hint: float,
-    ) -> tuple[float, float, float]:
-        market = self._market(exchange, symbol)
-        quantity = self._normalize_amount(exchange, symbol, quantity)
-        normalized_price = self._normalize_price(exchange, symbol, price_hint)
-        min_notional = self._min_notional(market)
-
-        return quantity, normalized_price, min_notional
-
     def _categorize_exchange_error(self, detail: str) -> str:
-        message = str(detail or "").lower()
-
-        if "reduceonly" in message or "reduce only" in message:
-            return "reduce_only_rejected"
-        if "position side" in message or "positionside" in message or "hedge mode" in message:
-            return "position_side_mismatch"
-        if "min notional" in message or "notional" in message:
-            return "below_min_notional"
-        if "min qty" in message or "minimum amount" in message or "less than minimum" in message:
-            return "below_min_qty"
-        if "insufficient" in message and ("margin" in message or "balance" in message or "fund" in message):
-            return "insufficient_balance"
-        if "invalid symbol" in message or "symbol" in message and "invalid" in message:
-            return "invalid_symbol"
-        if "timed out" in message or "timeout" in message or "temporarily unavailable" in message:
-            return "exchange_timeout"
-        if "network" in message or "connection" in message:
-            return "network_error"
-        return "exchange_rejected"
+        return self.adapter.translate_error(detail)
 
     def _raise_order_rejection(
         self,
@@ -433,19 +735,12 @@ class CCXTConnectorClient(BaseConnectorClient):
         market = self._market(exchange, symbol)
         if not market:
             return {"symbol": symbol, "found": False}
-
-        limits = market.get("limits") or {}
-        amount_limits = limits.get("amount") or {}
-        price_limits = limits.get("price") or {}
-
         return {
             "symbol": symbol,
             "found": True,
             "base": market.get("base"),
             "quote": market.get("quote"),
-            "min_qty": float(amount_limits.get("min") or 0.0),
-            "min_price": float(price_limits.get("min") or 0.0),
-            "min_notional": self._min_notional(market),
+            **self.resolve_market_rules(symbol),
         }
 
     def fetch_position_context(self, symbol: str) -> dict[str, Any]:
@@ -578,16 +873,71 @@ class CCXTConnectorClient(BaseConnectorClient):
             )
 
         exchange = self.build_exchange()
-        quantity, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
-
-        if quantity <= 0:
-            raise RuntimeError(f"Quantity for {symbol} resolved to 0 after exchange precision filters")
-
-        order_params = dict(extra_params or {})
         market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        validation = self.validate_and_adjust_order(
+            symbol,
+            market_type=market_type,
+            order_type="market",
+            side=side,
+            desired_qty=quantity,
+            desired_price=price_hint,
+            analysis_price=price_hint,
+            risk_context={"allow_adjust_up": False},
+            connector_context={
+                "price_guardrails": (self.config or {}).get("price_guardrails") or {},
+                "connector_mode": self.connector.mode,
+            },
+        )
 
-        if market_type == "futures" and reduce_only:
-            order_params["reduceOnly"] = True
+        if not validation.get("is_valid"):
+            reason = validation.get("skip_reason") or "pretrade_rejected"
+            raise RuntimeError(
+                f"market_order rejected locally "
+                f"[reason={reason}] "
+                f"[symbol={symbol}] "
+                f"[side={side}] "
+                f"[validation={validation}]"
+            )
+
+        quantity = float(validation["normalized_qty"])
+        normalized_price = float(validation["normalized_price"] or price_hint)
+        order_params = self.adapter.build_order_params(
+            side=side,
+            market_type=market_type,
+            reduce_only=reduce_only,
+            validation=validation,
+            extra_params=extra_params,
+        )
+
+        logger.info(
+            "order_preflight %s",
+            json.dumps(
+                {
+                    "exchange": self.connector.platform,
+                    "connector_id": getattr(self.connector, "id", None),
+                    "symbol": symbol,
+                    "market_type": market_type,
+                    "side": side,
+                    "order_type": "market",
+                    "analysis_price": price_hint,
+                    "execution_reference_price": validation.get("execution_reference_price"),
+                    "raw_qty": quantity,
+                    "normalized_qty": validation.get("normalized_qty"),
+                    "raw_price": price_hint,
+                    "normalized_price": validation.get("normalized_price"),
+                    "amount_min": validation.get("amount_min"),
+                    "amount_step": validation.get("amount_step"),
+                    "price_step": validation.get("price_step"),
+                    "min_cost": validation.get("min_cost"),
+                    "final_cost": validation.get("final_cost"),
+                    "contract_size": validation.get("contract_size"),
+                    "decision": "send",
+                    "risk_blocked": validation.get("risk_blocked"),
+                    "requires_cost_for_market_buy": validation.get("requires_cost_for_market_buy"),
+                },
+                ensure_ascii=False,
+            ),
+        )
 
         try:
             if order_params:
@@ -627,8 +977,7 @@ class CCXTConnectorClient(BaseConnectorClient):
             quantity=float(order.get("amount") or quantity),
             raw={
                 **order,
-                "normalized_price": normalized_price,
-                "min_notional": min_notional,
+                "validation": validation,
                 "reduce_only": reduce_only,
                 "extra_params": order_params,
             },

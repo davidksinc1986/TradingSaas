@@ -1008,6 +1008,7 @@ def run_strategy(
                 decision_reasons.append("low_confidence")
 
             price = _safe_float(data.iloc[-1]["close"], 0.0)
+            notes["analysis_price"] = price
             position_context = client.fetch_position_context(normalized_symbol)
             notes["position_context"] = position_context
 
@@ -1099,7 +1100,29 @@ def run_strategy(
                 "reduce_only": reduce_only,
             }
 
-            pretrade = client.pretrade_validate(normalized_symbol, quantity, price)
+            risk_context = {
+                "allow_adjust_up": True,
+                "max_qty": quantity,
+                "max_cost": budget_cap_qty * max(price, 0.0000001) if budget_cap_qty > 0 else None,
+                "risk_qty": risk_qty,
+                "budget_cap_qty": budget_cap_qty,
+                "available_balance": _safe_float(balance.get("available_balance"), 0.0),
+            }
+            connector_context = {
+                "connector_id": connector.id,
+                "connector_mode": connector.mode,
+                "price_guardrails": (connector.config_json or {}).get("price_guardrails") or {},
+            }
+            pretrade = client.pretrade_validate(
+                normalized_symbol,
+                quantity,
+                price,
+                side=signal,
+                order_type="market",
+                risk_context=risk_context,
+                analysis_price=price,
+                connector_context=connector_context,
+            )
             notes["pretrade"] = pretrade
             if not pretrade.get("ok"):
                 decision_reasons.append(pretrade.get("reason_code") or "pretrade_rejected")

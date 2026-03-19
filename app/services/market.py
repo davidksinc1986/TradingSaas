@@ -154,15 +154,38 @@ def price_check(connector, symbol: str, timeframe: str = "1h") -> dict[str, Any]
     result = fetch_ohlcv_frame(connector=connector, symbol=symbol, timeframe=timeframe, limit=120)
     frame = result.frame
     meta = result.meta
+    analysis_price = float(meta.get("bot_price") or 0.0) if meta.get("bot_price") is not None else None
+    execution_reference = {}
+    try:
+        from app.services.connectors import get_client
+
+        client = get_client(connector)
+        execution_reference = client.resolve_execution_reference_price(
+            meta.get("symbol") or symbol,
+            order_type="market",
+            side="buy",
+            analysis_price=analysis_price,
+        )
+    except Exception as exc:
+        execution_reference = {
+            "value": None,
+            "source": "unavailable",
+            "used_fallback": False,
+            "details": {"error": str(exc)},
+        }
     return {
         "symbol": meta.get("symbol") or symbol,
         "timeframe": timeframe,
         "data_source": meta.get("source"),
-        "bot_price": float(meta.get("bot_price") or 0.0),
+        "analysis_price": analysis_price,
+        "execution_reference_price": execution_reference.get("value"),
+        "execution_price_source": execution_reference.get("source"),
+        "bot_price": analysis_price,
         "exchange_price": float(meta.get("exchange_price") or 0.0) if meta.get("exchange_price") is not None else None,
         "difference_pct": meta.get("difference_pct"),
         "health": meta.get("health") or {},
         "last_candle_timestamp": frame.iloc[-1]["timestamp"].isoformat() if not frame.empty else None,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "notes": meta.get("notes") or [],
+        "execution_reference": execution_reference,
     }
