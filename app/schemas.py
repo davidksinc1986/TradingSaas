@@ -62,6 +62,8 @@ class StrategyRiskMixin(BaseModel):
 class StrategyRequest(StrategyRiskMixin):
     connector_ids: list[int]
     symbols: list[str]
+    symbol_source_mode: Literal["manual", "dynamic"] = "manual"
+    dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
     timeframe: str = "1h"
     strategy_slug: STRATEGY_LITERAL = "ema_rsi"
     risk_per_trade: float = Field(default=1, gt=0, le=100)
@@ -84,6 +86,8 @@ class StrategyRequest(StrategyRiskMixin):
 class BotSessionCreate(StrategyRiskMixin):
     connector_id: int
     symbols: list[str]
+    symbol_source_mode: Literal["manual", "dynamic"] = "manual"
+    dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
     timeframe: str = "5m"
     strategy_slug: STRATEGY_LITERAL = "ema_rsi"
     risk_per_trade: float = Field(default=1, gt=0, le=100)
@@ -108,6 +112,8 @@ class BotSessionUpdate(StrategyRiskMixin):
     is_active: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None
+    symbol_source_mode: Literal["manual", "dynamic"] | None = None
+    dynamic_symbol_limit: int | None = Field(default=None, ge=1, le=200)
     timeframe: str | None = None
     strategy_slug: STRATEGY_LITERAL | None = None
     take_profit_mode: Literal["percent", "usdt"] | None = None

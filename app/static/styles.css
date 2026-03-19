@@ -213,6 +213,8 @@ select[multiple]{min-height:120px}
 
 
 .profile-strategy-layout{display:grid;grid-template-columns:1.35fr .85fr;gap:16px;align-items:start}
+.profile-operations-shell{display:grid;gap:12px}
+.profile-command-grid{margin-bottom:16px}
 .profile-active-strategies h3{margin:0}
 .strategy-bottom-controls{margin-bottom:14px}
 .strategy-bottom-layout h3{margin-top:0}
@@ -242,7 +244,7 @@ select[multiple]{min-height:120px}
 .strategy-live-market{padding:10px;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:#121212}
 .strategy-live-market strong{display:block;font-size:13px;margin-bottom:6px}
 .strategy-live-market ul{margin:0;padding-left:16px;color:var(--muted)}
-.strategy-live-market li{margin-bottom:4px}
+.strategy-live-market li{margin-bottom:4px;overflow-wrap:anywhere;word-break:break-word}
 
 @keyframes fadeInUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 
@@ -487,9 +489,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
   border:1px solid rgba(255,255,255,.08);
   border-radius:16px;
   background:rgba(7,9,14,.62);
+  min-width:0;
 }
 .quantum-metric small{display:block;color:#a7adb8}
-.quantum-metric strong{display:block;margin-top:6px;font-size:24px;color:#f5f7fa}
+.quantum-metric strong{display:block;margin-top:6px;font-size:clamp(18px,2vw,24px);color:#f5f7fa;line-height:1.15;overflow-wrap:anywhere;word-break:break-word}
 .quantum-status-strip,
 .quantum-report-list{
   display:grid;
@@ -519,12 +522,24 @@ tr:hover td{background:rgba(255,255,255,.02)}
   font-size:14px;
   color:#f5f7fa;
   margin-bottom:4px;
+  overflow-wrap:anywhere;
+  word-break:break-word;
 }
 .quantum-report-item small{
   display:block;
   color:#a7adb8;
   line-height:1.45;
+  overflow-wrap:anywhere;
+  word-break:break-word;
 }
+.symbol-picker-shell{display:grid;gap:10px;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#101010}
+.symbol-picker-layout{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:10px;align-items:center}
+.symbol-picker-layout select{min-height:220px}
+.symbol-picker-actions{display:grid;gap:8px;justify-items:center}
+.symbol-picker-shell.is-disabled{opacity:.7}
+.strategy-guidance-card{padding:12px;border:1px solid rgba(240,185,11,.22);border-radius:14px;background:linear-gradient(180deg,rgba(240,185,11,.08),rgba(15,15,15,.96));display:grid;gap:6px}
+.strategy-guidance-card strong{color:#ffe08a}
+.strategy-guidance-card ul{margin:0;padding-left:18px;color:#d1d5db}
 .quantum-report-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
@@ -546,6 +561,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
   .admin-command-grid,
   .quantum-report-grid,
   .quantum-metrics-grid{grid-template-columns:1fr}
+  .symbol-picker-layout{grid-template-columns:1fr}
+  .symbol-picker-actions{grid-auto-flow:column;justify-content:flex-start}
 }
 
 #global-toast-host{
