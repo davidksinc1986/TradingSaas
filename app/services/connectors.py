@@ -94,6 +94,18 @@ class BaseConnectorClient:
         }
 
     def fetch_available_balance(self) -> dict[str, Any]:
+        if self.connector.mode == "live":
+            return {
+                "ok": False,
+                "mode": "live",
+                "market_type": getattr(self.connector, "market_type", "spot"),
+                "quote_asset": str((self.config or {}).get("quote_asset", "USDT")).upper(),
+                "available_balance": 0.0,
+                "total_balance": 0.0,
+                "source": "unsupported_live_balance",
+                "error": f"Live balance fetch is not implemented for connector platform={self.connector.platform}",
+            }
+
         fallback = float((self.config or {}).get("paper_balance", 1000) or 1000)
         return {
             "ok": True,
@@ -282,12 +294,17 @@ class CCXTConnectorClient(BaseConnectorClient):
         exchange = self.build_exchange()
         market = self._market(exchange, symbol)
         normalized_qty, normalized_price, min_notional = self._apply_exchange_filters(exchange, symbol, quantity, price_hint)
+        required_min_qty = 0.0
+        if min_notional > 0 and normalized_price > 0:
+            required_min_qty = self._normalize_amount(exchange, symbol, min_notional / normalized_price)
 
         exchange_filters = {
             "min_notional": float(min_notional),
             "min_qty": float(((market or {}).get("limits") or {}).get("amount", {}).get("min") or 0.0),
             "step_size": float(((market or {}).get("precision") or {}).get("amount") or 0.0),
             "tick_size": float(((market or {}).get("precision") or {}).get("price") or 0.0),
+            "required_min_qty_for_notional": float(required_min_qty),
+            "projected_notional": float(normalized_qty * max(normalized_price, 0.0000001)),
         }
 
         if normalized_qty <= 0:
@@ -362,11 +379,54 @@ class CCXTConnectorClient(BaseConnectorClient):
         normalized_price = self._normalize_price(exchange, symbol, price_hint)
         min_notional = self._min_notional(market)
 
-        if min_notional > 0 and quantity * normalized_price < min_notional:
-            min_quantity = min_notional / max(normalized_price, 0.0000001)
-            quantity = self._normalize_amount(exchange, symbol, min_quantity)
-
         return quantity, normalized_price, min_notional
+
+    def _categorize_exchange_error(self, detail: str) -> str:
+        message = str(detail or "").lower()
+
+        if "reduceonly" in message or "reduce only" in message:
+            return "reduce_only_rejected"
+        if "position side" in message or "positionside" in message or "hedge mode" in message:
+            return "position_side_mismatch"
+        if "min notional" in message or "notional" in message:
+            return "below_min_notional"
+        if "min qty" in message or "minimum amount" in message or "less than minimum" in message:
+            return "below_min_qty"
+        if "insufficient" in message and ("margin" in message or "balance" in message or "fund" in message):
+            return "insufficient_balance"
+        if "invalid symbol" in message or "symbol" in message and "invalid" in message:
+            return "invalid_symbol"
+        if "timed out" in message or "timeout" in message or "temporarily unavailable" in message:
+            return "exchange_timeout"
+        if "network" in message or "connection" in message:
+            return "network_error"
+        return "exchange_rejected"
+
+    def _raise_order_rejection(
+        self,
+        *,
+        exc: Exception,
+        symbol: str,
+        side: str,
+        quantity: float,
+        normalized_price: float,
+        reduce_only: bool,
+        order_params: dict[str, Any],
+        scope: str,
+    ) -> None:
+        category = self._categorize_exchange_error(str(exc))
+        detail = str(exc).strip() or exc.__class__.__name__
+        raise RuntimeError(
+            f"{scope} rejected by exchange "
+            f"[category={category}] "
+            f"[symbol={symbol}] "
+            f"[side={side}] "
+            f"[quantity={float(quantity):.12f}] "
+            f"[price_hint={float(normalized_price):.12f}] "
+            f"[reduce_only={str(bool(reduce_only)).lower()}] "
+            f"[params={order_params}] "
+            f"detail={detail}"
+        ) from exc
 
     def min_requirements(self, symbol: str) -> dict[str, Any]:
         exchange = self.build_exchange()
@@ -529,20 +589,32 @@ class CCXTConnectorClient(BaseConnectorClient):
         if market_type == "futures" and reduce_only:
             order_params["reduceOnly"] = True
 
-        if order_params:
-            order = exchange.create_order(
+        try:
+            if order_params:
+                order = exchange.create_order(
+                    symbol=symbol,
+                    type="market",
+                    side=side,
+                    amount=quantity,
+                    params=order_params,
+                )
+            else:
+                order = exchange.create_order(
+                    symbol=symbol,
+                    type="market",
+                    side=side,
+                    amount=quantity,
+                )
+        except Exception as exc:
+            self._raise_order_rejection(
+                exc=exc,
                 symbol=symbol,
-                type="market",
                 side=side,
-                amount=quantity,
-                params=order_params,
-            )
-        else:
-            order = exchange.create_order(
-                symbol=symbol,
-                type="market",
-                side=side,
-                amount=quantity,
+                quantity=quantity,
+                normalized_price=normalized_price,
+                reduce_only=reduce_only,
+                order_params=order_params,
+                scope="market_order",
             )
 
         fill_price = self._resolve_fill_price(order, price_hint)
@@ -644,14 +716,26 @@ class CCXTConnectorClient(BaseConnectorClient):
             "reduceOnly": True,
             "workingType": "MARK_PRICE",
         }
-        sl_order = exchange.create_order(
-            symbol=symbol,
-            type="STOP_MARKET",
-            side=closing_side,
-            amount=qty,
-            price=None,
-            params=sl_params,
-        )
+        try:
+            sl_order = exchange.create_order(
+                symbol=symbol,
+                type="STOP_MARKET",
+                side=closing_side,
+                amount=qty,
+                price=None,
+                params=sl_params,
+            )
+        except Exception as exc:
+            self._raise_order_rejection(
+                exc=exc,
+                symbol=symbol,
+                side=closing_side,
+                quantity=qty,
+                normalized_price=stop_loss_price,
+                reduce_only=True,
+                order_params=sl_params,
+                scope="stop_loss_order",
+            )
         created_orders.append({
             "kind": "stop_loss",
             "id": sl_order.get("id"),
@@ -667,14 +751,26 @@ class CCXTConnectorClient(BaseConnectorClient):
             "reduceOnly": True,
             "workingType": "MARK_PRICE",
         }
-        tp_order = exchange.create_order(
-            symbol=symbol,
-            type="TAKE_PROFIT_MARKET",
-            side=closing_side,
-            amount=qty,
-            price=None,
-            params=tp_params,
-        )
+        try:
+            tp_order = exchange.create_order(
+                symbol=symbol,
+                type="TAKE_PROFIT_MARKET",
+                side=closing_side,
+                amount=qty,
+                price=None,
+                params=tp_params,
+            )
+        except Exception as exc:
+            self._raise_order_rejection(
+                exc=exc,
+                symbol=symbol,
+                side=closing_side,
+                quantity=qty,
+                normalized_price=take_profit_price,
+                reduce_only=True,
+                order_params=tp_params,
+                scope="take_profit_order",
+            )
         created_orders.append({
             "kind": "take_profit",
             "id": tp_order.get("id"),
@@ -727,6 +823,34 @@ class CCXTConnectorClient(BaseConnectorClient):
 
 
 class MT5ConnectorClient(BaseConnectorClient):
+    def fetch_available_balance(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return super().fetch_available_balance()
+
+        self._ensure_session()
+        try:
+            account = mt5.account_info()
+            if account is None:
+                raise RuntimeError(f"mt5.account_info failed: {mt5.last_error()}")
+
+            currency = str(getattr(account, "currency", None) or self.config.get("quote_asset") or "USD").upper()
+            available_balance = float(getattr(account, "margin_free", None) or getattr(account, "equity", None) or getattr(account, "balance", 0.0) or 0.0)
+            total_balance = float(getattr(account, "equity", None) or getattr(account, "balance", None) or available_balance or 0.0)
+
+            return {
+                "ok": True,
+                "mode": "live",
+                "market_type": getattr(self.connector, "market_type", "spot"),
+                "quote_asset": currency,
+                "available_balance": available_balance,
+                "total_balance": total_balance,
+                "source": "mt5_account_info",
+                "login": getattr(account, "login", None),
+                "server": getattr(account, "server", None),
+            }
+        finally:
+            self._shutdown()
+
     def _ensure_session(self):
         if mt5 is None:
             raise RuntimeError("MetaTrader5 package is not available in this environment")
@@ -840,6 +964,18 @@ class MT5ConnectorClient(BaseConnectorClient):
 
 
 class TradingViewConnectorClient(BaseConnectorClient):
+    def fetch_available_balance(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "mode": self.connector.mode,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+            "quote_asset": str((self.config or {}).get("quote_asset", "USDT")).upper(),
+            "available_balance": 0.0,
+            "total_balance": 0.0,
+            "source": "signal_only_connector",
+            "error": "TradingView is signal-only and does not expose an executable account balance",
+        }
+
     def test_connection(self) -> dict[str, Any]:
         return {
             "ok": True,
@@ -851,6 +987,68 @@ class TradingViewConnectorClient(BaseConnectorClient):
 class CTraderConnectorClient(BaseConnectorClient):
     def _bridge_url(self) -> str | None:
         return self.config.get("bridge_url") or self.secrets.get("bridge_url")
+
+    def fetch_available_balance(self) -> dict[str, Any]:
+        if self.connector.mode != "live":
+            return super().fetch_available_balance()
+
+        bridge_url = self._bridge_url()
+        if not bridge_url:
+            return {
+                "ok": False,
+                "mode": "live",
+                "market_type": getattr(self.connector, "market_type", "spot"),
+                "quote_asset": str((self.config or {}).get("quote_asset", "USD")).upper(),
+                "available_balance": 0.0,
+                "total_balance": 0.0,
+                "source": "ctrader_bridge_missing",
+                "error": "cTrader live balance requires a bridge endpoint that exposes account data",
+            }
+
+        errors: list[str] = []
+        with httpx.Client(timeout=10.0) as client:
+            for endpoint in ("/account", "/balance"):
+                try:
+                    response = client.get(bridge_url.rstrip("/") + endpoint)
+                    response.raise_for_status()
+                    data = response.json()
+                    available_balance = float(
+                        data.get("available_balance")
+                        or data.get("free_margin")
+                        or data.get("freeBalance")
+                        or data.get("balance")
+                        or 0.0
+                    )
+                    total_balance = float(
+                        data.get("total_balance")
+                        or data.get("equity")
+                        or data.get("balance")
+                        or available_balance
+                        or 0.0
+                    )
+                    return {
+                        "ok": True,
+                        "mode": "live",
+                        "market_type": getattr(self.connector, "market_type", "spot"),
+                        "quote_asset": str(data.get("currency") or self.config.get("quote_asset") or "USD").upper(),
+                        "available_balance": available_balance,
+                        "total_balance": total_balance,
+                        "source": f"ctrader_bridge{endpoint}",
+                        "raw": data,
+                    }
+                except Exception as exc:
+                    errors.append(f"{endpoint}: {exc}")
+
+        return {
+            "ok": False,
+            "mode": "live",
+            "market_type": getattr(self.connector, "market_type", "spot"),
+            "quote_asset": str((self.config or {}).get("quote_asset", "USD")).upper(),
+            "available_balance": 0.0,
+            "total_balance": 0.0,
+            "source": "ctrader_bridge_balance_unavailable",
+            "error": "; ".join(errors) or "Bridge did not return account balance data",
+        }
 
     def execute_market(
         self,

@@ -4,13 +4,19 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.services.indicators import add_indicators
-from app.services.market import synthetic_ohlcv
+from app.services.market import fetch_ohlcv_frame, synthetic_ohlcv
 
 _SCANNER_CACHE: dict[str, dict[str, Any]] = {}
 
 
-def _score_symbol(symbol: str, timeframe: str) -> dict[str, Any] | None:
-    df_raw = synthetic_ohlcv(symbol=symbol, timeframe=timeframe)
+def _score_symbol(symbol: str, timeframe: str, connector=None) -> dict[str, Any] | None:
+    if connector is not None:
+        market_result = fetch_ohlcv_frame(connector=connector, symbol=symbol, timeframe=timeframe, limit=180)
+        df_raw = market_result.frame
+        data_source = market_result.meta.get("source")
+    else:
+        df_raw = synthetic_ohlcv(symbol=symbol, timeframe=timeframe)
+        data_source = "synthetic_fallback"
     df = add_indicators(df_raw)
     if df.empty:
         return None
@@ -45,6 +51,7 @@ def _score_symbol(symbol: str, timeframe: str) -> dict[str, Any] | None:
         "vol_10": round(vol_10, 6),
         "volume": round(volume, 4),
         "trend_up": ema_fast > ema_slow,
+        "data_source": data_source,
     }
 
 
@@ -80,6 +87,7 @@ def select_symbols_for_run(
     timeframe: str,
     fallback_symbols: list[str],
     cfg: dict,
+    connector=None,
 ) -> tuple[list[str], dict[str, Any]]:
     auto_scan_enabled = bool(cfg.get("auto_scan_enabled", False))
     max_symbols = int(cfg.get("max_symbols", 10) or 10)
@@ -124,7 +132,7 @@ def select_symbols_for_run(
 
     ranking = []
     for symbol in universe:
-        scored = _score_symbol(symbol, timeframe)
+        scored = _score_symbol(symbol, timeframe, connector=connector)
         if scored:
             ranking.append(scored)
 

@@ -742,3 +742,627 @@ def get_client(connector):
     if connector.platform == "tradingview":
         return TradingViewConnectorClient(connector)
     return BaseConnectorClient(connector)
+
+
+def _safe_float(value: Any, fallback: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+        if parsed != parsed:
+            return fallback
+        return parsed
+    except Exception:
+        return fallback
+
+
+def _percent_to_decimal(value: float) -> float:
+    clean = _safe_float(value, 0.0)
+    return clean / 100 if clean > 1 else clean
+
+
+def _compute_exit_prices(
+    *,
+    signal: str,
+    entry_price: float,
+    take_profit_mode: str,
+    take_profit_value: float,
+    stop_loss_mode: str,
+    stop_loss_value: float,
+) -> tuple[float, float, float]:
+    tp_delta = entry_price * _percent_to_decimal(take_profit_value) if take_profit_mode == "percent" else float(take_profit_value)
+    sl_delta = entry_price * _percent_to_decimal(stop_loss_value) if stop_loss_mode == "percent" else float(stop_loss_value)
+
+    if signal == "buy":
+        take_profit_price = entry_price + tp_delta
+        stop_loss_price = max(entry_price - sl_delta, 0.0000001)
+    else:
+        take_profit_price = max(entry_price - tp_delta, 0.0000001)
+        stop_loss_price = entry_price + sl_delta
+
+    stop_pct = abs(entry_price - stop_loss_price) / max(entry_price, 0.0000001)
+    return stop_loss_price, take_profit_price, max(stop_pct, 0.0001)
+
+
+def _candle_payload(df) -> dict[str, Any]:
+    if df.empty:
+        return {}
+    row = df.iloc[-1]
+    ts = row["timestamp"]
+    if hasattr(ts, "to_pydatetime"):
+        ts = ts.to_pydatetime()
+    return {
+        "timestamp": ts.isoformat(),
+        "open": _safe_float(row.get("open")),
+        "high": _safe_float(row.get("high")),
+        "low": _safe_float(row.get("low")),
+        "close": _safe_float(row.get("close")),
+        "volume": _safe_float(row.get("volume")),
+    }
+
+
+def _trade_amount_cap(user, available_balance: float, price: float) -> float:
+    mode = str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
+    if mode == "balance_percent":
+        budget = available_balance * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)
+    else:
+        budget = _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
+    return max(budget / max(price, 0.0000001), 0.0)
+
+
+def sync_positions_with_exchange(db, connector, symbols: list[str] | None = None) -> dict[str, Any]:
+    from datetime import datetime
+
+    from app.models import OpenPosition
+    from app.services.connectors import get_client as get_connector_client
+
+    client = get_connector_client(connector)
+    tracked = list(symbols or [])
+    open_rows = db.query(OpenPosition).filter(
+        OpenPosition.connector_id == connector.id,
+        OpenPosition.is_open.is_(True),
+    ).all()
+    tracked.extend([row.symbol for row in open_rows])
+    tracked = sorted({str(item).strip() for item in tracked if str(item).strip()})
+
+    resolved = []
+    inconsistencies = 0
+    now = datetime.utcnow()
+
+    for symbol in tracked:
+        context = client.fetch_position_context(symbol)
+        db_rows = [row for row in open_rows if row.symbol == symbol]
+        exchange_has_position = bool(context.get("has_position"))
+
+        if db_rows and not exchange_has_position:
+            inconsistencies += len(db_rows)
+            for row in db_rows:
+                row.is_open = False
+                row.closed_at = now
+                meta = row.meta_json or {}
+                meta["last_sync"] = now.isoformat()
+                meta["sync_resolution"] = "closed_in_db_after_exchange_absence"
+                meta["exchange_context"] = context
+                row.meta_json = meta
+                resolved.append({"symbol": symbol, "action": "closed_db_position"})
+        elif not db_rows and exchange_has_position:
+            inconsistencies += 1
+            db.add(OpenPosition(
+                user_id=connector.user_id,
+                connector_id=connector.id,
+                platform=connector.platform,
+                market_type=getattr(connector, "market_type", "spot"),
+                symbol=symbol,
+                position_side=context.get("side") or "long",
+                entry_price=0.0,
+                current_qty=abs(_safe_float(context.get("net_contracts") or context.get("spot_base_total"))),
+                is_open=True,
+                meta_json={
+                    "created_by_sync": True,
+                    "last_sync": now.isoformat(),
+                    "exchange_context": context,
+                },
+            ))
+            resolved.append({"symbol": symbol, "action": "created_db_position_from_exchange"})
+        else:
+            for row in db_rows:
+                row.current_qty = abs(_safe_float(context.get("net_contracts") or context.get("spot_base_total")))
+                meta = row.meta_json or {}
+                meta["last_sync"] = now.isoformat()
+                meta["exchange_context"] = context
+                row.meta_json = meta
+
+    db.commit()
+    return {
+        "connector_id": connector.id,
+        "symbols_checked": tracked,
+        "resolved": resolved,
+        "inconsistencies": inconsistencies,
+        "synced_at": now.isoformat(),
+    }
+
+
+def run_strategy(
+    *,
+    db,
+    user_id: int,
+    connector_ids: list[int],
+    symbols: list[str],
+    timeframe: str,
+    strategy_slug: str,
+    risk_per_trade: float,
+    min_ml_probability: float,
+    use_live_if_available: bool,
+    take_profit_mode: str = "percent",
+    take_profit_value: float = 1.5,
+    stop_loss_mode: str = "percent",
+    stop_loss_value: float = 1.0,
+    trailing_stop_mode: str = "percent",
+    trailing_stop_value: float = 0.0,
+    indicator_exit_enabled: bool = False,
+    indicator_exit_rule: str = "macd_cross",
+    leverage_profile: str = "none",
+    max_open_positions: int = 1,
+    compound_growth_enabled: bool = False,
+    atr_volatility_filter_enabled: bool = True,
+    run_source: str = "manual",
+    bot_session_id: int | None = None,
+):
+    import json
+
+    from app.models import Connector, OpenPosition, TradeLog, TradeRun, User
+    from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
+    from app.services.connectors import BaseConnectorClient, get_client as get_connector_client
+    from app.services.market import fetch_ohlcv_frame
+    from app.services.ml import train_and_score
+    from app.services.risk import position_size
+    from app.services.scanner import select_symbols_for_run
+    from app.services.strategies import STRATEGY_MAP, get_strategy_rule
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise RuntimeError(f"user {user_id} not found")
+
+    results: list[dict[str, Any]] = []
+
+    for connector_id in connector_ids:
+        connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user_id).first()
+        if not connector or not connector.is_enabled:
+            results.append({"connector_id": connector_id, "status": "skipped", "reason": "connector_disabled_or_missing"})
+            continue
+
+        client = get_connector_client(connector)
+        selected_symbols, scanner_meta = select_symbols_for_run(
+            connector_id=connector.id,
+            timeframe=timeframe,
+            fallback_symbols=symbols,
+            cfg=connector.config_json or {},
+            connector=connector,
+        )
+        sync_meta = sync_positions_with_exchange(db, connector, selected_symbols)
+
+        for symbol in selected_symbols:
+            decision_reasons: list[str] = []
+            market_result = fetch_ohlcv_frame(connector=connector, symbol=symbol, timeframe=timeframe, limit=220)
+            frame = market_result.frame
+            notes = {
+                "run_source": run_source,
+                "bot_session_id": bot_session_id,
+                "scanner": scanner_meta,
+                "sync": sync_meta,
+                "market_data": market_result.meta,
+                "candle": _candle_payload(frame),
+                "decision_reasons": decision_reasons,
+                "indicator_exit_enabled": indicator_exit_enabled,
+                "indicator_exit_rule": indicator_exit_rule,
+                "leverage_profile": leverage_profile,
+                "compound_growth_enabled": compound_growth_enabled,
+                "atr_volatility_filter_enabled": atr_volatility_filter_enabled,
+            }
+
+            if frame.empty:
+                decision_reasons.append("missing_market_data")
+            elif (market_result.meta.get("health") or {}).get("has_unconfirmed_candle"):
+                decision_reasons.append("last_candle_not_confirmed")
+
+            strategy_fn = STRATEGY_MAP.get(strategy_slug)
+            if strategy_fn is None:
+                raise RuntimeError(f"strategy {strategy_slug} not found")
+
+            rule = get_strategy_rule(strategy_slug)
+            connector_market_type = (getattr(connector, "market_type", "spot") or "spot").lower()
+            if connector_market_type not in rule.get("market_types", ["spot", "futures"]):
+                decision_reasons.append("strategy_market_mismatch")
+
+            normalized = client.normalize_symbol(symbol)
+            notes["symbol_normalization"] = normalized
+            normalized_symbol = normalized.get("normalized_symbol") or symbol
+            if not normalized.get("found", False) and connector.platform in {"binance", "bybit", "okx"}:
+                decision_reasons.append("invalid_symbol")
+
+            if decision_reasons:
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal="hold",
+                    ml_probability=0.0,
+                    quantity=0.0,
+                    status="skipped",
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                db.commit()
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
+                continue
+
+            data = frame
+            signal = strategy_fn(data)
+            ml_probability = train_and_score(data)
+            notes["signal"] = signal
+            notes["ml_probability_decimal"] = ml_probability
+
+            if signal == "hold":
+                decision_reasons.append("strategy_hold")
+            if ml_probability < min_ml_probability:
+                decision_reasons.append("low_confidence")
+
+            price = _safe_float(data.iloc[-1]["close"], 0.0)
+            position_context = client.fetch_position_context(normalized_symbol)
+            notes["position_context"] = position_context
+
+            open_count = db.query(OpenPosition).filter(
+                OpenPosition.connector_id == connector.id,
+                OpenPosition.is_open.is_(True),
+            ).count()
+            if open_count >= max_open_positions and not position_context.get("has_position"):
+                decision_reasons.append("max_open_positions")
+
+            if signal == "sell" and connector_market_type != "futures" and not position_context.get("has_position"):
+                decision_reasons.append("spot_sell_without_inventory")
+            if signal == "sell" and connector_market_type == "futures" and not rule.get("allow_short", False) and not position_context.get("has_position"):
+                decision_reasons.append("short_disabled")
+
+            if decision_reasons:
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal=signal,
+                    ml_probability=ml_probability,
+                    quantity=0.0,
+                    status="skipped",
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                db.commit()
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
+                continue
+
+            balance = client.fetch_available_balance()
+            notes["balance"] = balance
+            if not balance.get("ok"):
+                decision_reasons.append("balance_unavailable")
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal=signal,
+                    ml_probability=ml_probability,
+                    quantity=0.0,
+                    status="skipped",
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                db.commit()
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
+                continue
+
+            stop_loss_price, take_profit_price, stop_pct = _compute_exit_prices(
+                signal=signal,
+                entry_price=price,
+                take_profit_mode=take_profit_mode,
+                take_profit_value=take_profit_value,
+                stop_loss_mode=stop_loss_mode,
+                stop_loss_value=stop_loss_value,
+            )
+
+            risk_qty = position_size(_safe_float(balance.get("available_balance"), 0.0), risk_per_trade, price, stop_pct)
+            budget_cap_qty = _trade_amount_cap(user, _safe_float(balance.get("available_balance"), 0.0), price)
+            quantity = min(risk_qty, budget_cap_qty) if budget_cap_qty > 0 else risk_qty
+
+            if connector_market_type != "futures" and signal == "sell":
+                quantity = max(
+                    _safe_float(position_context.get("spot_base_free"), 0.0),
+                    _safe_float(position_context.get("spot_base_total"), 0.0),
+                )
+
+            reduce_only = bool(
+                connector_market_type == "futures"
+                and signal == "sell"
+                and position_context.get("has_position")
+                and position_context.get("side") == "long"
+            )
+            notes["order_preview"] = {
+                "price": price,
+                "stop_loss_price": stop_loss_price,
+                "take_profit_price": take_profit_price,
+                "risk_qty": risk_qty,
+                "budget_cap_qty": budget_cap_qty,
+                "final_quantity": quantity,
+                "estimated_notional": quantity * price,
+                "estimated_max_loss": quantity * abs(price - stop_loss_price),
+                "reduce_only": reduce_only,
+            }
+
+            pretrade = client.pretrade_validate(normalized_symbol, quantity, price)
+            notes["pretrade"] = pretrade
+            if not pretrade.get("ok"):
+                decision_reasons.append(pretrade.get("reason_code") or "pretrade_rejected")
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal=signal,
+                    ml_probability=ml_probability,
+                    quantity=quantity,
+                    status="skipped",
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                db.commit()
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
+                continue
+
+            execution_client = client if (use_live_if_available and connector.mode == "live") else BaseConnectorClient(connector)
+            try:
+                result = execution_client.execute_market(
+                    symbol=normalized_symbol,
+                    side=signal,
+                    quantity=pretrade["normalized_quantity"],
+                    price_hint=price,
+                    reduce_only=reduce_only,
+                )
+                notes["execution_raw"] = result.raw
+                risk_orders = {}
+                if connector_market_type == "futures" and use_live_if_available and connector.mode == "live":
+                    risk_orders = client.place_risk_orders(
+                        symbol=normalized_symbol,
+                        side=signal,
+                        quantity=pretrade["normalized_quantity"],
+                        stop_loss_price=stop_loss_price,
+                        take_profit_price=take_profit_price,
+                        trailing_stop_mode=trailing_stop_mode,
+                        trailing_stop_value=trailing_stop_value,
+                        market_type=connector_market_type,
+                    )
+                notes["risk_orders"] = risk_orders
+            except Exception as exc:
+                notes["execution_error"] = str(exc)
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal=signal,
+                    ml_probability=ml_probability,
+                    quantity=pretrade["normalized_quantity"],
+                    status="rejected_exchange",
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                db.commit()
+                send_user_telegram_alert(user, format_user_failure_message(
+                    locale=user.alert_language,
+                    scope="execution",
+                    detail=str(exc),
+                    connector_label=connector.label,
+                    platform=connector.platform,
+                    symbol=normalized_symbol,
+                ))
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "rejected_exchange", "error": str(exc)})
+                continue
+
+            trade_run = TradeRun(
+                user_id=user.id,
+                connector_id=connector.id,
+                strategy_slug=strategy_slug,
+                symbol=normalized_symbol,
+                timeframe=timeframe,
+                signal=signal,
+                ml_probability=ml_probability,
+                quantity=result.quantity,
+                status=result.status,
+                notes=json.dumps(notes, ensure_ascii=False),
+            )
+            db.add(trade_run)
+            db.flush()
+
+            pnl = 0.0
+            close_reason = "entry"
+            existing_position = db.query(OpenPosition).filter(
+                OpenPosition.connector_id == connector.id,
+                OpenPosition.symbol == normalized_symbol,
+                OpenPosition.is_open.is_(True),
+            ).order_by(OpenPosition.id.desc()).first()
+
+            if reduce_only and existing_position:
+                direction = 1 if existing_position.position_side == "long" else -1
+                pnl = (result.fill_price - existing_position.entry_price) * result.quantity * direction
+                existing_position.current_qty = max(existing_position.current_qty - result.quantity, 0.0)
+                existing_position.last_trade_log_id = trade_run.id
+                if existing_position.current_qty <= 0:
+                    existing_position.is_open = False
+                    existing_position.closed_at = __import__("datetime").datetime.utcnow()
+                close_reason = "signal_close"
+            elif connector_market_type != "futures" and signal == "sell" and existing_position:
+                pnl = (result.fill_price - existing_position.entry_price) * result.quantity
+                existing_position.is_open = False
+                existing_position.current_qty = 0.0
+                existing_position.closed_at = __import__("datetime").datetime.utcnow()
+                existing_position.last_trade_log_id = trade_run.id
+                close_reason = "spot_sell"
+            else:
+                db.add(OpenPosition(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    platform=connector.platform,
+                    market_type=connector_market_type,
+                    symbol=normalized_symbol,
+                    position_side="long" if signal == "buy" else "short",
+                    entry_price=result.fill_price,
+                    current_qty=result.quantity,
+                    source_trade_log_id=trade_run.id,
+                    last_trade_log_id=trade_run.id,
+                    meta_json={
+                        "stop_loss_price": stop_loss_price,
+                        "take_profit_price": take_profit_price,
+                        "trailing_stop_mode": trailing_stop_mode,
+                        "trailing_stop_value": trailing_stop_value,
+                        "last_sync": sync_meta.get("synced_at"),
+                        "market_data_source": market_result.meta.get("source"),
+                    },
+                ))
+
+            db.add(TradeLog(
+                user_id=user.id,
+                connector_id=connector.id,
+                platform=connector.platform,
+                symbol=normalized_symbol,
+                side=signal,
+                quantity=result.quantity,
+                price=result.fill_price,
+                status=result.status,
+                pnl=pnl,
+                meta_json={
+                    "stop_loss_price": stop_loss_price,
+                    "take_profit_price": take_profit_price,
+                    "close_reason": close_reason,
+                    "market_data": market_result.meta,
+                    "pretrade": pretrade,
+                    "balance": balance,
+                    "execution_raw": result.raw,
+                },
+            ))
+            db.commit()
+
+            send_user_telegram_alert(user, format_user_execution_message(
+                locale=user.alert_language,
+                connector_label=connector.label,
+                platform=connector.platform,
+                symbol=normalized_symbol,
+                side=signal,
+                quantity=result.quantity,
+                fill_price=result.fill_price,
+                status=result.status,
+                strategy_slug=strategy_slug,
+                message=result.message,
+            ))
+            results.append({
+                "connector_id": connector.id,
+                "symbol": normalized_symbol,
+                "status": result.status,
+                "quantity": result.quantity,
+                "fill_price": result.fill_price,
+                "market_data_source": market_result.meta.get("source"),
+                "balance_source": balance.get("source"),
+            })
+
+    return results
+
+
+def dashboard_data(db, user_id: int) -> dict[str, Any]:
+    from app.models import Connector, TradeLog
+
+    connectors = db.query(Connector).filter(Connector.user_id == user_id).all()
+    trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.desc()).all()
+    latest_trades = trades[:20]
+
+    realized_pnl = sum(_safe_float(item.pnl) for item in trades)
+    total_invested = sum(_safe_float(item.quantity) * _safe_float(item.price) for item in trades)
+    winning_trades = sum(1 for item in trades if _safe_float(item.pnl) > 0)
+    losing_trades = sum(1 for item in trades if _safe_float(item.pnl) < 0)
+    platforms: dict[str, dict[str, Any]] = {}
+    statuses: dict[str, int] = {}
+
+    for trade in trades:
+        bucket = platforms.setdefault(trade.platform or "unknown", {"count": 0, "pnl": 0.0})
+        bucket["count"] += 1
+        bucket["pnl"] += _safe_float(trade.pnl)
+        statuses[trade.status or "unknown"] = statuses.get(trade.status or "unknown", 0) + 1
+
+    return {
+        "total_connectors": len(connectors),
+        "enabled_connectors": sum(1 for item in connectors if item.is_enabled),
+        "total_trades": len(trades),
+        "realized_pnl": round(realized_pnl, 6),
+        "total_invested": round(total_invested, 6),
+        "realized_pnl_percent": round((realized_pnl / total_invested) * 100.0, 6) if total_invested > 0 else 0.0,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "platforms": platforms,
+        "statuses": statuses,
+        "latest_trades": latest_trades,
+        "limits": [],
+    }
+
+
+def activity_metrics(db, user_id: int) -> dict[str, Any]:
+    from collections import defaultdict
+
+    from app.models import TradeLog
+
+    trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.asc()).all()
+
+    equity_curve = []
+    drawdown_curve = []
+    monthly_returns = defaultdict(float)
+    yearly_returns = defaultdict(float)
+    running = 0.0
+    peak = 0.0
+    pnl_values = []
+
+    for trade in trades:
+        pnl = _safe_float(trade.pnl)
+        pnl_values.append(pnl)
+        running += pnl
+        peak = max(peak, running)
+        drawdown = running - peak
+        stamp = trade.created_at.isoformat() if trade.created_at else None
+        equity_curve.append({"timestamp": stamp, "value": round(running, 6)})
+        drawdown_curve.append({"timestamp": stamp, "value": round(drawdown, 6)})
+        if trade.created_at:
+            monthly_returns[trade.created_at.strftime("%Y-%m")] += pnl
+            yearly_returns[trade.created_at.strftime("%Y")] += pnl
+
+    avg_win = sum(x for x in pnl_values if x > 0) / max(sum(1 for x in pnl_values if x > 0), 1)
+    avg_loss = abs(sum(x for x in pnl_values if x < 0) / max(sum(1 for x in pnl_values if x < 0), 1))
+    profit_factor = (sum(x for x in pnl_values if x > 0) / max(abs(sum(x for x in pnl_values if x < 0)), 0.0000001)) if pnl_values else 0.0
+    win_rate = (sum(1 for x in pnl_values if x > 0) / len(pnl_values) * 100.0) if pnl_values else 0.0
+    mean = sum(pnl_values) / len(pnl_values) if pnl_values else 0.0
+    variance = sum((x - mean) ** 2 for x in pnl_values) / len(pnl_values) if pnl_values else 0.0
+    std = variance ** 0.5
+    sharpe_ratio = mean / std if std > 0 else 0.0
+
+    return {
+        "equity_curve": equity_curve,
+        "drawdown_curve": drawdown_curve,
+        "monthly_returns": [{"period": key, "value": round(value, 6)} for key, value in sorted(monthly_returns.items())],
+        "yearly_returns": [{"period": key, "value": round(value, 6)} for key, value in sorted(yearly_returns.items())],
+        "summary": {
+            "sharpe_ratio": round(sharpe_ratio, 6),
+            "max_drawdown": round(min((item["value"] for item in drawdown_curve), default=0.0), 6),
+            "profit_factor": round(profit_factor, 6),
+            "win_rate": round(win_rate, 6),
+            "total_trades": len(trades),
+            "average_win": round(avg_win, 6),
+            "average_loss": round(avg_loss, 6),
+        },
+    }
