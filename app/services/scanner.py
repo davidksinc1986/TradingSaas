@@ -88,9 +88,12 @@ def select_symbols_for_run(
     fallback_symbols: list[str],
     cfg: dict,
     connector=None,
+    *,
+    force_dynamic: bool = False,
+    max_symbols_override: int | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    auto_scan_enabled = bool(cfg.get("auto_scan_enabled", False))
-    max_symbols = int(cfg.get("max_symbols", 10) or 10)
+    auto_scan_enabled = bool(cfg.get("auto_scan_enabled", False)) or force_dynamic
+    max_symbols = max(int(max_symbols_override or cfg.get("max_symbols", 10) or 10), 1)
     scanner_interval_minutes = int(cfg.get("scanner_interval_minutes", 60) or 60)
 
     if not auto_scan_enabled:
@@ -100,6 +103,7 @@ def select_symbols_for_run(
             "reason": "auto_scan_disabled",
             "selected_symbols": selected,
             "selected_count": len(selected),
+            "max_symbols": max_symbols,
             "timeframe": timeframe,
         }
 
@@ -110,6 +114,7 @@ def select_symbols_for_run(
             "reason": "empty_universe_fallback",
             "selected_symbols": list(fallback_symbols),
             "selected_count": len(list(fallback_symbols)),
+            "max_symbols": max_symbols,
             "timeframe": timeframe,
         }
 
@@ -126,6 +131,7 @@ def select_symbols_for_run(
                 "scanned_at": scanned_at.isoformat(),
                 "selected_symbols": list(cached.get("symbols", fallback_symbols)),
                 "selected_count": len(list(cached.get("symbols", fallback_symbols))),
+                "max_symbols": max_symbols,
                 "ranking": cached.get("ranking", []),
                 "timeframe": timeframe,
             }
@@ -154,6 +160,7 @@ def select_symbols_for_run(
         "scanned_at": now.isoformat(),
         "selected_symbols": selected,
         "selected_count": len(selected),
+        "max_symbols": max_symbols,
         "ranking": ranking[: max(max_symbols, 20)],
         "timeframe": timeframe,
     }

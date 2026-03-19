@@ -810,6 +810,42 @@ def _trade_amount_cap(user, available_balance: float, price: float) -> float:
     return max(budget / max(price, 0.0000001), 0.0)
 
 
+def _resolve_order_price_context(
+    *,
+    client,
+    symbol: str,
+    signal: str,
+    analysis_price: float,
+    market_meta: dict[str, Any],
+) -> dict[str, Any]:
+    exchange_price = _safe_float((market_meta or {}).get("exchange_price"), 0.0)
+    execution_reference: dict[str, Any] = {}
+    try:
+        execution_reference = client.resolve_execution_reference_price(
+            symbol,
+            order_type="market",
+            side=signal,
+            analysis_price=analysis_price,
+        )
+    except Exception as exc:
+        execution_reference = {
+            "value": None,
+            "source": "execution_reference_unavailable",
+            "used_fallback": True,
+            "details": {"error": str(exc)},
+        }
+
+    execution_price = _safe_float(execution_reference.get("value"), 0.0)
+    resolved_price = execution_price or exchange_price or analysis_price
+    return {
+        "analysis_price": analysis_price,
+        "exchange_price": exchange_price or None,
+        "execution_reference": execution_reference,
+        "resolved_price": resolved_price,
+        "resolved_source": execution_reference.get("source") if execution_price else ("exchange_price" if exchange_price else "analysis_price"),
+    }
+
+
 def sync_positions_with_exchange(db, connector, symbols: list[str] | None = None) -> dict[str, Any]:
     from app.services.position_lifecycle import reconcile_positions_with_exchange
 
@@ -844,6 +880,8 @@ def run_strategy(
     max_open_positions: int = 1,
     compound_growth_enabled: bool = False,
     atr_volatility_filter_enabled: bool = True,
+    symbol_source_mode: str = "manual",
+    dynamic_symbol_limit: int | None = None,
     run_source: str = "manual",
     bot_session_id: int | None = None,
 ):
@@ -880,6 +918,8 @@ def run_strategy(
             fallback_symbols=symbols,
             cfg=connector.config_json or {},
             connector=connector,
+            force_dynamic=str(symbol_source_mode or "manual").lower() == "dynamic",
+            max_symbols_override=dynamic_symbol_limit,
         )
         sync_meta = sync_positions_with_exchange(db, connector, selected_symbols)
 
@@ -901,6 +941,8 @@ def run_strategy(
                 "leverage_profile": leverage_profile,
                 "compound_growth_enabled": compound_growth_enabled,
                 "atr_volatility_filter_enabled": atr_volatility_filter_enabled,
+                "symbol_source_mode": symbol_source_mode,
+                "dynamic_symbol_limit": dynamic_symbol_limit,
             }
 
             market_health = market_result.meta.get("health") or {}
@@ -959,8 +1001,6 @@ def run_strategy(
             if ml_probability < min_ml_probability:
                 decision_reasons.append("low_confidence")
 
-            price = _safe_float(data.iloc[-1]["close"], 0.0)
-            notes["analysis_price"] = price
             position_context = client.fetch_position_context(normalized_symbol)
             notes["position_context"] = position_context
 
@@ -1006,6 +1046,18 @@ def run_strategy(
                 db.commit()
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
+
+            analysis_price = _safe_float(data.iloc[-1]["close"], 0.0)
+            price_context = _resolve_order_price_context(
+                client=client,
+                symbol=normalized_symbol,
+                signal=signal,
+                analysis_price=analysis_price,
+                market_meta=market_result.meta,
+            )
+            price = _safe_float(price_context.get("resolved_price"), analysis_price)
+            notes["analysis_price"] = analysis_price
+            notes["price_context"] = price_context
 
             balance = client.fetch_available_balance()
             notes["balance"] = balance

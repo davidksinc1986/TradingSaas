@@ -569,6 +569,8 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         max_open_positions=payload.max_open_positions,
         compound_growth_enabled=payload.compound_growth_enabled,
         atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
+        symbol_source_mode=payload.symbol_source_mode,
+        dynamic_symbol_limit=payload.dynamic_symbol_limit,
         run_source="manual",
     )
     status_counts: dict[str, int] = {}
@@ -632,9 +634,12 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "connector_label": connector.label if connector else "-",
                 "platform": connector.platform if connector else "-",
                 "mode": connector.mode if connector else "-",
+                "market_type": connector.market_type if connector else "spot",
                 "strategy_slug": session.strategy_slug,
                 "timeframe": session.timeframe,
                 "symbols": symbols,
+                "symbol_source_mode": str((session.symbols_json or {}).get("symbol_source_mode") or "manual"),
+                "dynamic_symbol_limit": int((session.symbols_json or {}).get("dynamic_symbol_limit") or len(symbols) or 1),
                 "interval_minutes": session.interval_minutes,
                 "risk_per_trade": session.risk_per_trade,
                 "min_ml_probability": session.min_ml_probability,
@@ -669,9 +674,12 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "connector_label": "-",
                 "platform": "-",
                 "mode": "-",
+                "market_type": "spot",
                 "strategy_slug": getattr(session, "strategy_slug", "-"),
                 "timeframe": getattr(session, "timeframe", "5m"),
                 "symbols": [],
+                "symbol_source_mode": "manual",
+                "dynamic_symbol_limit": 1,
                 "interval_minutes": getattr(session, "interval_minutes", 5),
                 "risk_per_trade": _safe_float(getattr(session, "risk_per_trade", 0.0)),
                 "min_ml_probability": _safe_float(getattr(session, "min_ml_probability", 0.0)),
@@ -731,7 +739,11 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         connector_id=connector.id,
         strategy_slug=payload.strategy_slug,
         timeframe=normalized_timeframe,
-        symbols_json={"symbols": payload.symbols},
+        symbols_json={
+            "symbols": payload.symbols,
+            "symbol_source_mode": payload.symbol_source_mode,
+            "dynamic_symbol_limit": payload.dynamic_symbol_limit,
+        },
         interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
         risk_per_trade=risk_value,
         min_ml_probability=ml_value,
@@ -779,7 +791,17 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
     if payload.is_active is not None:
         session.is_active = payload.is_active
     if payload.symbols is not None:
-        session.symbols_json = {"symbols": payload.symbols}
+        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+        current_symbols_json["symbols"] = payload.symbols
+        session.symbols_json = current_symbols_json
+    if payload.symbol_source_mode is not None:
+        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+        current_symbols_json["symbol_source_mode"] = payload.symbol_source_mode
+        session.symbols_json = current_symbols_json
+    if payload.dynamic_symbol_limit is not None:
+        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+        current_symbols_json["dynamic_symbol_limit"] = payload.dynamic_symbol_limit
+        session.symbols_json = current_symbols_json
     if payload.strategy_slug is not None:
         if control.managed_by_admin and payload.strategy_slug not in allowed:
             raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
@@ -865,12 +887,16 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
     if not connector:
         raise HTTPException(status_code=404, detail="Enabled connector not found")
 
+    source_symbols_json = _safe_json_object(getattr(source, "symbols_json", {}))
     cloned = BotSession(
         user_id=user.id,
         connector_id=connector.id,
         strategy_slug=source.strategy_slug,
         timeframe=source.timeframe,
-        symbols_json={"symbols": payload.symbols if payload.symbols is not None else ((source.symbols_json or {}).get("symbols", []))},
+        symbols_json={
+            **source_symbols_json,
+            "symbols": payload.symbols if payload.symbols is not None else (source_symbols_json.get("symbols", [])),
+        },
         interval_minutes=source.interval_minutes,
         risk_per_trade=source.risk_per_trade,
         min_ml_probability=source.min_ml_probability,
@@ -901,6 +927,56 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         platform=connector.platform,
     )
     return {"ok": True, "session_id": cloned.id}
+
+
+@router.get("/connectors/{connector_id}/symbols-catalog")
+def connector_symbols_catalog(connector_id: int, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(
+        Connector.id == connector_id,
+        Connector.user_id == user.id,
+    ).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    policy = db.query(PlatformPolicy).filter(PlatformPolicy.platform == connector.platform).first()
+    symbols = sorted({
+        *(_safe_symbols(getattr(connector, "symbols_json", {}))),
+        *((policy.top_symbols_json or {}).get("symbols", []) if policy else []),
+        *((policy.allowed_symbols_json or {}).get("symbols", []) if policy else []),
+    })
+    source = "configured_universe"
+
+    if connector.platform in {"binance", "bybit", "okx"}:
+        try:
+            client = get_client(connector)
+            exchange = client.build_exchange()
+            markets = exchange.load_markets()
+            market_type = str(getattr(connector, "market_type", "spot") or "spot").lower()
+            symbols = sorted(
+                symbol
+                for symbol, market in (markets or {}).items()
+                if market.get("active", True)
+                and (
+                    (market_type == "spot" and market.get("spot"))
+                    or (market_type == "futures" and (market.get("future") or market.get("swap")))
+                    or market_type not in {"spot", "futures"}
+                )
+            )
+            if market_type in {"spot", "futures"}:
+                symbols = [symbol for symbol in symbols if symbol.endswith("/USDT")] or symbols
+            source = "exchange_markets"
+        except Exception as exc:
+            source = f"configured_universe_fallback:{exc}"
+
+    payload = symbols[:2000]
+    return {
+        "connector_id": connector.id,
+        "platform": connector.platform,
+        "market_type": connector.market_type,
+        "symbols": payload,
+        "count": len(payload),
+        "source": source,
+    }
 
 
 @router.get("/execution-logs/download")

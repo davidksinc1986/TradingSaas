@@ -30,70 +30,6 @@
   </aside>
 </section>
 
-<section class="quantum-command-grid">
-  <article class="card quantum-command-card">
-    <div class="row-between">
-      <div>
-        <small class="quantum-label">Quantum Mission Control</small>
-        <h2>Estado táctico del sistema</h2>
-      </div>
-      <div class="row-wrap">
-        <button class="btn btn-sm" type="button" id="refresh-quantum-btn">Refresh</button>
-        <span class="pill" id="quant-health-pill">Inicializando</span>
-      </div>
-    </div>
-    <div class="quantum-metrics-grid">
-      <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
-      <div class="quantum-metric"><small>Sync engine</small><strong id="quant-sync-status">Pendiente</strong></div>
-      <div class="quantum-metric"><small>Conectores live</small><strong id="quant-live-connectors">0</strong></div>
-      <div class="quantum-metric"><small>Último heartbeat</small><strong id="quant-last-heartbeat">--:--</strong></div>
-    </div>
-    <div class="quantum-status-strip" id="quant-status-strip"></div>
-  </article>
-
-  <article class="card quantum-side-card">
-    <div class="row-between">
-      <div>
-        <small class="quantum-label">User configuration</small>
-        <h2>Configuración operativa</h2>
-      </div>
-      <span class="pill tiny" id="user-config-state">Profile loaded</span>
-    </div>
-    <div id="user-config-report" class="quantum-report-list"></div>
-  </article>
-
-  <article class="card quantum-side-card">
-    <div class="row-between">
-      <div>
-        <small class="quantum-label">Decision telemetry</small>
-        <h2>Flujo de decisiones</h2>
-      </div>
-      <span class="pill tiny" id="decision-report-state">0 eventos</span>
-    </div>
-    <div id="decision-breakdown-panel" class="quantum-report-list"></div>
-  </article>
-
-  <article class="card quantum-side-card">
-    <div class="row-between">
-      <div>
-        <small class="quantum-label">Risk radar</small>
-        <h2>Riesgo visible en 3 segundos</h2>
-      </div>
-      <div class="row-wrap">
-        <button class="btn btn-sm" type="button" id="refresh-risk-radar-btn">Refresh</button>
-        <span class="pill tiny" id="risk-radar-state">Estable</span>
-      </div>
-    </div>
-    <div class="quantum-metrics-grid">
-      <div class="quantum-metric"><small>Health</small><strong id="risk-health-score">100%</strong></div>
-      <div class="quantum-metric"><small>Open risk</small><strong id="risk-open-heat">0.00</strong></div>
-      <div class="quantum-metric"><small>Drawdown</small><strong id="risk-drawdown">0.00%</strong></div>
-      <div class="quantum-metric"><small>Kill switch</small><strong id="risk-kill-switch">OFF</strong></div>
-    </div>
-    <div id="risk-radar-panel" class="quantum-report-list"></div>
-  </article>
-</section>
-
 <section class="tabs" id="dashboard-tabs">
   <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil"><span class="tab-glyph">◉</span><span class="tab-label">Perfil</span></button>
   <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores"><span class="tab-glyph">◉</span><span class="tab-label">Apps</span></button>
@@ -102,6 +38,78 @@
 </section>
 
 <section id="tab-profile" class="tab-panel active">
+  <section class="profile-operations-shell">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Profile command deck</small>
+        <h2>Resumen operativo del perfil</h2>
+      </div>
+      <small class="hint">Mission control, configuración, decisiones y riesgo ahora viven dentro de Perfil.</small>
+    </div>
+    <section class="quantum-command-grid profile-command-grid">
+      <article class="card quantum-command-card">
+        <div class="row-between">
+          <div>
+            <small class="quantum-label">Quantum Mission Control</small>
+            <h2>Estado táctico del sistema</h2>
+          </div>
+          <div class="row-wrap">
+            <button class="btn btn-sm" type="button" id="refresh-quantum-btn">Refresh</button>
+            <span class="pill" id="quant-health-pill">Inicializando</span>
+          </div>
+        </div>
+        <div class="quantum-metrics-grid">
+          <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
+          <div class="quantum-metric"><small>Sync engine</small><strong id="quant-sync-status">Pendiente</strong></div>
+          <div class="quantum-metric"><small>Conectores live</small><strong id="quant-live-connectors">0</strong></div>
+          <div class="quantum-metric"><small>Último heartbeat</small><strong id="quant-last-heartbeat">--:--</strong></div>
+        </div>
+        <div class="quantum-status-strip" id="quant-status-strip"></div>
+      </article>
+
+      <article class="card quantum-side-card">
+        <div class="row-between">
+          <div>
+            <small class="quantum-label">User configuration</small>
+            <h2>Configuración operativa</h2>
+          </div>
+          <span class="pill tiny" id="user-config-state">Profile loaded</span>
+        </div>
+        <div id="user-config-report" class="quantum-report-list"></div>
+      </article>
+
+      <article class="card quantum-side-card">
+        <div class="row-between">
+          <div>
+            <small class="quantum-label">Decision telemetry</small>
+            <h2>Flujo de decisiones</h2>
+          </div>
+          <span class="pill tiny" id="decision-report-state">0 eventos</span>
+        </div>
+        <div id="decision-breakdown-panel" class="quantum-report-list"></div>
+      </article>
+
+      <article class="card quantum-side-card">
+        <div class="row-between">
+          <div>
+            <small class="quantum-label">Risk radar</small>
+            <h2>Riesgo visible en 3 segundos</h2>
+          </div>
+          <div class="row-wrap">
+            <button class="btn btn-sm" type="button" id="refresh-risk-radar-btn">Refresh</button>
+            <span class="pill tiny" id="risk-radar-state">Estable</span>
+          </div>
+        </div>
+        <div class="quantum-metrics-grid">
+          <div class="quantum-metric"><small>Health</small><strong id="risk-health-score">100%</strong></div>
+          <div class="quantum-metric"><small>Open risk</small><strong id="risk-open-heat">0.00</strong></div>
+          <div class="quantum-metric"><small>Drawdown</small><strong id="risk-drawdown">0.00%</strong></div>
+          <div class="quantum-metric"><small>Kill switch</small><strong id="risk-kill-switch">OFF</strong></div>
+        </div>
+        <div id="risk-radar-panel" class="quantum-report-list"></div>
+      </article>
+    </section>
+  </section>
   <div class="card profile-strategy-layout">
     <section class="profile-main-flow">
       <h2 id="profile-title">Perfil de usuario</h2>
@@ -218,11 +226,33 @@
             </label>
             <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
             <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+            <div class="symbol-picker-shell">
+              <div class="row-between">
+                <strong>Lista de símbolos</strong>
+                <small class="hint" id="symbol-catalog-status">Selecciona un conector para cargar su universo.</small>
+              </div>
+              <label>Buscar símbolo
+                <input id="symbol-search-input" type="search" placeholder="Ej. BTC, ETH, SOL">
+              </label>
+              <div class="symbol-picker-layout">
+                <select id="symbol-catalog-list" multiple size="8"></select>
+                <div class="symbol-picker-actions">
+                  <button class="btn btn-sm" type="button" id="symbol-add-selected">Agregar →</button>
+                  <button class="btn btn-sm" type="button" id="symbol-remove-selected">← Quitar</button>
+                  <button class="btn btn-sm" type="button" id="symbol-clear-selected">Limpiar</button>
+                </div>
+                <select id="symbol-selected-list" multiple size="8"></select>
+              </div>
+              <small class="hint">Usa el buscador y el selector para construir tu cesta manual. La lista se filtra por conector y mercado.</small>
+            </div>
             <label>Modo de selección de símbolos
               <select name="symbol_source_mode" id="symbol-source-mode">
                 <option value="manual">Manual</option>
                 <option value="dynamic">Dinámico desde la app seleccionada</option>
               </select>
+            </label>
+            <label>Cantidad de símbolos para selección dinámica
+              <input name="dynamic_symbol_limit" id="dynamic-symbol-limit" type="number" min="1" max="200" value="20">
             </label>
             <small class="hint" id="symbol-source-help">Manual: escribe los pares separados por coma. Dinámico: el bot usará el universo del conector o top símbolos disponibles.</small>
             <label>Timeframe<input name="timeframe" value="1h"></label>
@@ -242,6 +272,7 @@
             <input name="max_open_positions" type="number" min="1" max="20" value="1">
             <small class="hint">Solo contará posiciones realmente abiertas del conector seleccionado.</small>
           </label>
+          <div id="strategy-dynamic-guidance" class="strategy-guidance-card"></div>
           </div>
           <div class="wizard-step" data-wizard-content="3">
           <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
