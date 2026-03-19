@@ -678,7 +678,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "platform": connector.platform if connector else "-",
                 "mode": connector.mode if connector else "-",
                 "market_type": _normalize_market_type(
-                    getattr(session, "market_type", None) or resolved_market_type
+                    resolved_market_type or getattr(session, "market_type", None)
                 ),
                 "strategy_slug": session.strategy_slug,
                 "timeframe": session.timeframe,

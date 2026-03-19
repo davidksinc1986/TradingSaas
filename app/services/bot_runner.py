@@ -39,11 +39,18 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             processed += 1
             continue
 
-        session_market_type = normalize_market_type(getattr(session, "market_type", None) or getattr(connector, "market_type", None))
-        if connector and session_market_type and getattr(connector, "market_type", None) != session_market_type:
-            connector.market_type = session_market_type
-            connector.config_json = sync_connector_config_market_type(getattr(connector, "config_json", None), session_market_type)
-        if connector:
+        connector_market_type = ensure_connector_market_type_state(connector, persist=True, db=db) if connector else "spot"
+        session_market_type = normalize_market_type(getattr(session, "market_type", None))
+        resolved_market_type = connector_market_type or session_market_type or "spot"
+
+        if session_market_type != resolved_market_type:
+            session.market_type = resolved_market_type
+        if connector and getattr(connector, "market_type", None) != resolved_market_type:
+            connector.market_type = resolved_market_type
+            connector.config_json = sync_connector_config_market_type(
+                getattr(connector, "config_json", None),
+                resolved_market_type,
+            )
             ensure_connector_market_type_state(connector, persist=True, db=db)
 
         symbols = (session.symbols_json or {}).get("symbols", [])
