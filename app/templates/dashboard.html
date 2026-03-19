@@ -102,25 +102,6 @@
         <div id="decision-breakdown-panel" class="quantum-report-list"></div>
       </article>
 
-      <article class="card quantum-side-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">Risk radar</small>
-            <h2>Riesgo visible en 3 segundos</h2>
-          </div>
-          <div class="row-wrap">
-            <button class="btn btn-sm" type="button" id="refresh-risk-radar-btn">Refresh</button>
-            <span class="pill tiny" id="risk-radar-state">Estable</span>
-          </div>
-        </div>
-        <div class="quantum-metrics-grid">
-          <div class="quantum-metric"><small>Health</small><strong id="risk-health-score">100%</strong></div>
-          <div class="quantum-metric"><small>Open risk</small><strong id="risk-open-heat">0.00</strong></div>
-          <div class="quantum-metric"><small>Drawdown</small><strong id="risk-drawdown">0.00%</strong></div>
-          <div class="quantum-metric"><small>Kill switch</small><strong id="risk-kill-switch">OFF</strong></div>
-        </div>
-        <div id="risk-radar-panel" class="quantum-report-list"></div>
-      </article>
     </section>
   </section>
   <div class="card profile-strategy-layout">
@@ -173,31 +154,25 @@
     </section>
 
     <aside class="profile-side-stack">
-      <section class="card soft-card" id="profile-trade-amount-settings">
+      <section class="card soft-card" id="profile-risk-radar-card">
         <div class="row-between">
-          <h3>Monto por operación (Binance)</h3>
-          <small class="hint">Mínimo 10 USDT</small>
+          <div>
+            <small class="quantum-label">Risk radar</small>
+            <h3>Riesgo visible en 3 segundos</h3>
+          </div>
+          <div class="row-wrap">
+            <button class="btn btn-sm" type="button" id="refresh-risk-radar-btn">Refresh</button>
+            <span class="pill tiny" id="risk-radar-state">Estable</span>
+          </div>
         </div>
-        <p class="hint" style="margin-top:8px;">Configura aquí cómo calcular cada orden para evitar el error de saldo insuficiente.</p>
-        <form id="profile-trade-amount-form" class="form-grid" style="margin-top:10px;">
-          <label>Modo de monto
-            <select name="trade_amount_mode" id="trade-amount-mode">
-              <option value="fixed_usd">Monto fijo en USD/USDT</option>
-              <option value="balance_percent">Porcentaje de balance USDT</option>
-            </select>
-          </label>
-          <label>Monto fijo por orden (USD/USDT)
-            <input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10">
-          </label>
-          <label>Porcentaje del balance USDT (%)
-            <input name="trade_balance_percent" id="trade-balance-percent" type="number" min="1" max="100" step="0.1" value="10">
-          </label>
-          <button class="btn btn-sm term-help" type="button" data-term="trade_amount_examples">?
-            Ver ejemplos de cálculo
-          </button>
-          <button class="btn primary compact-save-btn" type="submit">Guardar monto</button>
-        </form>
-        <div id="profile-trade-amount-feedback" class="hint" style="margin-top:8px;"></div>
+        <p class="hint" style="margin-top:8px;">Resumen concentrado del riesgo real para evitar configuraciones duplicadas y validar rápido si el setup quedó sano.</p>
+        <div class="quantum-metrics-grid" style="margin-top:12px;">
+          <div class="quantum-metric"><small>Health</small><strong id="risk-health-score">100%</strong></div>
+          <div class="quantum-metric"><small>Open risk</small><strong id="risk-open-heat">0.00</strong></div>
+          <div class="quantum-metric"><small>Drawdown</small><strong id="risk-drawdown">0.00%</strong></div>
+          <div class="quantum-metric"><small>Kill switch</small><strong id="risk-kill-switch">OFF</strong></div>
+        </div>
+        <div id="risk-radar-panel" class="quantum-report-list" style="margin-top:12px;"></div>
       </section>
 
       <section class="card soft-card profile-active-strategies">
