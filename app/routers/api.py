@@ -30,7 +30,7 @@ from app.schemas import (
     StrategyTemplateCreate,
     TradingViewWebhook,
 )
-from app.security import encrypt_payload, hash_password
+from app.security import decrypt_payload, encrypt_payload, hash_password
 from app.services.alerts import (
     TelegramDeliveryError,
     format_failure_message,
@@ -66,6 +66,15 @@ TIMEFRAME_TO_MINUTES = {
     "8h": 480,
     "12h": 720,
     "1d": 1440,
+}
+
+PLATFORM_MARKET_TYPES = {
+    "mt5": {"forex", "cfd"},
+    "ctrader": {"forex", "cfd", "spot", "futures"},
+    "tradingview": {"signals"},
+    "binance": {"spot", "futures"},
+    "bybit": {"spot", "futures"},
+    "okx": {"spot", "futures"},
 }
 
 
@@ -115,6 +124,46 @@ def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
     return TIMEFRAME_TO_MINUTES.get(clean, max(int(fallback or 5), 1))
 
 
+def _normalize_market_type(value: str | None) -> str:
+    clean = str(value or "").strip().lower()
+    aliases = {
+        "future": "futures",
+        "futures": "futures",
+        "perpetual": "futures",
+        "swap": "futures",
+        "signal": "signals",
+        "signals": "signals",
+    }
+    return aliases.get(clean, clean or "spot")
+
+
+def _resolve_connector_market_type(*, platform: str, market_type: str | None = None, config: dict | None = None) -> str:
+    cfg = config or {}
+    resolved = _normalize_market_type(
+        market_type
+        or cfg.get("market_type")
+        or cfg.get("defaultType")
+        or cfg.get("default_type")
+    )
+    allowed = PLATFORM_MARKET_TYPES.get(platform, {"spot"})
+    if resolved in allowed:
+        return resolved
+    if resolved == "spot" and "spot" not in allowed:
+        return sorted(allowed)[0]
+    raise HTTPException(
+        status_code=400,
+        detail=f"El mercado {resolved} no es válido para {platform}. Permitidos: {', '.join(sorted(allowed))}",
+    )
+
+
+def _sync_connector_config_market_type(config: dict | None, market_type: str) -> dict:
+    current = dict(config or {})
+    current["market_type"] = market_type
+    if market_type in {"spot", "futures"}:
+        current["defaultType"] = "future" if market_type == "futures" else "spot"
+    return current
+
+
 def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int], strategy_slug: str) -> list[Connector]:
     requested_ids = [int(connector_id) for connector_id in connector_ids]
     if not requested_ids:
@@ -135,7 +184,11 @@ def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int],
     incompatible = [
         connector
         for connector in connectors
-        if str(getattr(connector, "market_type", "spot") or "spot").lower() not in allowed_market_types
+        if _resolve_connector_market_type(
+            platform=str(getattr(connector, "platform", "") or ""),
+            market_type=getattr(connector, "market_type", None),
+            config=getattr(connector, "config_json", None),
+        ) not in allowed_market_types
     ]
     if incompatible:
         detail = ", ".join(
@@ -226,7 +279,8 @@ def me(user=Depends(current_user), db=Depends(get_db)):
         "phone": user.phone,
         "is_admin": user.is_admin,
         "telegram_alerts_enabled": user.telegram_alerts_enabled,
-        "telegram_chat_id": ("****" if user.telegram_chat_id_encrypted else ""),
+        "telegram_bot_key": (decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip(),
+        "telegram_chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip(),
         "alert_language": normalize_alert_locale(user.alert_language),
         "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
         "telegram_ready": user_has_telegram_config(user),
@@ -365,12 +419,17 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
     serialization_errors = []
     for connector in connectors:
         try:
+            resolved_market_type = _resolve_connector_market_type(
+                platform=connector.platform,
+                market_type=getattr(connector, "market_type", None),
+                config=getattr(connector, "config_json", None),
+            )
             payload.append({
                 "id": connector.id,
                 "platform": connector.platform,
                 "label": connector.label,
                 "mode": connector.mode,
-                "market_type": getattr(connector, "market_type", "spot") or "spot",
+                "market_type": resolved_market_type,
                 "is_enabled": bool(connector.is_enabled),
                 "symbols": _safe_symbols(getattr(connector, "symbols_json", {})),
                 "config": _safe_json_object(getattr(connector, "config_json", {})),
@@ -385,7 +444,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
                 "platform": getattr(connector, "platform", "-"),
                 "label": getattr(connector, "label", "Conector inválido"),
                 "mode": getattr(connector, "mode", "paper"),
-                "market_type": getattr(connector, "market_type", "spot") or "spot",
+                "market_type": _normalize_market_type(getattr(connector, "market_type", "spot") or "spot"),
                 "is_enabled": bool(getattr(connector, "is_enabled", False)),
                 "symbols": [],
                 "config": {},
@@ -406,15 +465,20 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")
     ensure_user_grants(db, target_user)
+    market_type = _resolve_connector_market_type(
+        platform=payload.platform,
+        market_type=payload.market_type,
+        config=payload.config,
+    )
     validate_connector_request(db, target_user, payload.platform, payload.symbols)
     connector = Connector(
         user_id=target_user.id,
         platform=payload.platform,
         label=payload.label,
         mode=payload.mode,
-        market_type=payload.market_type,
+        market_type=market_type,
         symbols_json={"symbols": payload.symbols},
-        config_json=payload.config,
+        config_json=_sync_connector_config_market_type(payload.config, market_type),
         encrypted_secret_blob=encrypt_payload(payload.secrets),
     )
     db.add(connector)
@@ -423,7 +487,7 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
     _notify_user_info(
         target_user,
         title="Conector creado",
-        detail=f"Se creó el conector {connector.label} en modo {connector.mode} para {len(payload.symbols)} símbolos.",
+        detail=f"Se creó el conector {connector.label} en modo {connector.mode}, mercado {connector.market_type} y {len(payload.symbols)} símbolos base.",
         connector_label=connector.label,
         platform=connector.platform,
     )
@@ -448,14 +512,17 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
         connector.label = payload.label
     if payload.mode is not None:
         connector.mode = payload.mode
-    if payload.market_type is not None:
-        connector.market_type = payload.market_type
+    next_config = dict(connector.config_json or {})
+    if payload.config is not None:
+        next_config.update(payload.config)
+    connector.market_type = _resolve_connector_market_type(
+        platform=connector.platform,
+        market_type=payload.market_type or getattr(connector, "market_type", None),
+        config=next_config,
+    )
     if payload.symbols is not None:
         connector.symbols_json = {"symbols": payload.symbols}
-    if payload.config is not None:
-        current = connector.config_json or {}
-        current.update(payload.config)
-        connector.config_json = current
+    connector.config_json = _sync_connector_config_market_type(next_config, connector.market_type)
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -955,7 +1022,11 @@ def connector_symbols_catalog(connector_id: int, db=Depends(get_db), user=Depend
             client = get_client(connector)
             exchange = client.build_exchange()
             markets = exchange.load_markets()
-            market_type = str(getattr(connector, "market_type", "spot") or "spot").lower()
+            market_type = _resolve_connector_market_type(
+                platform=connector.platform,
+                market_type=getattr(connector, "market_type", None),
+                config=getattr(connector, "config_json", None),
+            )
             symbols = sorted(
                 symbol
                 for symbol, market in (markets or {}).items()
@@ -976,7 +1047,11 @@ def connector_symbols_catalog(connector_id: int, db=Depends(get_db), user=Depend
     return {
         "connector_id": connector.id,
         "platform": connector.platform,
-        "market_type": connector.market_type,
+        "market_type": _resolve_connector_market_type(
+            platform=connector.platform,
+            market_type=getattr(connector, "market_type", None),
+            config=getattr(connector, "config_json", None),
+        ),
         "symbols": payload,
         "count": len(payload),
         "source": source,
