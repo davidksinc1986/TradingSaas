@@ -126,14 +126,8 @@
       </div>
       <div class="profile-form-group">
         <h3>Alertas y notificaciones</h3>
-        <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
-        <label>Bot Key de Telegram
-          <input name="telegram_bot_key" id="profile-telegram-bot-key" placeholder="123456:ABC..." autocomplete="off">
-        </label>
-        <label>Telegram ID / Chat ID
-          <input name="telegram_chat_id" id="profile-telegram-chat-id" placeholder="6902163541" autocomplete="off">
-        </label>
-        <label>Idioma de alertas
+        <p class="hint">Las alertas de Telegram ahora se centralizan solo en el canal administrativo para monitoreo operativo. Desde aquí ya no se configuran bots, tokens ni chats por usuario.</p>
+        <label>Idioma base de mensajes internos
           <select name="alert_language" id="profile-alert-language">
             <option value="es">Español</option>
             <option value="en">English</option>
@@ -141,16 +135,11 @@
             <option value="fr">Français</option>
           </select>
         </label>
-        <div class="row-wrap">
-          <button class="btn btn-sm" type="button" id="test-telegram-btn">Probar Telegram</button>
-          <small class="hint">Envía un mensaje de prueba para validar bot key + chat id.</small>
-        </div>
       </div>
-      <small class="hint">El email solo puede editarlo el super user. Si dejas bot key/chat id vacíos, se conservarán los valores actuales.</small>
+      <small class="hint">El email solo puede editarlo el super user. Las alertas operativas ya se envían al Telegram central del admin.</small>
       <button class="btn primary" type="submit">Guardar perfil</button>
       </form>
       <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
-      <div id="telegram-test-feedback" class="hint" style="margin-top:8px;"></div>
     </section>
 
     <aside class="profile-side-stack">
@@ -209,6 +198,17 @@
             <button class="btn btn-sm" type="button" data-wizard-step="3">3. Salida</button>
           </div>
           <div class="wizard-step active" data-wizard-content="1">
+            <label>Tipo de plataforma / mercado
+              <select name="market_type" id="run-market-type-filter">
+                <option value="">Detectar desde el conector seleccionado</option>
+                <option value="spot">Spot</option>
+                <option value="futures">Futures</option>
+                <option value="cfd">CFD</option>
+                <option value="forex">Forex</option>
+                <option value="signals">Signals</option>
+              </select>
+            </label>
+            <small class="hint">Este campo volvió al tab Base para dejar explícito si la estrategia/bot correrá en spot, futures u otro mercado. También filtra conectores compatibles.</small>
             <label>Conectores disponibles para ejecutar
               <select id="run-connector-select" multiple size="5"></select>
             </label>

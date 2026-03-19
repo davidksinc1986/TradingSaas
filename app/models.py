@@ -140,6 +140,7 @@ class BotSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     connector_id: Mapped[int] = mapped_column(ForeignKey("connectors.id"), index=True)
+    market_type: Mapped[str] = mapped_column(String(20), default="spot")
     strategy_slug: Mapped[str] = mapped_column(String(100))
     timeframe: Mapped[str] = mapped_column(String(20), default="5m")
     symbols_json: Mapped[dict] = mapped_column(JSON, default=dict)

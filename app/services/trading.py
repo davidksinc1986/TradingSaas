@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.security import decrypt_payload
+from app.services.connector_state import ensure_connector_market_type_state
 
 try:
     import ccxt
@@ -888,7 +889,11 @@ def run_strategy(
     import json
 
     from app.models import Connector, OpenPosition, TradeLog, TradeRun, User
-    from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
+    from app.services.alerts import (
+        format_user_execution_message,
+        format_user_failure_message,
+        send_admin_user_alert_sync,
+    )
     from app.services.connectors import BaseConnectorClient, get_client as get_connector_client
     from app.services.market import fetch_ohlcv_frame
     from app.services.position_lifecycle import initialize_position_lifecycle, run_position_lifecycle, validate_exit_policy
@@ -909,6 +914,7 @@ def run_strategy(
         if not connector or not connector.is_enabled:
             results.append({"connector_id": connector_id, "status": "skipped", "reason": "connector_disabled_or_missing"})
             continue
+        ensure_connector_market_type_state(connector, persist=True, db=db)
 
         client = get_connector_client(connector)
         lifecycle_meta = run_position_lifecycle(db, connector_ids=[connector.id])
@@ -962,7 +968,7 @@ def run_strategy(
                 raise RuntimeError(f"strategy {strategy_slug} not found")
 
             rule = get_strategy_rule(strategy_slug)
-            connector_market_type = (getattr(connector, "market_type", "spot") or "spot").lower()
+            connector_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
             if connector_market_type not in rule.get("market_types", ["spot", "futures"]):
                 decision_reasons.append("strategy_market_mismatch")
 
@@ -1182,14 +1188,18 @@ def run_strategy(
                 )
                 db.add(run)
                 db.commit()
-                send_user_telegram_alert(user, format_user_failure_message(
-                    locale=user.alert_language,
+                send_admin_user_alert_sync(
+                    user,
+                    format_user_failure_message(
+                        locale=user.alert_language,
+                        scope="pretrade",
+                        detail=pretrade.get("reason_message") or pretrade.get("reason_code") or "pretrade_rejected",
+                        connector_label=connector.label,
+                        platform=connector.platform,
+                        symbol=normalized_symbol,
+                    ),
                     scope="pretrade",
-                    detail=pretrade.get("reason_message") or pretrade.get("reason_code") or "pretrade_rejected",
-                    connector_label=connector.label,
-                    platform=connector.platform,
-                    symbol=normalized_symbol,
-                ))
+                )
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1232,14 +1242,18 @@ def run_strategy(
                 )
                 db.add(run)
                 db.commit()
-                send_user_telegram_alert(user, format_user_failure_message(
-                    locale=user.alert_language,
-                    scope="execution",
-                    detail=str(exc),
-                    connector_label=connector.label,
-                    platform=connector.platform,
-                    symbol=normalized_symbol,
-                ))
+                send_admin_user_alert_sync(
+                    user,
+                    format_user_failure_message(
+                        locale=user.alert_language,
+                        scope="execution",
+                        detail=str(exc),
+                        connector_label=connector.label,
+                        platform=connector.platform,
+                        symbol=normalized_symbol,
+                    ),
+                    scope="execution-error",
+                )
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "rejected_exchange", "error": str(exc)})
                 continue
 
@@ -1355,20 +1369,24 @@ def run_strategy(
             ))
             db.commit()
 
-            send_user_telegram_alert(user, format_user_execution_message(
-                locale=user.alert_language,
-                connector_label=connector.label,
-                platform=connector.platform,
-                symbol=normalized_symbol,
-                side=signal,
-                quantity=result.quantity,
-                fill_price=result.fill_price,
-                status=result.status,
-                strategy_slug=strategy_slug,
-                message=result.message,
-                pnl=pnl,
-                close_reason=close_reason,
-            ))
+            send_admin_user_alert_sync(
+                user,
+                format_user_execution_message(
+                    locale=user.alert_language,
+                    connector_label=connector.label,
+                    platform=connector.platform,
+                    symbol=normalized_symbol,
+                    side=signal,
+                    quantity=result.quantity,
+                    fill_price=result.fill_price,
+                    status=result.status,
+                    strategy_slug=strategy_slug,
+                    message=result.message,
+                    pnl=pnl,
+                    close_reason=close_reason,
+                ),
+                scope="execution-ok",
+            )
             results.append({
                 "connector_id": connector.id,
                 "symbol": normalized_symbol,

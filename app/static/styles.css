@@ -559,7 +559,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .strategy-guidance-card h4{margin:0;color:#fff7d1}
 .strategy-guidance-card ul{margin:0;padding-left:18px;color:#d1d5db}
 .strategy-guidance-card li{margin-bottom:6px}
-.strategy-guidance-sidebar{position:sticky;top:96px}
+.strategy-guidance-sidebar{position:static;top:auto}
 .strategy-guidance-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .strategy-guidance-kpi{padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(10,10,12,.5)}
 .strategy-guidance-kpi small{display:block;color:#a7adb8;margin-bottom:4px}

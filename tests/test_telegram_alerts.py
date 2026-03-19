@@ -195,3 +195,21 @@ def test_user_has_telegram_config_requires_enablement_and_credentials():
     assert alerts.user_has_telegram_config(_user(telegram_alerts_enabled=False)) is False
     assert alerts.user_has_telegram_config(_user(telegram_bot_token_encrypted={})) is False
     assert alerts.user_has_telegram_config(_user(telegram_chat_id_encrypted={})) is False
+
+
+def test_send_admin_user_alert_sync_wraps_user_context(monkeypatch):
+    alerts = _load_alerts_module()
+    captured = {}
+
+    def _fake_send(message):
+        captured["message"] = message
+        return True
+
+    monkeypatch.setattr(alerts, "send_telegram_alert_sync", _fake_send)
+
+    ok = alerts.send_admin_user_alert_sync(_user(name="Admin Routed User"), "Evento importante", scope="execution-ok")
+
+    assert ok is True
+    assert "Admin Routed User" in captured["message"]
+    assert "execution-ok" in captured["message"]
+    assert "Evento importante" in captured["message"]

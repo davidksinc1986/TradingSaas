@@ -61,6 +61,7 @@ class StrategyRiskMixin(BaseModel):
 
 class StrategyRequest(StrategyRiskMixin):
     connector_ids: list[int]
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
     dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
@@ -85,6 +86,7 @@ class StrategyRequest(StrategyRiskMixin):
 
 class BotSessionCreate(StrategyRiskMixin):
     connector_id: int
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
     dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
@@ -110,6 +112,7 @@ class BotSessionCreate(StrategyRiskMixin):
 
 class BotSessionUpdate(StrategyRiskMixin):
     is_active: bool | None = None
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None
     symbol_source_mode: Literal["manual", "dynamic"] | None = None
