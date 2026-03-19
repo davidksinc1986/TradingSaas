@@ -854,6 +854,7 @@ def run_strategy(
     from app.services.position_lifecycle import initialize_position_lifecycle, run_position_lifecycle, validate_exit_policy
     from app.services.ml import train_and_score
     from app.services.risk import position_size
+    from app.services.risk_engine import RiskGuardrails, build_trade_risk_plan
     from app.services.scanner import select_symbols_for_run
     from app.services.strategies import STRATEGY_MAP, get_strategy_rule
 
@@ -900,10 +901,17 @@ def run_strategy(
                 "atr_volatility_filter_enabled": atr_volatility_filter_enabled,
             }
 
+            market_health = market_result.meta.get("health") or {}
+            market_anomalies = market_result.meta.get("anomalies") or {}
             if frame.empty:
                 decision_reasons.append("missing_market_data")
-            elif (market_result.meta.get("health") or {}).get("has_unconfirmed_candle"):
+            elif market_health.get("has_unconfirmed_candle"):
                 decision_reasons.append("last_candle_not_confirmed")
+            notes["market_quality"] = {
+                "source": market_result.meta.get("source"),
+                "health": market_health,
+                "anomalies": market_anomalies,
+            }
 
             strategy_fn = STRATEGY_MAP.get(strategy_slug)
             if strategy_fn is None:
@@ -954,10 +962,22 @@ def run_strategy(
             position_context = client.fetch_position_context(normalized_symbol)
             notes["position_context"] = position_context
 
-            open_count = db.query(OpenPosition).filter(
+            open_positions = db.query(OpenPosition).filter(
                 OpenPosition.connector_id == connector.id,
                 OpenPosition.is_open.is_(True),
-            ).count()
+            ).all()
+            open_count = len(open_positions)
+            current_open_notional = sum(_safe_float(item.entry_price) * _safe_float(item.current_qty) for item in open_positions)
+            current_open_risk = 0.0
+            current_symbol_notional = 0.0
+            for item in open_positions:
+                item_notional = _safe_float(item.entry_price) * _safe_float(item.current_qty)
+                if item.symbol == normalized_symbol:
+                    current_symbol_notional += item_notional
+                stop_price = _safe_float((item.meta_json or {}).get("stop_loss_price"), 0.0)
+                if stop_price > 0:
+                    current_open_risk += abs(_safe_float(item.entry_price) - stop_price) * _safe_float(item.current_qty)
+
             if open_count >= max_open_positions and not position_context.get("has_position"):
                 decision_reasons.append("max_open_positions")
 
@@ -1018,11 +1038,35 @@ def run_strategy(
             budget_cap_qty = _trade_amount_cap(user, _safe_float(balance.get("available_balance"), 0.0), price)
             quantity = min(risk_qty, budget_cap_qty) if budget_cap_qty > 0 else risk_qty
 
+            guardrails = RiskGuardrails.from_config(
+                ((connector.config_json or {}).get("risk_engine") if isinstance(connector.config_json, dict) else {}) or {},
+                max_open_positions=max_open_positions,
+            )
+            risk_plan = build_trade_risk_plan(
+                available_balance=_safe_float(balance.get("available_balance"), 0.0),
+                price=price,
+                stop_loss_price=stop_loss_price,
+                requested_qty=quantity,
+                risk_per_trade=risk_per_trade,
+                current_open_notional=current_open_notional,
+                current_open_risk=current_open_risk,
+                current_symbol_notional=current_symbol_notional,
+                current_open_positions=open_count,
+                guardrails=guardrails,
+                market_meta=market_result.meta,
+            )
+            notes["risk_plan"] = risk_plan.to_dict()
+
             if connector_market_type != "futures" and signal == "sell":
                 quantity = max(
                     _safe_float(position_context.get("spot_base_free"), 0.0),
                     _safe_float(position_context.get("spot_base_total"), 0.0),
                 )
+            else:
+                quantity = risk_plan.approved_qty
+
+            if not risk_plan.approved and signal != "sell":
+                decision_reasons.extend(risk_plan.block_reasons or ["risk_engine_blocked"])
 
             reduce_only = bool(
                 connector_market_type == "futures"
@@ -1040,6 +1084,7 @@ def run_strategy(
                 "estimated_notional": quantity * price,
                 "estimated_max_loss": quantity * abs(price - stop_loss_price),
                 "reduce_only": reduce_only,
+                "risk_plan": risk_plan.to_dict(),
             }
 
             risk_context = {
@@ -1241,6 +1286,7 @@ def run_strategy(
                     "pretrade": pretrade,
                     "balance": balance,
                     "execution_raw": result.raw,
+                    "risk_plan": risk_plan.to_dict(),
                 },
             ))
             db.commit()
@@ -1274,6 +1320,7 @@ def run_strategy(
 
 def dashboard_data(db, user_id: int) -> dict[str, Any]:
     from app.models import Connector, TradeLog
+    from app.services.risk_engine import summarize_portfolio_risk
 
     connectors = db.query(Connector).filter(Connector.user_id == user_id).all()
     trades = db.query(TradeLog).filter(TradeLog.user_id == user_id).order_by(TradeLog.created_at.desc()).all()
@@ -1292,6 +1339,7 @@ def dashboard_data(db, user_id: int) -> dict[str, Any]:
         bucket["pnl"] += _safe_float(trade.pnl)
         statuses[trade.status or "unknown"] = statuses.get(trade.status or "unknown", 0) + 1
 
+    risk_summary = summarize_portfolio_risk(db, user_id)
     return {
         "total_connectors": len(connectors),
         "enabled_connectors": sum(1 for item in connectors if item.is_enabled),
@@ -1305,6 +1353,8 @@ def dashboard_data(db, user_id: int) -> dict[str, Any]:
         "statuses": statuses,
         "latest_trades": latest_trades,
         "limits": [],
+        "risk_summary": risk_summary,
+        "insights": risk_summary.get("suggestions", []),
     }
 
 
