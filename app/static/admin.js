@@ -161,7 +161,7 @@ function profileHeader(user) {
 function permissionsPanel(profile) {
   const grants = profile.grants || [];
   const map = grants.reduce((acc, g) => ({ ...acc, [g.platform]: g }), {});
-  return `<div class="admin-compact-grid">${GLOBAL_POLICIES.map((p) => {
+  return `<div class="stack"><div class="admin-compact-grid">${GLOBAL_POLICIES.map((p) => {
     const g = map[p.platform] || { is_enabled: false, max_symbols: 5, max_daily_movements: 20, notes: "" };
     return `<form class="admin-box grant-inline-form" data-platform="${p.platform}">
       <div class="row-between"><strong>${p.display_name}</strong>${boolPill(p.is_enabled_global, "Global ON", "Global OFF")}</div>
@@ -169,9 +169,8 @@ function permissionsPanel(profile) {
       <label>Máx símbolos<input name="max_symbols" type="number" min="0" value="${g.max_symbols}"></label>
       <label>Máx movimientos<input name="max_daily_movements" type="number" min="0" value="${g.max_daily_movements}"></label>
       <label>Notas<input name="notes" value="${g.notes || ""}"></label>
-      <button class="btn btn-sm primary" type="submit">Guardar</button>
     </form>`;
-  }).join("")}</div>`;
+  }).join("")}</div><div class="row-wrap"><button class="btn btn-sm primary" type="button" id="save-all-grants-btn">Guardar permisos</button><small class="hint">Aplica todos los cambios del tab permisos en una sola acción.</small></div></div>`;
 }
 
 function connectorsPanel(connectors) {
@@ -218,25 +217,29 @@ function renderSelectedProfile(profile) {
   bindTabs("profile-tabs");
   document.getElementById("open-strategy-modal")?.addEventListener("click", openStrategyModal);
 
-  wrap.querySelectorAll(".grant-inline-form").forEach((form) => form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(form);
+  document.getElementById("save-all-grants-btn")?.addEventListener("click", async () => {
+    const forms = Array.from(wrap.querySelectorAll(".grant-inline-form"));
     try {
-      await api("/api/admin/grants", {
-        method: "PUT",
-        body: JSON.stringify({
-          user_id: SELECTED_USER_ID,
-          platform: form.dataset.platform,
-          is_enabled: fd.get("is_enabled") === "true",
-          max_symbols: Number(fd.get("max_symbols") || 0),
-          max_daily_movements: Number(fd.get("max_daily_movements") || 0),
-          notes: String(fd.get("notes") || ""),
-        }),
-      });
-      showFeedback("Permiso actualizado.");
+      for (const form of forms) {
+        const fd = new FormData(form);
+        await api("/api/admin/grants", {
+          method: "PUT",
+          body: JSON.stringify({
+            user_id: SELECTED_USER_ID,
+            platform: form.dataset.platform,
+            is_enabled: fd.get("is_enabled") === "true",
+            max_symbols: Number(fd.get("max_symbols") || 0),
+            max_daily_movements: Number(fd.get("max_daily_movements") || 0),
+            notes: String(fd.get("notes") || ""),
+          }),
+        });
+      }
+      showFeedback("Permisos actualizados correctamente.");
       await refreshSelectedUserProfile();
-    } catch (err) { showFeedback(parseApiError(err), "error"); }
-  }));
+    } catch (err) {
+      showFeedback(parseApiError(err), "error");
+    }
+  });
 
   wrap.querySelectorAll(".connector-inline-form").forEach((form) => form.addEventListener("submit", async (e) => {
     e.preventDefault();

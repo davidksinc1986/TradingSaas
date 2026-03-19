@@ -18,7 +18,6 @@
       {% if user and user.is_admin %}<a href="/admin">{{ tr('nav.admin') }}</a>{% endif %}
       {% if user %}<a href="/auth/logout" id="nav-logout">{{ tr('nav.logout') }}</a>{% else %}<a href="/auth/login" id="nav-login">{{ tr('nav.login') }}</a>{% endif %}
       <div class="lang-switcher" aria-label="{{ tr('lang.label') }}">
-        <a href="/set-language/auto">{{ tr('nav.lang_auto') }}</a>
         {% for lang_code in supported_locales %}
         <a href="/set-language/{{ lang_code }}">{{ lang_code.upper() }}</a>
         {% endfor %}
