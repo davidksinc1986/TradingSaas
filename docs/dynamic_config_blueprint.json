@@ -1,0 +1,216 @@
+{
+  "modules": [
+    {
+      "key": "bot_creation",
+      "label": "Creación de bots",
+      "sections": [
+        {
+          "key": "market_selection",
+          "label": "Mercado",
+          "fields": [
+            {
+              "key": "exchange_id",
+              "label": "Exchange",
+              "input_type": "single_select",
+              "required": true,
+              "scope": [
+                "user",
+                "admin"
+              ],
+              "default_value": null,
+              "validation_rules": {
+                "allowed_sources": "exchange_capabilities.enabled = true"
+              }
+            },
+            {
+              "key": "symbol_selection_mode",
+              "label": "Selección de símbolos",
+              "input_type": "radio_group",
+              "required": true,
+              "default_value": "auto",
+              "help": {
+                "description": "Elige si quieres que el sistema seleccione los símbolos o hacerlo manualmente.",
+                "example": "Automático: el sistema escoge BTCUSDT y ETHUSDT según liquidez. Manual: tú seleccionas SOLUSDT y AVAXUSDT.",
+                "recommendation": "Usa automático si priorizas velocidad y cobertura."
+              },
+              "options": [
+                {
+                  "label": "Usar símbolos automáticos",
+                  "value": "auto"
+                },
+                {
+                  "label": "Seleccionar manualmente",
+                  "value": "manual"
+                }
+              ],
+              "dependency_rules": [
+                {
+                  "when": {
+                    "field": "symbol_selection_mode",
+                    "equals": "manual"
+                  },
+                  "show": [
+                    "manual_symbols"
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "manual_symbols",
+              "label": "Símbolos manuales",
+              "input_type": "symbol_selector",
+              "required": false,
+              "default_value": [],
+              "visibility_rules": {
+                "requires_field": "symbol_selection_mode",
+                "equals": "manual"
+              },
+              "validation_rules": {
+                "max_items_from_plan": true,
+                "must_exist_in_exchange_catalog": true
+              }
+            }
+          ]
+        },
+        {
+          "key": "risk",
+          "label": "Riesgo",
+          "fields": [
+            {
+              "key": "risk_per_trade",
+              "label": "Riesgo por trade (%)",
+              "input_type": "percent",
+              "required": true,
+              "default_value": 1,
+              "help": {
+                "description": "Porcentaje del capital que estás dispuesto a arriesgar por operación.",
+                "example": "Si tienes 1,000 USD y eliges 1%, el riesgo máximo por trade será 10 USD.",
+                "recommendation": "Recomendado entre 0.5% y 2%."
+              },
+              "validation_rules": {
+                "min": 0.1,
+                "max": 5,
+                "respect_global_risk_policy": true
+              }
+            },
+            {
+              "key": "stop_loss_percent",
+              "label": "Stop Loss (%)",
+              "input_type": "percent",
+              "required": true,
+              "default_value": 2,
+              "help": {
+                "description": "Pérdida máxima permitida antes de cerrar la posición.",
+                "example": "Entrada en 100 USD con stop de 2%: salida aproximada en 98 USD.",
+                "recommendation": "Recomendado entre 1% y 3%."
+              },
+              "validation_rules": {
+                "min": 0.2,
+                "max": 8,
+                "less_than_field": "take_profit_percent"
+              }
+            },
+            {
+              "key": "take_profit_percent",
+              "label": "Take Profit (%)",
+              "input_type": "percent",
+              "required": true,
+              "default_value": 4,
+              "help": {
+                "description": "Objetivo de ganancia que cerrará la posición automáticamente.",
+                "example": "Entrada en 100 USD con take profit de 4%: salida aproximada en 104 USD.",
+                "recommendation": "Busca una relación beneficio/riesgo mayor a 1.5."
+              },
+              "validation_rules": {
+                "min": 0.3,
+                "max": 20
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "localization",
+      "label": "Localización",
+      "sections": [
+        {
+          "key": "app_language",
+          "label": "Idioma de la aplicación",
+          "fields": [
+            {
+              "key": "language_mode",
+              "label": "Modo de idioma",
+              "input_type": "radio_group",
+              "required": true,
+              "default_value": "auto",
+              "help": {
+                "description": "Permite usar el idioma del dispositivo o fijar uno manualmente.",
+                "example": "Si tu iPhone está en francés, la app abrirá en francés cuando uses Automático.",
+                "recommendation": "Mantén Automático salvo que necesites forzar un idioma específico."
+              },
+              "options": [
+                {
+                  "label": "Automático (idioma del dispositivo)",
+                  "value": "auto"
+                },
+                {
+                  "label": "Seleccionar manualmente",
+                  "value": "manual"
+                }
+              ],
+              "dependency_rules": [
+                {
+                  "when": {
+                    "field": "language_mode",
+                    "equals": "manual"
+                  },
+                  "show": [
+                    "language_locale"
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "language_locale",
+              "label": "Idioma manual",
+              "input_type": "single_select",
+              "required": false,
+              "default_value": "es",
+              "visibility_rules": {
+                "requires_field": "language_mode",
+                "equals": "manual"
+              },
+              "options": [
+                {
+                  "label": "Español",
+                  "value": "es"
+                },
+                {
+                  "label": "English",
+                  "value": "en"
+                },
+                {
+                  "label": "Français",
+                  "value": "fr"
+                },
+                {
+                  "label": "Português",
+                  "value": "pt"
+                }
+              ],
+              "validation_rules": {
+                "allowed_values": [
+                  "es",
+                  "en",
+                  "fr",
+                  "pt"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,11 @@
 
 Esta es la reconstrucción descargable de la v4 en ZIP.
 
+## Documento de rediseño
+
+- Propuesta integral de producto, UX, arquitectura funcional y estrategia multilenguaje: `docs/REDISENO_PRODUCTO_UX_ARQUITECTURA.md`
+- Blueprint inicial del motor de configuraciones dinámicas: `docs/dynamic_config_blueprint.json`
+
 ## Qué incluye
 
 - multiusuario con login (usuarios creados por super user)

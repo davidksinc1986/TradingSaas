@@ -13,10 +13,16 @@
       <img class="brand-logo" src="/static/snake_mafia_trading_transparent_v2.svg" alt="{{ tr('app.name') }}" loading="eager" />
     </a>
     <nav class="nav">
-      <a href="/">Inicio</a>
-      {% if user %}<a href="/dashboard">Dashboard</a>{% endif %}
-      {% if user and user.is_admin %}<a href="/admin">Admin</a>{% endif %}
-      {% if user %}<a href="/auth/logout" id="nav-logout">Salir</a>{% else %}<a href="/auth/login" id="nav-login">Login</a>{% endif %}
+      <a href="/">{{ tr('nav.home') }}</a>
+      {% if user %}<a href="/dashboard">{{ tr('nav.dashboard') }}</a>{% endif %}
+      {% if user and user.is_admin %}<a href="/admin">{{ tr('nav.admin') }}</a>{% endif %}
+      {% if user %}<a href="/auth/logout" id="nav-logout">{{ tr('nav.logout') }}</a>{% else %}<a href="/auth/login" id="nav-login">{{ tr('nav.login') }}</a>{% endif %}
+      <div class="lang-switcher" aria-label="{{ tr('lang.label') }}">
+        <a href="/set-language/auto">{{ tr('nav.lang_auto') }}</a>
+        {% for lang_code in supported_locales %}
+        <a href="/set-language/{{ lang_code }}">{{ lang_code.upper() }}</a>
+        {% endfor %}
+      </div>
     </nav>
   </header>
   <main class="page">
@@ -25,17 +31,17 @@
   <div id="guide-modal" class="modal hidden">
     <div class="modal-card card">
       <div class="modal-head">
-        <h3 id="guide-title">Guía</h3>
-        <button class="btn" onclick="window.closeGuideModal?.()">Cerrar</button>
+        <h3 id="guide-title">{{ tr('modal.guide') }}</h3>
+        <button class="btn" onclick="window.closeGuideModal?.()">{{ tr('modal.close') }}</button>
       </div>
       <p id="guide-summary" class="hint"></p>
       <div class="grid-2 modal-grid">
         <div>
-          <h4>Datos requeridos</h4>
+          <h4>{{ tr('modal.required_data') }}</h4>
           <ul id="guide-fields" class="modal-list"></ul>
         </div>
         <div>
-          <h4>Paso a paso</h4>
+          <h4>{{ tr('modal.step_by_step') }}</h4>
           <ol id="guide-steps" class="modal-list"></ol>
         </div>
       </div>

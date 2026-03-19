@@ -4,7 +4,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core import settings
 from app.db import get_db
-from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
+from app.i18n import AUTO_LOCALE, DEFAULT_LOCALE, SUPPORTED_LOCALES, detect_locale, translate
 from app.models import PlanConfig, PricingConfig
 from app.routers.deps import admin_user, current_user, optional_user
 from app.services.policies import ensure_user_grants
@@ -60,7 +60,7 @@ def admin_page(request: Request, user=Depends(admin_user), db=Depends(get_db)):
 
 @router.get("/set-language/{lang}")
 def set_language(lang: str, request: Request):
-    language = lang if lang in SUPPORTED_LOCALES else "es"
+    language = AUTO_LOCALE if lang == AUTO_LOCALE else (lang if lang in SUPPORTED_LOCALES else DEFAULT_LOCALE)
     response = RedirectResponse(url=request.headers.get("referer") or "/", status_code=303)
     response.set_cookie("lang", language, max_age=60 * 60 * 24 * 365, samesite="lax")
     return response
