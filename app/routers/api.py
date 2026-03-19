@@ -32,10 +32,11 @@ from app.schemas import (
 from app.security import encrypt_payload, hash_password
 from app.services.alerts import format_failure_message, format_user_failure_message, normalize_alert_locale, send_telegram_alert_sync, send_user_telegram_alert
 from app.services.connectors import get_client
+from app.services.market import price_check
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
 from app.services.bot_runner import execute_due_bot_sessions
-from app.services.trading import activity_metrics, dashboard_data, run_strategy
+from app.services.trading import activity_metrics, dashboard_data, run_strategy, sync_positions_with_exchange
 from app.services.strategies import ALL_STRATEGIES
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -929,6 +930,25 @@ def exchange_symbol_rules(connector_id: int, symbols: str | None = None, db=Depe
         "platform": connector.platform,
         "rows": rows,
     }
+
+
+@router.get("/debug/price-check")
+def debug_price_check(connector_id: int, symbol: str, timeframe: str = "1h", db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+    return price_check(connector=connector, symbol=symbol, timeframe=timeframe)
+
+
+@router.post("/connectors/{connector_id}/reconcile")
+def reconcile_connector(connector_id: int, payload: dict | None = None, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    raw_symbols = (payload or {}).get("symbols") or (connector.symbols_json or {}).get("symbols") or []
+    symbols = [str(item).strip() for item in raw_symbols if str(item).strip()]
+    return sync_positions_with_exchange(db, connector, symbols)
 
 
 @router.get("/market/top-strength")
