@@ -47,7 +47,7 @@ from app.services.policies import ensure_user_grants, get_user_grant, validate_c
 from app.services.pricing import estimate_monthly_cost
 from app.services.position_lifecycle import trigger_kill_switch
 from app.services.trading import activity_metrics, dashboard_data, run_strategy, sync_positions_with_exchange
-from app.services.strategies import ALL_STRATEGIES
+from app.services.strategies import ALL_STRATEGIES, get_strategy_rule
 
 router = APIRouter(prefix="/api", tags=["api"])
 logger = logging.getLogger(__name__)
@@ -112,6 +112,44 @@ def _notify_user_info(user: User, *, title: str, detail: str,
 def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
     clean = _normalize_timeframe(timeframe)
     return TIMEFRAME_TO_MINUTES.get(clean, max(int(fallback or 5), 1))
+
+
+def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int], strategy_slug: str) -> list[Connector]:
+    requested_ids = [int(connector_id) for connector_id in connector_ids]
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="Selecciona al menos un conector habilitado")
+
+    connectors = db.query(Connector).filter(
+        Connector.user_id == user_id,
+        Connector.id.in_(requested_ids),
+        Connector.is_enabled.is_(True),
+    ).all()
+    connectors_by_id = {connector.id: connector for connector in connectors}
+    missing_ids = [connector_id for connector_id in requested_ids if connector_id not in connectors_by_id]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail=f"Enabled connector not found: {', '.join(str(item) for item in missing_ids)}")
+
+    rule = get_strategy_rule(strategy_slug)
+    allowed_market_types = {str(item).lower() for item in rule.get("market_types", ["spot", "futures"])}
+    incompatible = [
+        connector
+        for connector in connectors
+        if str(getattr(connector, "market_type", "spot") or "spot").lower() not in allowed_market_types
+    ]
+    if incompatible:
+        detail = ", ".join(
+            f"{connector.label} ({connector.platform}/{connector.market_type})"
+            for connector in incompatible
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"La estrategia {strategy_slug} solo es válida para {', '.join(sorted(allowed_market_types))}. "
+                f"Conectores incompatibles: {detail}"
+            ),
+        )
+
+    return [connectors_by_id[connector_id] for connector_id in requested_ids]
 
 
 def _safe_float(value, fallback: float = 0.0) -> float:
@@ -504,6 +542,8 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     if control.managed_by_admin and payload.strategy_slug not in allowed:
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
 
+    _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
+
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
 
@@ -680,6 +720,8 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     if not connector:
         raise HTTPException(status_code=404, detail="Enabled connector not found")
 
+    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
+
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
 
@@ -741,6 +783,7 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
     if payload.strategy_slug is not None:
         if control.managed_by_admin and payload.strategy_slug not in allowed:
             raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+        _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
         session.strategy_slug = payload.strategy_slug
     if payload.timeframe is not None:
         normalized_timeframe = _normalize_timeframe(payload.timeframe)

@@ -194,6 +194,7 @@ FUTURES_TOP_STRATEGIES = [
     "kalman_trend_filter",
     "atr_channel_breakout",
     "volatility_breakout",
+    "ema_rsi_adx_stack",
     "volatility_compression_breakout",
 ]
 
@@ -206,7 +207,7 @@ STRATEGY_RULES = {
     "stochastic_rebound": {"market_types": ["spot"], "allow_short": False},
     "volatility_parity_rebalance": {"market_types": ["spot"], "allow_short": False},
     "pairs_spread_proxy": {"market_types": ["spot"], "allow_short": False},
-    "ema_rsi_adx_stack": {"market_types": ["spot"], "allow_short": False},
+    "ema_rsi_adx_stack": {"market_types": ["spot", "futures"], "allow_short": True},
     "volatility_compression_breakout": {"market_types": ["spot", "futures"], "allow_short": True},
     "momentum_breakout": {"market_types": ["futures"], "allow_short": True},
     "macd_trend_pullback": {"market_types": ["futures"], "allow_short": True},
