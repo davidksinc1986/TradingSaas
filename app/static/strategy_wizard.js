@@ -146,6 +146,7 @@
       const compound = !!document.getElementById('wiz-compound')?.checked;
 
       setField('timeframe', tf);
+      setField('market_type', marketType);
       setField('take_profit_value', tp);
       setField('stop_loss_value', sl);
       setField('leverage_profile', leverage);
@@ -155,6 +156,7 @@
 
       const strategySelect = document.querySelector('select[name="strategy_slug"]');
       if (strategySelect) strategySelect.value = strategy;
+      document.getElementById('run-market-type-filter')?.dispatchEvent(new Event('change'));
 
       modal.classList.add('hidden');
     };

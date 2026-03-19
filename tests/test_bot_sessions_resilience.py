@@ -120,6 +120,52 @@ def test_list_connectors_never_returns_500_when_connector_is_corrupted(monkeypat
     assert alerts and alerts[0][0] == "API /api/connectors serialization"
 
 
+def test_list_bot_sessions_prefers_resolved_market_type_from_connector_config(monkeypatch):
+    connector = SimpleNamespace(
+        id=44,
+        label="Cuenta Binance Futures",
+        platform="binance",
+        mode="live",
+        market_type="spot",
+        config_json={"defaultType": "future", "market_type": "futures"},
+    )
+    session = SimpleNamespace(
+        id=21,
+        connector_id=44,
+        connector=connector,
+        user=SimpleNamespace(fixed_trade_amount_usd=10),
+        strategy_slug="momentum_breakout",
+        timeframe="15m",
+        symbols_json={"symbols": ["BTC/USDT"]},
+        interval_minutes=15,
+        risk_per_trade=0.01,
+        min_ml_probability=0.55,
+        take_profit_mode="percent",
+        take_profit_value=1.2,
+        stop_loss_mode="percent",
+        stop_loss_value=0.6,
+        trailing_stop_mode="percent",
+        trailing_stop_value=0.4,
+        indicator_exit_enabled=False,
+        indicator_exit_rule="macd_cross",
+        leverage_profile="balanced",
+        max_open_positions=1,
+        compound_growth_enabled=False,
+        atr_volatility_filter_enabled=True,
+        is_active=True,
+        last_run_at=None,
+        next_run_at=None,
+        last_status="queued",
+        last_error=None,
+        created_at=None,
+        market_type="futures",
+    )
+
+    rows = api.list_bot_sessions(db=_FakeDB([session]), user=SimpleNamespace(id=7))
+
+    assert rows[0]["market_type"] == "futures"
+
+
 def test_dashboard_returns_safe_payload_when_aggregation_fails(monkeypatch):
     monkeypatch.setattr(api, "dashboard_data", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     alerts = []

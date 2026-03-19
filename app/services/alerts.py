@@ -134,6 +134,19 @@ def send_telegram_alert_sync(message: str) -> bool:
         return False
 
 
+def send_admin_user_alert_sync(user: User | None, message: str, *, scope: str = "user-event") -> bool:
+    identity = "-"
+    if user is not None:
+        identity = (
+            getattr(user, "name", "")
+            or getattr(user, "email", "")
+            or f"user_id={getattr(user, 'id', '?')}"
+        )
+        identity = identity.strip()
+    header = f"👤 Usuario: {identity}\n🧭 Scope: {scope}\n"
+    return send_telegram_alert_sync(f"{header}{message}")
+
+
 def send_user_telegram_alert(user: User, message: str, *, raise_on_error: bool = False) -> bool:
     if not user.telegram_alerts_enabled:
         return False

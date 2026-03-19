@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from app.db import SessionLocal
 from app.models import BotSession, Connector
+from app.services.connector_state import ensure_connector_market_type_state, normalize_market_type, sync_connector_config_market_type
 from app.services.position_lifecycle import run_position_lifecycle
 from app.services.trading import run_strategy
 
@@ -37,6 +38,13 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
             processed += 1
             continue
+
+        session_market_type = normalize_market_type(getattr(session, "market_type", None) or getattr(connector, "market_type", None))
+        if connector and session_market_type and getattr(connector, "market_type", None) != session_market_type:
+            connector.market_type = session_market_type
+            connector.config_json = sync_connector_config_market_type(getattr(connector, "config_json", None), session_market_type)
+        if connector:
+            ensure_connector_market_type_state(connector, persist=True, db=db)
 
         symbols = (session.symbols_json or {}).get("symbols", [])
         symbol_source_mode = str((session.symbols_json or {}).get("symbol_source_mode") or "manual")

@@ -30,17 +30,22 @@ from app.schemas import (
     StrategyTemplateCreate,
     TradingViewWebhook,
 )
-from app.security import decrypt_payload, encrypt_payload, hash_password
+from app.security import encrypt_payload, hash_password
 from app.services.alerts import (
     TelegramDeliveryError,
     format_failure_message,
     format_user_failure_message,
     format_user_info_message,
     normalize_alert_locale,
+    send_admin_user_alert_sync,
     send_telegram_alert_sync,
-    send_user_telegram_alert,
-    send_user_telegram_test_alert,
-    user_has_telegram_config,
+)
+from app.services.connector_state import (
+    PLATFORM_MARKET_TYPES,
+    ensure_connector_market_type_state,
+    normalize_market_type,
+    resolve_connector_market_type,
+    sync_connector_config_market_type,
 )
 from app.services.connectors import get_client
 from app.services.market import price_check
@@ -68,18 +73,6 @@ TIMEFRAME_TO_MINUTES = {
     "1d": 1440,
 }
 
-PLATFORM_MARKET_TYPES = {
-    "mt5": {"forex", "cfd"},
-    "ctrader": {"forex", "cfd", "spot", "futures"},
-    "tradingview": {"signals"},
-    "binance": {"spot", "futures"},
-    "bybit": {"spot", "futures"},
-    "okx": {"spot", "futures"},
-}
-
-
-
-
 def _alert_admin_failure(scope: str, detail: str) -> None:
     try:
         send_telegram_alert_sync(format_failure_message(scope, detail))
@@ -104,7 +97,7 @@ def _notify_user_info(user: User, *, title: str, detail: str,
                       connector_label: str | None = None, platform: str | None = None,
                       symbol: str | None = None) -> None:
     try:
-        send_user_telegram_alert(
+        send_admin_user_alert_sync(
             user,
             format_user_info_message(
                 locale=user.alert_language,
@@ -114,9 +107,10 @@ def _notify_user_info(user: User, *, title: str, detail: str,
                 platform=platform,
                 symbol=symbol,
             ),
+            scope="user-info",
         )
     except Exception:
-        logger.exception("Failed sending informational Telegram alert for user_id=%s", getattr(user, "id", "?"))
+        logger.exception("Failed sending admin informational Telegram alert for user_id=%s", getattr(user, "id", "?"))
 
 
 def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
@@ -125,43 +119,18 @@ def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
 
 
 def _normalize_market_type(value: str | None) -> str:
-    clean = str(value or "").strip().lower()
-    aliases = {
-        "future": "futures",
-        "futures": "futures",
-        "perpetual": "futures",
-        "swap": "futures",
-        "signal": "signals",
-        "signals": "signals",
-    }
-    return aliases.get(clean, clean or "spot")
+    return normalize_market_type(value)
 
 
 def _resolve_connector_market_type(*, platform: str, market_type: str | None = None, config: dict | None = None) -> str:
-    cfg = config or {}
-    resolved = _normalize_market_type(
-        market_type
-        or cfg.get("market_type")
-        or cfg.get("defaultType")
-        or cfg.get("default_type")
-    )
-    allowed = PLATFORM_MARKET_TYPES.get(platform, {"spot"})
-    if resolved in allowed:
-        return resolved
-    if resolved == "spot" and "spot" not in allowed:
-        return sorted(allowed)[0]
-    raise HTTPException(
-        status_code=400,
-        detail=f"El mercado {resolved} no es válido para {platform}. Permitidos: {', '.join(sorted(allowed))}",
-    )
+    try:
+        return resolve_connector_market_type(platform=platform, market_type=market_type, config=config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _sync_connector_config_market_type(config: dict | None, market_type: str) -> dict:
-    current = dict(config or {})
-    current["market_type"] = market_type
-    if market_type in {"spot", "futures"}:
-        current["defaultType"] = "future" if market_type == "futures" else "spot"
-    return current
+    return sync_connector_config_market_type(config, market_type)
 
 
 def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int], strategy_slug: str) -> list[Connector]:
@@ -278,12 +247,8 @@ def me(user=Depends(current_user), db=Depends(get_db)):
         "name": user.name,
         "phone": user.phone,
         "is_admin": user.is_admin,
-        "telegram_alerts_enabled": user.telegram_alerts_enabled,
-        "telegram_bot_key": (decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip(),
-        "telegram_chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip(),
         "alert_language": normalize_alert_locale(user.alert_language),
-        "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
-        "telegram_ready": user_has_telegram_config(user),
+        "admin_alerts_enabled": bool((settings.telegram_admin_bot_token or "").strip() and (settings.telegram_admin_chat_id or "").strip()),
         "trade_amount_mode": user.trade_amount_mode or "fixed_usd",
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
@@ -306,23 +271,9 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
             raise HTTPException(status_code=400, detail="Phone must be between 7 and 40 characters")
         user.phone = clean_phone or None
 
-    next_alert_enabled = payload.get("telegram_alerts_enabled")
-    if next_alert_enabled is not None:
-        user.telegram_alerts_enabled = bool(next_alert_enabled)
-
     next_language = payload.get("alert_language")
     if next_language is not None:
         user.alert_language = normalize_alert_locale(str(next_language))
-
-    next_telegram_bot_key = payload.get("telegram_bot_key")
-    if next_telegram_bot_key is not None:
-        clean_bot_key = str(next_telegram_bot_key).strip()
-        user.telegram_bot_token_encrypted = encrypt_payload({"value": clean_bot_key}) if clean_bot_key else None
-
-    next_telegram_chat_id = payload.get("telegram_chat_id")
-    if next_telegram_chat_id is not None:
-        clean_chat_id = str(next_telegram_chat_id).strip()
-        user.telegram_chat_id_encrypted = encrypt_payload({"value": clean_chat_id}) if clean_chat_id else None
 
     next_trade_mode = payload.get("trade_amount_mode")
     if next_trade_mode is not None:
@@ -352,17 +303,13 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         user.trade_balance_percent = percent
 
     db.commit()
-    telegram_ready = user_has_telegram_config(user)
     return {
         "ok": True,
         "id": user.id,
         "name": user.name,
         "phone": user.phone,
-        "telegram_alerts_enabled": user.telegram_alerts_enabled,
         "alert_language": normalize_alert_locale(user.alert_language),
-        "has_telegram_bot_key": bool(user.telegram_bot_token_encrypted),
-        "has_telegram_chat_id": bool(user.telegram_chat_id_encrypted),
-        "telegram_ready": telegram_ready,
+        "admin_alerts_enabled": bool((settings.telegram_admin_bot_token or "").strip() and (settings.telegram_admin_chat_id or "").strip()),
         "trade_amount_mode": user.trade_amount_mode,
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
@@ -372,17 +319,17 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
 @router.post("/me/telegram/test")
 def me_telegram_test(db=Depends(get_db), user=Depends(current_user)):
     _ = db
-    if not user.telegram_alerts_enabled:
-        raise HTTPException(status_code=400, detail="Activa las alertas de Telegram antes de probar el envío")
-    if not user_has_telegram_config(user):
-        raise HTTPException(status_code=400, detail="Faltan bot key o chat id de Telegram")
     try:
-        ok = send_user_telegram_test_alert(user, raise_on_error=True)
+        ok = send_admin_user_alert_sync(
+            user,
+            "🧪 Prueba manual de alertas administrativas.\nEl canal central de Telegram está activo para eventos del sistema y de usuarios.",
+            scope="admin-telegram-test",
+        )
     except TelegramDeliveryError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     if not ok:
-        raise HTTPException(status_code=502, detail="No se pudo enviar el mensaje de prueba a Telegram")
-    return {"ok": True, "message": "Mensaje de prueba enviado a Telegram"}
+        raise HTTPException(status_code=502, detail="No se pudo enviar la prueba al canal administrativo de Telegram")
+    return {"ok": True, "message": "Mensaje de prueba enviado al Telegram administrativo"}
 
 
 @router.get("/platform-metadata")
@@ -419,11 +366,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
     serialization_errors = []
     for connector in connectors:
         try:
-            resolved_market_type = _resolve_connector_market_type(
-                platform=connector.platform,
-                market_type=getattr(connector, "market_type", None),
-                config=getattr(connector, "config_json", None),
-            )
+            resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
             payload.append({
                 "id": connector.id,
                 "platform": connector.platform,
@@ -453,6 +396,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
 
     if serialization_errors:
         _alert_admin_failure("API /api/connectors serialization", " | ".join(serialization_errors)[:1500])
+    db.commit()
     return payload
 
 
@@ -481,6 +425,7 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
         config_json=_sync_connector_config_market_type(payload.config, market_type),
         encrypted_secret_blob=encrypt_payload(payload.secrets),
     )
+    ensure_connector_market_type_state(connector)
     db.add(connector)
     db.commit()
     db.refresh(connector)
@@ -523,6 +468,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     if payload.symbols is not None:
         connector.symbols_json = {"symbols": payload.symbols}
     connector.config_json = _sync_connector_config_market_type(next_config, connector.market_type)
+    ensure_connector_market_type_state(connector)
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -559,6 +505,7 @@ def test_connector(connector_id: int, db=Depends(get_db), user=Depends(current_u
     connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+    ensure_connector_market_type_state(connector, persist=True, db=db)
     client = get_client(connector)
     try:
         data = client.test_connection()
@@ -571,13 +518,17 @@ def test_connector(connector_id: int, db=Depends(get_db), user=Depends(current_u
         )
         return {"status": "ok", "message": "Connection test completed", "raw": data}
     except Exception as exc:
-        send_user_telegram_alert(user, format_user_failure_message(
-            locale=user.alert_language,
-            scope="connector_test",
-            detail=str(exc),
-            connector_label=connector.label,
-            platform=connector.platform,
-        ))
+        send_admin_user_alert_sync(
+            user,
+            format_user_failure_message(
+                locale=user.alert_language,
+                scope="connector_test",
+                detail=str(exc),
+                connector_label=connector.label,
+                platform=connector.platform,
+            ),
+            scope="connector-test-error",
+        )
         return {"status": "error", "message": str(exc), "raw": {"platform": connector.platform}}
 
 
@@ -594,6 +545,7 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
         current = connector.config_json or {}
         current.update(payload.config)
         connector.config_json = current
+    ensure_connector_market_type_state(connector)
 
     db.commit()
     _notify_user_info(
@@ -612,6 +564,22 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
     if control.managed_by_admin and payload.strategy_slug not in allowed:
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+
+    if payload.market_type is not None:
+        requested_connectors = db.query(Connector).filter(
+            Connector.user_id == user.id,
+            Connector.id.in_(payload.connector_ids),
+            Connector.is_enabled.is_(True),
+        ).all()
+        for connector in requested_connectors:
+            connector.market_type = _resolve_connector_market_type(
+                platform=connector.platform,
+                market_type=payload.market_type,
+                config=connector.config_json,
+            )
+            connector.config_json = _sync_connector_config_market_type(connector.config_json, connector.market_type)
+            ensure_connector_market_type_state(connector)
+        db.commit()
 
     _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
 
@@ -696,6 +664,10 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
     for session in sessions:
         try:
             connector = session.connector
+            if connector:
+                resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+            else:
+                resolved_market_type = "spot"
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
             capital = _safe_float(getattr(session.user, "fixed_trade_amount_usd", 0) or config.get("allocation_value", config.get("default_quantity", 0)) or 0)
@@ -705,7 +677,9 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "connector_label": connector.label if connector else "-",
                 "platform": connector.platform if connector else "-",
                 "mode": connector.mode if connector else "-",
-                "market_type": connector.market_type if connector else "spot",
+                "market_type": _normalize_market_type(
+                    getattr(session, "market_type", None) or resolved_market_type
+                ),
                 "strategy_slug": session.strategy_slug,
                 "timeframe": session.timeframe,
                 "symbols": symbols,
@@ -781,6 +755,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             "API /api/bot-sessions serialization",
             " | ".join(serialization_errors)[:1500],
         )
+    db.commit()
     return payload
 
 
@@ -798,6 +773,16 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     ).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Enabled connector not found")
+    if payload.market_type is not None:
+        connector.market_type = _resolve_connector_market_type(
+            platform=connector.platform,
+            market_type=payload.market_type,
+            config=connector.config_json,
+        )
+        connector.config_json = _sync_connector_config_market_type(connector.config_json, connector.market_type)
+        ensure_connector_market_type_state(connector)
+        db.commit()
+    resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
 
     _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
 
@@ -808,6 +793,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        market_type=_normalize_market_type(getattr(payload, "market_type", None) or resolved_market_type),
         strategy_slug=payload.strategy_slug,
         timeframe=normalized_timeframe,
         symbols_json={
@@ -887,6 +873,18 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     if payload.risk_per_trade is not None:
         session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    if payload.market_type is not None:
+        connector = db.query(Connector).filter(Connector.id == session.connector_id, Connector.user_id == user.id).first()
+        if not connector:
+            raise HTTPException(status_code=404, detail="Enabled connector not found")
+        connector.market_type = _resolve_connector_market_type(
+            platform=connector.platform,
+            market_type=payload.market_type,
+            config=connector.config_json,
+        )
+        connector.config_json = _sync_connector_config_market_type(connector.config_json, connector.market_type)
+        ensure_connector_market_type_state(connector)
+        session.market_type = connector.market_type
     if payload.min_ml_probability is not None:
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:
@@ -918,6 +916,9 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     db.commit()
     connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    if connector:
+        session.market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+        db.commit()
     _notify_user_info(
         user,
         title="Bot actualizado",
@@ -1528,13 +1529,17 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
                 "message": str(exc),
                 "raw": None,
             })
-            send_user_telegram_alert(user, format_user_failure_message(
-                locale=user.alert_language,
-                scope="heartbeat",
-                detail=str(exc),
-                connector_label=connector.label,
-                platform=connector.platform,
-            ))
+            send_admin_user_alert_sync(
+                user,
+                format_user_failure_message(
+                    locale=user.alert_language,
+                    scope="heartbeat",
+                    detail=str(exc),
+                    connector_label=connector.label,
+                    platform=connector.platform,
+                ),
+                scope="heartbeat-error",
+            )
     return {
         "ok": all(item["ok"] for item in checks) if checks else True,
         "total": len(checks),
