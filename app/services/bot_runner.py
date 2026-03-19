@@ -39,6 +39,8 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             continue
 
         symbols = (session.symbols_json or {}).get("symbols", [])
+        symbol_source_mode = str((session.symbols_json or {}).get("symbol_source_mode") or "manual")
+        dynamic_symbol_limit = (session.symbols_json or {}).get("dynamic_symbol_limit")
         if not symbols:
             session.last_status = "skipped"
             session.last_error = "No symbols configured"
@@ -70,6 +72,8 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
                 max_open_positions=max(int(session.max_open_positions or 1), 1),
                 compound_growth_enabled=bool(session.compound_growth_enabled),
                 atr_volatility_filter_enabled=bool(session.atr_volatility_filter_enabled),
+                symbol_source_mode=symbol_source_mode,
+                dynamic_symbol_limit=int(dynamic_symbol_limit) if dynamic_symbol_limit else None,
                 run_source="bot",
                 bot_session_id=session.id,
             )
