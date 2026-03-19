@@ -6,6 +6,36 @@
   <p>Gestión integral en tarjetas compactas con tabs y acciones on/off para ejecutar todo en menos clics.</p>
 </section>
 
+<section class="admin-command-grid">
+  <article class="card admin-command-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Governance matrix</small>
+        <h2>Resumen operativo</h2>
+      </div>
+      <span class="pill" id="admin-ops-state">Cargando</span>
+    </div>
+    <div class="quantum-metrics-grid">
+      <div class="quantum-metric"><small>Usuarios</small><strong id="admin-metric-users">0</strong></div>
+      <div class="quantum-metric"><small>Activos</small><strong id="admin-metric-active-users">0</strong></div>
+      <div class="quantum-metric"><small>Admins</small><strong id="admin-metric-admins">0</strong></div>
+      <div class="quantum-metric"><small>Planes</small><strong id="admin-metric-plans">0</strong></div>
+    </div>
+    <div id="admin-system-report" class="quantum-report-list"></div>
+  </article>
+
+  <article class="card admin-command-side">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Selected account</small>
+        <h2>Insight de usuario</h2>
+      </div>
+      <span class="pill tiny" id="admin-selected-user-state">Sin selección</span>
+    </div>
+    <div id="admin-user-insights" class="quantum-report-list"></div>
+  </article>
+</section>
+
 <section class="admin-layout-v2">
   <aside class="card admin-sidebar">
     <div class="row-between">

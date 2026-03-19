@@ -30,6 +30,47 @@
   </aside>
 </section>
 
+<section class="quantum-command-grid">
+  <article class="card quantum-command-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Quantum Mission Control</small>
+        <h2>Estado táctico del sistema</h2>
+      </div>
+      <span class="pill" id="quant-health-pill">Inicializando</span>
+    </div>
+    <div class="quantum-metrics-grid">
+      <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
+      <div class="quantum-metric"><small>Sync engine</small><strong id="quant-sync-status">Pendiente</strong></div>
+      <div class="quantum-metric"><small>Conectores live</small><strong id="quant-live-connectors">0</strong></div>
+      <div class="quantum-metric"><small>Último heartbeat</small><strong id="quant-last-heartbeat">--:--</strong></div>
+    </div>
+    <div class="quantum-status-strip" id="quant-status-strip"></div>
+  </article>
+
+  <article class="card quantum-side-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">User configuration</small>
+        <h2>Configuración operativa</h2>
+      </div>
+      <span class="pill tiny" id="user-config-state">Profile loaded</span>
+    </div>
+    <div id="user-config-report" class="quantum-report-list"></div>
+  </article>
+
+  <article class="card quantum-side-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Decision telemetry</small>
+        <h2>Flujo de decisiones</h2>
+      </div>
+      <span class="pill tiny" id="decision-report-state">0 eventos</span>
+    </div>
+    <div id="decision-breakdown-panel" class="quantum-report-list"></div>
+  </article>
+</section>
+
 <section class="tabs" id="dashboard-tabs">
   <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil"><span class="tab-glyph">◉</span><span class="tab-label">Perfil</span></button>
   <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores"><span class="tab-glyph">◉</span><span class="tab-label">Apps</span></button>
@@ -75,11 +116,16 @@
             <option value="fr">Français</option>
           </select>
         </label>
+        <div class="row-wrap">
+          <button class="btn btn-sm" type="button" id="test-telegram-btn">Probar Telegram</button>
+          <small class="hint">Envía un mensaje de prueba para validar bot key + chat id.</small>
+        </div>
       </div>
       <small class="hint">El email solo puede editarlo el super user. Si dejas bot key/chat id vacíos, se conservarán los valores actuales.</small>
       <button class="btn primary" type="submit">Guardar perfil</button>
       </form>
       <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
+      <div id="telegram-test-feedback" class="hint" style="margin-top:8px;"></div>
     </section>
 
     <aside class="profile-side-stack">
@@ -267,6 +313,29 @@
 </section>
 
 <section id="tab-activity" class="tab-panel">
+  <section class="quantum-report-grid">
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Connector intelligence</small>
+          <h2>Health de conectores</h2>
+        </div>
+        <button class="btn btn-sm" type="button" id="refresh-connector-health-btn">Refrescar</button>
+      </div>
+      <div id="connector-health-panel" class="quantum-report-list"></div>
+    </article>
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Reports</small>
+          <h2>Resumen ejecutivo</h2>
+        </div>
+        <span class="pill tiny" id="reports-range-badge">Semana</span>
+      </div>
+      <div id="executive-report-panel" class="quantum-report-list"></div>
+    </article>
+  </section>
+
   <section class="stats-grid kpi-ribbon">
     <div class="card stat stat-card"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
     <div class="card stat stat-card"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>

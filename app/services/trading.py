@@ -1117,6 +1117,14 @@ def run_strategy(
                 )
                 db.add(run)
                 db.commit()
+                send_user_telegram_alert(user, format_user_failure_message(
+                    locale=user.alert_language,
+                    scope="pretrade",
+                    detail=pretrade.get("reason_message") or pretrade.get("reason_code") or "pretrade_rejected",
+                    connector_label=connector.label,
+                    platform=connector.platform,
+                    symbol=normalized_symbol,
+                ))
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1264,6 +1272,8 @@ def run_strategy(
                 status=result.status,
                 strategy_slug=strategy_slug,
                 message=result.message,
+                pnl=pnl,
+                close_reason=close_reason,
             ))
             results.append({
                 "connector_id": connector.id,

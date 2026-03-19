@@ -35,6 +35,57 @@ let USERS = [];
 let SELECTED_USER_ID = null;
 let SELECTED_PROFILE = null;
 let GLOBAL_POLICIES = [];
+let ADMIN_PLANS = [];
+
+function setAdminText(id, value) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = value;
+}
+
+function renderAdminReport(nodeId, items) {
+  const node = document.getElementById(nodeId);
+  if (!node) return;
+  node.innerHTML = (items || []).filter(Boolean).map((item) => `
+    <article class="quantum-report-item">
+      <strong>${item.title || '-'}<\/strong>
+      <small>${item.body || '-'}<\/small>
+    <\/article>`).join("");
+}
+
+function refreshAdminExecutiveSummary() {
+  const activeUsers = USERS.filter((u) => u.is_active).length;
+  const adminUsers = USERS.filter((u) => u.is_admin).length;
+  const activePlans = ADMIN_PLANS.filter((p) => p.is_active).length;
+  setAdminText('admin-metric-users', String(USERS.length));
+  setAdminText('admin-metric-active-users', String(activeUsers));
+  setAdminText('admin-metric-admins', String(adminUsers));
+  setAdminText('admin-metric-plans', String(ADMIN_PLANS.length));
+  setAdminText('admin-ops-state', USERS.length ? `${activeUsers} activos` : 'Sin datos');
+  renderAdminReport('admin-system-report', [
+    { title: 'Estado global', body: `${GLOBAL_POLICIES.filter((p) => p.is_enabled_global).length} plataformas con acceso global activo de ${GLOBAL_POLICIES.length}.` },
+    { title: 'Base de usuarios', body: `${adminUsers} admins / ${Math.max(USERS.length - adminUsers, 0)} usuarios estándar · ${activeUsers} cuentas activas.` },
+    { title: 'Oferta comercial', body: `${activePlans} planes activos de ${ADMIN_PLANS.length} configurados para monetización y gobierno.` },
+  ]);
+}
+
+function refreshSelectedUserInsights(profile = SELECTED_PROFILE) {
+  if (!profile?.user) {
+    setAdminText('admin-selected-user-state', 'Sin selección');
+    renderAdminReport('admin-user-insights', [{ title: 'Selecciona un usuario', body: 'Elige una cuenta de la columna izquierda para ver resumen ejecutivo, conectores y gobierno.' }]);
+    return;
+  }
+  const user = profile.user;
+  const connectors = profile.connectors || [];
+  const enabledConnectors = connectors.filter((c) => c.is_enabled).length;
+  const grantedPlatforms = (profile.grants || []).filter((g) => g.is_enabled).length;
+  const allowedStrategies = (profile.strategy_control?.allowed_strategies || []).length;
+  setAdminText('admin-selected-user-state', user.is_active ? 'Cuenta activa' : 'Cuenta inactiva');
+  renderAdminReport('admin-user-insights', [
+    { title: user.name || user.email || `Usuario ${user.id}`, body: `${user.email}${user.phone ? ` · ${user.phone}` : ''}` },
+    { title: 'Supervisión operativa', body: `${enabledConnectors} conectores activos de ${connectors.length} · ${grantedPlatforms} grants activos.` },
+    { title: 'Control de estrategia', body: `${profile.strategy_control?.managed_by_admin ? 'Administrado por admin' : 'Libre por usuario'} · ${allowedStrategies} estrategias habilitadas.` },
+  ]);
+}
 
 function boolPill(v, textOn = "ON", textOff = "OFF") {
   return `<span class="pill tiny ${v ? "pill-on" : "pill-off"}">${v ? textOn : textOff}</span>`;
@@ -209,9 +260,10 @@ function renderSelectedProfile(profile) {
 }
 
 async function refreshSelectedUserProfile() {
-  if (!SELECTED_USER_ID) return;
+  if (!SELECTED_USER_ID) { refreshSelectedUserInsights(null); return; }
   SELECTED_PROFILE = await api(`/api/admin/users/${SELECTED_USER_ID}/profile`);
   renderSelectedProfile(SELECTED_PROFILE);
+  refreshSelectedUserInsights(SELECTED_PROFILE);
 }
 
 function renderPolicies(policies) {
@@ -331,12 +383,14 @@ async function refreshAdmin() {
     api("/api/admin/users"), api("/api/admin/policies"), api("/api/admin/pricing-config"), api("/api/admin/plans"),
   ]);
   USERS = users;
+  ADMIN_PLANS = plans;
   if (!SELECTED_USER_ID && USERS.length) SELECTED_USER_ID = USERS[0].id;
   if (SELECTED_USER_ID && !USERS.find((u) => u.id === SELECTED_USER_ID)) SELECTED_USER_ID = USERS[0]?.id || null;
   renderUserList();
   renderPolicies(policies);
   renderPricing(pricing);
   renderPlans(plans);
+  refreshAdminExecutiveSummary();
   if (SELECTED_USER_ID) await refreshSelectedUserProfile();
 }
 
