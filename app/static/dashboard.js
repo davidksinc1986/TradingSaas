@@ -112,25 +112,88 @@ function renderRunConnectorSelect(connectors) {
   select.innerHTML = connectors.map(c => `<option value="${c.id}">#${c.id} · ${c.label} (${c.platform} / ${c.mode})</option>`).join('');
 }
 
-function selectedRunConnectorIds() {
-  const select = document.getElementById('run-connector-select');
-  if (!select) return [];
-  return Array.from(select.selectedOptions).map(option => Number(option.value));
+async function publishCurrentStrategyTemplate(){
+  const fd=new FormData(document.getElementById('run-form'));
+  const name=prompt('Nombre de la estrategia pública:','Mi estrategia');
+  if(!name)return;
+  const config={
+    market_type:String(fd.get('market_type')||resolveEffectiveRunMarketType()||'spot'),
+    strategy_slug:fd.get('strategy_slug'),
+    timeframe:fd.get('timeframe'),
+    risk_per_trade:Number(fd.get('risk_per_trade_percent')||3)/100,
+    trade_amount_mode:String(fd.get('trade_amount_mode')||'inherit'),
+    amount_per_trade:String(fd.get('trade_amount_mode')||'inherit')==='fixed_usd'?Number(fd.get('amount_per_trade')):null,
+    amount_percentage:String(fd.get('trade_amount_mode')||'inherit')==='balance_percent'?Number(fd.get('amount_percentage')):null,
+    min_ml_probability:Number(fd.get('min_ml_probability_percent')||58)/100,
+    take_profit_mode:fd.get('take_profit_mode')||'percent',
+    take_profit_value:Number(fd.get('take_profit_value')||1.8),
+    stop_loss_mode:fd.get('stop_loss_mode')||'percent',
+    stop_loss_value:Number(fd.get('stop_loss_value')||1.1),
+    trailing_stop_mode:fd.get('trailing_stop_mode')||'percent',
+    trailing_stop_value:Number(fd.get('trailing_stop_value')||0.9),
+    leverage_profile:fd.get('leverage_profile')||'none',
+    max_open_positions:Number(fd.get('max_open_positions')||1),
+    compound_growth_enabled:String(fd.get('compound_growth_enabled')).toLowerCase()==='true',
+    atr_volatility_filter_enabled:String(fd.get('atr_volatility_filter_enabled')).toLowerCase()!=='false',
+    symbols:resolveRunSymbols(fd),
+  };
+  try{
+    await api('/api/strategy-templates',{method:'POST',body:JSON.stringify({name,description:'Publicada desde dashboard',is_public:true,config})});
+    showToast('Estrategia publicada en el pool público.');
+    refreshTemplatePool();
+  }catch(err){showToast(parseApiError(err),'error');}
 }
 
-async function refreshDashboard(){
-  const [connectors,summary,trades]=await Promise.all([api('/api/connectors'),api('/api/dashboard'),api('/api/trades')]);
-  document.getElementById('stat-connectors').textContent=summary.total_connectors;document.getElementById('stat-enabled').textContent=summary.enabled_connectors;document.getElementById('stat-trades').textContent=summary.total_trades;document.getElementById('stat-pnl').textContent=summary.realized_pnl;
-  renderRunConnectorSelect(connectors);
+async function refreshTemplatePool(){
+  const node=document.getElementById('template-pool');
+  if(!node)return;
+  try{
+    const rows=await api('/api/strategy-templates');
+    node.innerHTML=rows.slice(0,20).map(item=>`<div class="connector-item"><div class="row-between"><strong>${item.name}</strong><span class="pill tiny ${item.is_public?'pill-on':'pill-off'}">${item.is_public?'Pública':'Privada'}</span></div><small class="hint">${item.description||''}</small><div style="margin-top:8px;"><button class="btn" type="button" onclick="copyTemplateToMe(${item.id})">Copiar</button></div></div>`).join('')||'<small class="hint">No hay estrategias en el pool aún.</small>';
+  }catch(err){node.innerHTML=`<small class="status-msg status-error">${parseApiError(err)}</small>`;}
+}
 
-  const limits=document.getElementById('limits-list');
-  limits.innerHTML=(summary.limits||[]).map(l=>`<div class="connector-item"><strong>${l.platform}</strong><div class="connector-meta"><span>Estado: ${l.enabled ? 'Habilitado' : 'Deshabilitado'}</span><span>Máx. símbolos: ${l.max_symbols}</span><span>Máx. mov/día: ${l.max_daily_movements}</span></div><small class="hint">${l.notes||'Sin notas'}</small></div>`).join('');
+async function copyTemplateToMe(id){
+  try{await api(`/api/strategy-templates/${id}/copy`,{method:'POST'});showToast('Template copiado en tu cuenta.');refreshTemplatePool();}
+  catch(err){showToast(parseApiError(err),'error');}
+}
+window.copyTemplateToMe=copyTemplateToMe;
 
-  const list=document.getElementById('connectors-list');
-  list.innerHTML=connectors.map(c=>`<div class="connector-item"><strong>${c.label}</strong><div class="connector-meta"><span>${c.platform}</span><span>mercado: ${c.market_type||'spot'}</span><span>modo: ${c.mode}</span><span>enabled: ${c.is_enabled}</span><span>symbols: ${(c.symbols||[]).join(', ')||'-'}</span></div><div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="testConnector(${c.id})">Test</button><button class="btn" onclick="deleteConnector(${c.id})">Eliminar</button></div><pre class="mini-pre">${JSON.stringify(c.config||{},null,2)}</pre></div>`).join('');
+document.getElementById('download-execution-logs-btn')?.addEventListener('click',downloadExecutionLogs);
+document.getElementById('copy-selected-bot-btn')?.addEventListener('click',copySelectedBotSession);
+document.getElementById('publish-template-btn')?.addEventListener('click',publishCurrentStrategyTemplate);
+document.getElementById('refresh-template-pool-btn')?.addEventListener('click',refreshTemplatePool);
+document.querySelector('#bot-sessions-table tbody')?.addEventListener('click',(e)=>{const tr=e.target.closest('tr');if(!tr)return;const id=Number(tr.getAttribute('data-session-id')||0);if(id)SELECTED_BOT_SESSION_ID=id;});
+setTimeout(refreshTemplatePool,1200);
 
-  const tbody=document.querySelector('#trades-table tbody');tbody.innerHTML=trades.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString()}</td><td>${t.platform}</td><td>${(t.meta&&t.meta.market_type)||'-'}</td><td>${t.symbol}</td><td>${t.side}</td><td>${t.quantity}</td><td>${Number(t.price).toFixed(4)}</td><td>${t.status}</td><td>${t.pnl}</td></tr>`).join('');
-  const labels=Object.keys(summary.platforms||{});const values=Object.values(summary.platforms||{});const canvas=document.getElementById('platform-chart');if(window.platformChart) window.platformChart.destroy();window.platformChart=new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data:values}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}}}});
+const TERM_HELP={
+  tp:{title:'Take Profit (TP)',body:'El TP es el nivel donde aseguras ganancia. En % para intradía suele usarse entre 1% y 3%; en USDT depende de tu tamaño. Regla básica: TP mayor que SL.'},
+  sl:{title:'Stop Loss (SL)',body:'El SL limita pérdidas. En % para cuentas pequeñas suele usarse 0.8% a 1.5%. Si SL es muy grande, una operación mala afecta demasiado tu cuenta.'},
+  trailing:{title:'Trailing Stop',body:'El trailing mueve el stop a favor de la operación cuando el precio avanza. Valores típicos: 0.5% a 1.2% según volatilidad.'},
+  pnl:{title:'PNL %',body:'PNL% es el porcentaje de ganancia o pérdida respecto al capital invertido. Ejemplo: si inviertes 100 y ganas 5, PNL%=5%.'},
+  risk:{title:'Riesgo por trade',body:'Porcentaje máximo de cuenta que arriesgas por operación. Para cuentas pequeñas y pruebas: 2% a 3%. En producción conservadora: 0.5% a 1.5%.'},
+  trade_amount_examples:{title:'Ejemplos de monto por operación',body:'Monto fijo: si defines 12, cada orden usa 12 USDT. Porcentaje: si defines 25% y tienes 80 USDT, usará 20 USDT. Si el cálculo da menos de 10 USDT, se ajusta automáticamente a 10 USDT.'},
+};
+
+function openTermHelp(term){const meta=TERM_HELP[term]||{title:'Ayuda',body:'Sin definición disponible.'};const modal=document.getElementById('term-help-modal');if(!modal)return;document.getElementById('term-help-title').textContent=meta.title;document.getElementById('term-help-body').textContent=meta.body;modal.classList.remove('hidden');}
+function closeTermHelp(){document.getElementById('term-help-modal')?.classList.add('hidden');}
+
+async function refreshActivityPerformance(){
+  let payload=null;
+  try{payload=await api('/api/activity/performance');}catch(_err){payload={equity_curve:[],drawdown_curve:[],monthly_returns:[],yearly_returns:[],summary:{sharpe_ratio:0,max_drawdown:0,profit_factor:0,win_rate:0,total_trades:0,average_win:0,average_loss:0}};}
+  const kpi=document.getElementById('activity-kpis');
+  if(kpi){const s=payload.summary||{};kpi.innerHTML=`<div class="metric-card"><strong>Sharpe</strong><span>${Number(s.sharpe_ratio||0).toFixed(2)}</span></div><div class="metric-card"><strong>Max DD</strong><span>${Number(s.max_drawdown||0).toFixed(2)}%</span></div><div class="metric-card"><strong>Profit Factor</strong><span>${Number(s.profit_factor||0).toFixed(2)}</span></div><div class="metric-card"><strong>Win Rate</strong><span>${Number(s.win_rate||0).toFixed(1)}%</span></div><div class="metric-card"><strong>Trades</strong><span>${Number(s.total_trades||0)}</span></div><div class="metric-card"><strong>Prom. win/loss</strong><span>${Number(s.average_win||0).toFixed(2)} / ${Number(s.average_loss||0).toFixed(2)}</span></div>`;}
+  const pointX=(item)=>item?.x||item?.timestamp||item?.period||null;
+  const pointY=(item)=>Number(item?.y??item?.value??0);
+  const equity=(payload.equity_curve||[]), dd=(payload.drawdown_curve||[]), monthly=(payload.monthly_returns||[]), yearly=(payload.yearly_returns||[]);
+  const equityCanvas=document.getElementById('equity-curve-chart');
+  if(equityCanvas){if(window.equityCurveChart)window.equityCurveChart.destroy();window.equityCurveChart=new Chart(equityCanvas,{type:'line',data:{labels:equity.map(i=>pointX(i)?new Date(pointX(i)).toLocaleDateString():''),datasets:[{label:'Cumulative Return',data:equity.map(pointY),borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.15)',fill:true,tension:.25}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+  const ddCanvas=document.getElementById('drawdown-curve-chart');
+  if(ddCanvas){if(window.drawdownCurveChart)window.drawdownCurveChart.destroy();window.drawdownCurveChart=new Chart(ddCanvas,{type:'bar',data:{labels:dd.map(i=>pointX(i)?new Date(pointX(i)).toLocaleDateString():''),datasets:[{label:'Drawdown %',data:dd.map(pointY),backgroundColor:'#ef4444'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+  const mCanvas=document.getElementById('monthly-returns-chart');
+  if(mCanvas){if(window.monthlyReturnsChart)window.monthlyReturnsChart.destroy();window.monthlyReturnsChart=new Chart(mCanvas,{type:'bar',data:{labels:monthly.map(i=>i.period||pointX(i)||'-'),datasets:[{label:'Monthly Returns',data:monthly.map(pointY),backgroundColor:'#38bdf8'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
+  const yCanvas=document.getElementById('yearly-returns-chart');
+  if(yCanvas){if(window.yearlyReturnsChart)window.yearlyReturnsChart.destroy();window.yearlyReturnsChart=new Chart(yCanvas,{type:'bar',data:{labels:yearly.map(i=>i.period||pointX(i)||'-'),datasets:[{label:'Yearly Returns',data:yearly.map(pointY),backgroundColor:'#a78bfa'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
 }
 
 function applyStrategyControlUI() {

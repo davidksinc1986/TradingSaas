@@ -1,11 +1,16 @@
 async function api(url, options = {}) {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    ...options,
-  });
+  const res = await fetch(url, { headers: { "Content-Type": "application/json" }, credentials: "same-origin", ...options });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+function parseApiError(error) {
+  const raw = String(error?.message || "Error inesperado");
+  try {
+    const payload = JSON.parse(raw);
+    if (payload?.detail) return Array.isArray(payload.detail) ? payload.detail.map((d) => d.msg || JSON.stringify(d)).join(" | ") : String(payload.detail);
+  } catch (_e) {}
+  return raw;
 }
 
 function showFeedback(message, kind = "ok") {
@@ -194,6 +199,83 @@ async function refreshAdmin() {
       <strong>${u.name}</strong>
       <div class="connector-meta"><span>${u.email}</span><span>ID: ${u.id}</span><span>Admin: ${u.is_admin ? "Sí" : "No"}</span><span>Activo: ${u.is_active ? "Sí" : "No"}</span></div>
     </div>
+    <div class="admin-tab-panel active" data-panel="summary">
+      <div class="admin-compact-grid" style="margin-top:10px;">
+        <div class="admin-box">${strategyPanel(profile.strategy_control)}</div>
+        <div class="admin-box"><strong>Conectores activos</strong><p>${(profile.connectors || []).filter((x) => x.is_enabled).length} de ${(profile.connectors || []).length}</p></div>
+      </div>
+    </div>
+    <div class="admin-tab-panel" data-panel="permissions" style="margin-top:10px;">${permissionsPanel(profile)}</div>
+    <div class="admin-tab-panel" data-panel="connectors" style="margin-top:10px;">${connectorsPanel(profile.connectors)}</div>
+  `;
+
+  bindTabs("profile-tabs");
+  document.getElementById("open-strategy-modal")?.addEventListener("click", openStrategyModal);
+
+  document.getElementById("save-all-grants-btn")?.addEventListener("click", async () => {
+    const forms = Array.from(wrap.querySelectorAll(".grant-inline-form"));
+    try {
+      for (const form of forms) {
+        const fd = new FormData(form);
+        await api("/api/admin/grants", {
+          method: "PUT",
+          body: JSON.stringify({
+            user_id: SELECTED_USER_ID,
+            platform: form.dataset.platform,
+            is_enabled: fd.get("is_enabled") === "true",
+            max_symbols: Number(fd.get("max_symbols") || 0),
+            max_daily_movements: Number(fd.get("max_daily_movements") || 0),
+            notes: String(fd.get("notes") || ""),
+          }),
+        });
+      }
+      showFeedback("Permisos actualizados correctamente.");
+      await refreshSelectedUserProfile();
+    } catch (err) {
+      showFeedback(parseApiError(err), "error");
+    }
+  });
+
+  wrap.querySelectorAll(".connector-inline-form").forEach((form) => form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try {
+      await api(`/api/connectors/${form.dataset.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          is_enabled: fd.get("is_enabled") === "true",
+          symbols: fromCsv(fd.get("symbols")),
+          config: {
+            allocation_mode: String(fd.get("allocation_mode") || "fixed"),
+            allocation_value: Number(fd.get("allocation_value") || 0),
+          },
+        }),
+      });
+      showFeedback("Conector actualizado.");
+      await refreshSelectedUserProfile();
+    } catch (err) { showFeedback(parseApiError(err), "error"); }
+  }));
+}
+
+async function refreshSelectedUserProfile() {
+  if (!SELECTED_USER_ID) { refreshSelectedUserInsights(null); return; }
+  SELECTED_PROFILE = await api(`/api/admin/users/${SELECTED_USER_ID}/profile`);
+  renderSelectedProfile(SELECTED_PROFILE);
+  refreshSelectedUserInsights(SELECTED_PROFILE);
+}
+
+function renderPolicies(policies) {
+  GLOBAL_POLICIES = policies;
+  const wrap = document.getElementById("admin-policies");
+  wrap.innerHTML = policies.map((p) => `
+    <form class="admin-box policy-inline-form" data-platform="${p.platform}">
+      <div class="row-between"><strong>${p.display_name}</strong>${boolPill(p.is_enabled_global, "Global ON", "Global OFF")}</div>
+      <label>Global<select name="is_enabled_global"><option value="true" ${p.is_enabled_global ? "selected" : ""}>ON</option><option value="false" ${!p.is_enabled_global ? "selected" : ""}>OFF</option></select></label>
+      <label>Manual symbols<select name="allow_manual_symbols"><option value="true" ${p.allow_manual_symbols ? "selected" : ""}>ON</option><option value="false" ${!p.allow_manual_symbols ? "selected" : ""}>OFF</option></select></label>
+      <label>Top symbols (CSV)<input name="top_symbols" value="${toCsv(p.top_symbols)}"></label>
+      <label>Allowed symbols (CSV)<input name="allowed_symbols" value="${toCsv(p.allowed_symbols)}"></label>
+      <button class="btn btn-sm" type="submit">Guardar</button>
+    </form>
   `).join("");
 
   document.getElementById("admin-policies").innerHTML = policies.map(p => {
@@ -237,6 +319,10 @@ document.getElementById("selected-user")?.addEventListener("change", refreshSele
 
 document.getElementById("create-user-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const form = e.currentTarget;
+  const fd = new FormData(form);
+  const userId = Number(form.dataset.userId || 0);
+  if (!userId) return;
   try {
     const fd = new FormData(e.target);
     const password = String(fd.get("password") || "");
@@ -265,3 +351,11 @@ refreshAdmin().catch(err => {
   const output = document.getElementById("selected-user-profile");
   if (output) output.innerHTML = `<div class="status-msg status-error">${err.message}</div>`;
 });
+
+document.getElementById("close-edit-user-modal")?.addEventListener("click", closeEditUserModal);
+document.getElementById("edit-user-modal")?.addEventListener("click", (e) => { if (e.target.id === "edit-user-modal") closeEditUserModal(); });
+document.getElementById("close-strategy-modal")?.addEventListener("click", closeStrategyModal);
+document.getElementById("strategy-modal")?.addEventListener("click", (e) => { if (e.target.id === "strategy-modal") closeStrategyModal(); });
+
+bindTabs("settings-tabs");
+refreshAdmin().catch((err) => showFeedback(parseApiError(err), "error"));

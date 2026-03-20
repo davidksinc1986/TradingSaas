@@ -6,16 +6,48 @@
   <p>Gestiona usuarios, permisos por plataforma y configuración de movimiento por app para el usuario seleccionado.</p>
 </section>
 
-<section class="grid-2">
-  <div class="card">
-    <h2>Usuarios</h2>
-    <form id="create-user-form" class="form-grid admin-form-grid" style="margin-bottom:12px;">
-      <label>Email de acceso<input name="email" type="email" placeholder="usuario@dominio.com" required></label>
+<section class="admin-command-grid">
+  <article class="card admin-command-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Governance matrix</small>
+        <h2>Resumen operativo</h2>
+      </div>
+      <span class="pill" id="admin-ops-state">Cargando</span>
+    </div>
+    <div class="quantum-metrics-grid">
+      <div class="quantum-metric"><small>Usuarios</small><strong id="admin-metric-users">0</strong></div>
+      <div class="quantum-metric"><small>Activos</small><strong id="admin-metric-active-users">0</strong></div>
+      <div class="quantum-metric"><small>Admins</small><strong id="admin-metric-admins">0</strong></div>
+      <div class="quantum-metric"><small>Planes</small><strong id="admin-metric-plans">0</strong></div>
+    </div>
+    <div id="admin-system-report" class="quantum-report-list"></div>
+  </article>
+
+  <article class="card admin-command-side">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Selected account</small>
+        <h2>Insight de usuario</h2>
+      </div>
+      <span class="pill tiny" id="admin-selected-user-state">Sin selección</span>
+    </div>
+    <div id="admin-user-insights" class="quantum-report-list"></div>
+  </article>
+</section>
+
+<section class="admin-layout-v2">
+  <aside class="card admin-sidebar">
+    <div class="row-between">
+      <h2>Usuarios</h2>
+      <span id="admin-total-users" class="pill tiny">0</span>
+    </div>
+    <form id="create-user-form" class="form-grid" style="margin-top:10px;">
+      <label>Email<input name="email" type="email" placeholder="usuario@dominio.com" required></label>
       <label>Nombre<input name="name" minlength="2" required></label>
       <label>Contraseña<input name="password" type="password" minlength="6" required></label>
-      <button class="btn primary" type="submit">Crear usuario</button>
+      <button class="btn primary btn-sm" type="submit">+ Crear</button>
     </form>
-    <small class="hint">La contraseña debe tener al menos 6 caracteres para poder crear el usuario.</small>
     <div id="admin-feedback" class="status-msg hidden"></div>
     <label style="margin-top:12px;display:block;">Usuario a gestionar
       <select id="selected-user"></select>
@@ -33,5 +65,39 @@
   <div id="admin-policies" class="stack"></div>
 </section>
 
-<script src="/static/admin.js"></script>
+<div id="strategy-modal" class="modal hidden">
+  <div class="modal-card card admin-strategy-modal">
+    <div class="row-between">
+      <h3>Estrategias permitidas</h3>
+      <button class="btn btn-sm" id="close-strategy-modal">Cerrar</button>
+    </div>
+    <form id="strategy-control-form" class="form-grid" style="margin-top:12px;"></form>
+  </div>
+</div>
+
+<div id="edit-user-modal" class="modal hidden">
+  <div class="modal-card card admin-strategy-modal">
+    <div class="row-between">
+      <h3>Editar usuario</h3>
+      <button class="btn btn-sm" id="close-edit-user-modal">Cerrar</button>
+    </div>
+    <form id="edit-user-form" class="form-grid" style="margin-top:12px;">
+      <label>Email<input name="email" type="email" required></label>
+      <label>Nombre<input name="name" minlength="2" required></label>
+      <label>Teléfono<input name="phone" minlength="7" maxlength="40" placeholder="Opcional"></label>
+      <label>Activo
+        <select name="is_active"><option value="true">Sí</option><option value="false">No</option></select>
+      </label>
+      <label>Administrador
+        <select name="is_admin"><option value="true">Sí</option><option value="false">No</option></select>
+      </label>
+      <div class="row-wrap">
+        <button class="btn primary btn-sm" type="submit">Guardar</button>
+        <button id="delete-user-in-modal" class="btn btn-sm" type="button">Eliminar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/static/admin.js?v={{ static_version }}"></script>
 {% endblock %}

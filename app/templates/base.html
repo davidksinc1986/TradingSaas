@@ -33,17 +33,17 @@
   <div id="guide-modal" class="modal hidden">
     <div class="modal-card card">
       <div class="modal-head">
-        <h3 id="guide-title">Guía</h3>
-        <button class="btn" onclick="window.closeGuideModal?.()">Cerrar</button>
+        <h3 id="guide-title">{{ tr('modal.guide') }}</h3>
+        <button class="btn" onclick="window.closeGuideModal?.()">{{ tr('modal.close') }}</button>
       </div>
       <p id="guide-summary" class="hint"></p>
       <div class="grid-2 modal-grid">
         <div>
-          <h4>Datos requeridos</h4>
+          <h4>{{ tr('modal.required_data') }}</h4>
           <ul id="guide-fields" class="modal-list"></ul>
         </div>
         <div>
-          <h4>Paso a paso</h4>
+          <h4>{{ tr('modal.step_by_step') }}</h4>
           <ol id="guide-steps" class="modal-list"></ol>
         </div>
       </div>

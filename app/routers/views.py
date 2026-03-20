@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from app.core import settings
 from app.db import get_db
 from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
 from app.routers.deps import admin_user, current_user
 from app.services.policies import ensure_user_grants
+from app.services.pricing import estimate_monthly_cost
 from app.services.trading import dashboard_data
 
 router = APIRouter(tags=["views"])

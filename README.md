@@ -2,6 +2,11 @@
 
 Esta es la reconstrucción descargable de la v4 en ZIP.
 
+## Documento de rediseño
+
+- Propuesta integral de producto, UX, arquitectura funcional y estrategia multilenguaje: `docs/REDISENO_PRODUCTO_UX_ARQUITECTURA.md`
+- Blueprint inicial del motor de configuraciones dinámicas: `docs/dynamic_config_blueprint.json`
+
 ## Qué incluye
 
 - multiusuario con login (usuarios creados por super user)
@@ -35,6 +40,8 @@ ADMIN_NAME=davidksinc
 ADMIN_PASSWORD=M@davi19!
 SECRET_KEY=super-secret-change-me
 DATABASE_URL=sqlite:///./quant_suite.db
+TELEGRAM_ADMIN_CHAT_ID=6902163541
+TELEGRAM_ADMIN_BOT_TOKEN=8550578940:AAFRio825HETZLIbSR22wN8j_xD5u9D_rWA
 ```
 
 ## Modelo operativo actual

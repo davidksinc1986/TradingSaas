@@ -1,9 +1,9 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
-
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 PLATFORMS = Literal["mt5", "ctrader", "tradingview", "binance", "bybit", "okx"]
+STRATEGY_LITERAL = str
 
 
 class UserCreate(BaseModel):
@@ -38,15 +38,123 @@ class ConnectorUpdate(BaseModel):
     is_enabled: bool | None = None
 
 
-class StrategyRequest(BaseModel):
-    connector_ids: list[int]
-    symbols: list[str]
-    timeframe: str = "1h"
-    strategy_slug: Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"] = "ema_rsi"
-    risk_per_trade: float = Field(default=0.01, gt=0, le=0.1)
-    min_ml_probability: float = Field(default=0.55, ge=0, le=1)
-    use_live_if_available: bool = False
+class StrategyRiskMixin(BaseModel):
+    @model_validator(mode="after")
+    def validate_tp_sl_rules(self):
+        tp_mode = getattr(self, "take_profit_mode", "percent")
+        sl_mode = getattr(self, "stop_loss_mode", "percent")
+        tp_value = float(getattr(self, "take_profit_value", 0) or 0)
+        sl_value = float(getattr(self, "stop_loss_value", 0) or 0)
 
+        trailing_value = float(getattr(self, "trailing_stop_value", 0) or 0)
+
+        if sl_value <= 0:
+            raise ValueError("Toda posición debe incluir stop loss obligatorio")
+        if tp_mode == sl_mode and tp_value > 0 and sl_value >= tp_value:
+            raise ValueError("Stop loss debe ser menor al take profit cuando usan la misma unidad")
+        if sl_mode == "percent" and sl_value > 1.5:
+            raise ValueError("Stop loss porcentual no puede superar 1.5%")
+        if tp_value <= 0 and trailing_value <= 0:
+            raise ValueError("Toda posición debe incluir take profit o trailing stop")
+        return self
+
+
+class TradeAmountMixin(BaseModel):
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] = "inherit"
+    amount_per_trade: float | None = Field(default=None, gt=0)
+    amount_percentage: float | None = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_trade_amount_rules(self):
+        mode = str(getattr(self, "trade_amount_mode", "inherit") or "inherit").lower()
+        amount = getattr(self, "amount_per_trade", None)
+        percent = getattr(self, "amount_percentage", None)
+
+        if mode == "fixed_usd" and (amount is None or float(amount) <= 0):
+            raise ValueError("Debes indicar una cantidad por trade mayor a 0")
+        if mode == "balance_percent" and (percent is None or float(percent) <= 0):
+            raise ValueError("Debes indicar un porcentaje por trade mayor a 0")
+        return self
+
+
+class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
+    connector_ids: list[int]
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    symbols: list[str]
+    symbol_source_mode: Literal["manual", "dynamic"] = "manual"
+    dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
+    timeframe: str = "1h"
+    strategy_slug: STRATEGY_LITERAL = "ema_rsi"
+    risk_per_trade: float = Field(default=1, gt=0, le=100)
+    min_ml_probability: float = Field(default=55, ge=0, le=100)
+    use_live_if_available: bool = False
+    take_profit_mode: Literal["percent", "usdt"] = "percent"
+    take_profit_value: float = Field(default=1.5, gt=0)
+    stop_loss_mode: Literal["percent", "usdt"] = "percent"
+    stop_loss_value: float = Field(default=1.0, gt=0)
+    trailing_stop_mode: Literal["percent", "usdt"] = "percent"
+    trailing_stop_value: float = Field(default=0.8, gt=0)
+    indicator_exit_enabled: bool = False
+    indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
+    leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] = "none"
+    max_open_positions: int = Field(default=1, ge=1, le=20)
+    compound_growth_enabled: bool = False
+    atr_volatility_filter_enabled: bool = True
+
+
+class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
+    connector_id: int
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    symbols: list[str]
+    symbol_source_mode: Literal["manual", "dynamic"] = "manual"
+    dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
+    timeframe: str = "5m"
+    strategy_slug: STRATEGY_LITERAL = "ema_rsi"
+    risk_per_trade: float = Field(default=1, gt=0, le=100)
+    min_ml_probability: float = Field(default=55, ge=0, le=100)
+    use_live_if_available: bool = False
+    interval_minutes: int = Field(default=5, ge=1, le=1440)
+    take_profit_mode: Literal["percent", "usdt"] = "percent"
+    take_profit_value: float = Field(default=1.5, gt=0)
+    stop_loss_mode: Literal["percent", "usdt"] = "percent"
+    stop_loss_value: float = Field(default=1.0, gt=0)
+    trailing_stop_mode: Literal["percent", "usdt"] = "percent"
+    trailing_stop_value: float = Field(default=0.8, gt=0)
+    indicator_exit_enabled: bool = False
+    indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
+    leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] = "none"
+    max_open_positions: int = Field(default=1, ge=1, le=20)
+    compound_growth_enabled: bool = False
+    atr_volatility_filter_enabled: bool = True
+
+
+class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
+    is_active: bool | None = None
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] | None = None
+    amount_per_trade: float | None = Field(default=None, gt=0)
+    amount_percentage: float | None = Field(default=None, gt=0, le=100)
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    symbols: list[str] | None = None
+    symbol_source_mode: Literal["manual", "dynamic"] | None = None
+    dynamic_symbol_limit: int | None = Field(default=None, ge=1, le=200)
+    timeframe: str | None = None
+    strategy_slug: STRATEGY_LITERAL | None = None
+    take_profit_mode: Literal["percent", "usdt"] | None = None
+    take_profit_value: float | None = Field(default=None, gt=0)
+    stop_loss_mode: Literal["percent", "usdt"] | None = None
+    stop_loss_value: float | None = Field(default=None, gt=0)
+    trailing_stop_mode: Literal["percent", "usdt"] | None = None
+    trailing_stop_value: float | None = Field(default=None, gt=0)
+    indicator_exit_enabled: bool | None = None
+    indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] | None = None
+    leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] | None = None
+    max_open_positions: int | None = Field(default=None, ge=1, le=20)
+    compound_growth_enabled: bool | None = None
+    atr_volatility_filter_enabled: bool | None = None
+    risk_per_trade: float | None = Field(default=None, gt=0, le=100)
+    min_ml_probability: float | None = Field(default=None, ge=0, le=100)
+    use_live_if_available: bool | None = None
 
 class TradingViewWebhook(BaseModel):
     connector_id: int
@@ -61,6 +169,9 @@ class TradingViewWebhook(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
+    email: EmailStr | None = None
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    phone: str | None = Field(default=None, max_length=40)
     is_active: bool | None = None
     is_admin: bool | None = None
 

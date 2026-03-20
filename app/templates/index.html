@@ -14,6 +14,45 @@
       <img src="https://images.unsplash.com/photo-1642543492481-44e81e3914a7?auto=format&fit=crop&w=1400&q=80" alt="Gráfico financiero al alza" loading="lazy">
       <img src="https://images.unsplash.com/photo-1596720426673-e4e14290f0cc?auto=format&fit=crop&w=1400&q=80" alt="Petróleo y monedas internacionales" loading="lazy">
     </div>
+  </article>
+  <article class="card">
+    <h3>Ejemplo base</h3>
+    <p class="muted">3 apps · 15 símbolos · 20 movimientos diarios</p>
+    <p class="plan-price">USD $20/mes (referencia comercial)</p>
+    {% if default_quote %}
+    <small class="hint">Costo estimado de infraestructura + comisión base: USD ${{ '%.2f'|format(default_quote.estimated_total_usd) }}</small>
+    {% endif %}
+  </article>
+</section>
+
+<section class="card">
+  <h3>Planes disponibles</h3>
+  <div class="plan-grid">
+    {% for plan in plans %}
+    <article class="plan-card">
+      <h4>{{ plan.name }}</h4>
+      <p class="muted">{{ plan.description }}</p>
+      <ul>
+        <li>Apps: {{ plan.apps }}</li>
+        <li>Símbolos: {{ plan.symbols }}</li>
+        <li>Movimientos diarios: {{ plan.daily_movements }}</li>
+      </ul>
+      <strong>USD ${{ '%.2f'|format(plan.monthly_price_usd) }}/mes</strong>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h3>Calculadora de plan custom</h3>
+  <form id="public-estimator" class="form-grid admin-form-grid">
+    <label>Apps<input type="number" name="apps" min="0" value="3"></label>
+    <label>Símbolos<input type="number" name="symbols" min="0" value="15"></label>
+    <label>Movimientos diarios<input type="number" name="daily_movements" min="0" value="20"></label>
+    <button class="btn primary btn-sm public-calc-btn" type="submit">Calcular</button>
+  </form>
+  <div id="public-estimate-result" class="status-msg" style="margin-top:10px;">
+    Completa valores y presiona calcular.
   </div>
 
   <div class="stack">
@@ -36,4 +75,86 @@
     </div>
   </div>
 </section>
+
+<section class="card panel faq-panel faq-bottom">
+  <h3>Preguntas frecuentes</h3>
+  <details open>
+    <summary>¿Qué hace esta plataforma?</summary>
+    <p>Centraliza conectores, símbolos, ejecución y seguimiento para que operes con enfoque profesional.</p>
+  </details>
+  <details>
+    <summary>¿Me ayuda a crecer de forma consistente?</summary>
+    <p>Sí. Está pensada para ordenar tu proceso, medir resultados y mejorar decisiones con disciplina.</p>
+  </details>
+  <details>
+    <summary>¿Mis datos están protegidos?</summary>
+    <p>Cada usuario ve solo su información; la administración global queda restringida al panel de admin.</p>
+  </details>
+  <details>
+    <summary>¿Puedo comenzar aunque aún esté aprendiendo?</summary>
+    <p>Claro. La app guía cada paso para que puedas iniciar con confianza y escalar tu operación progresivamente.</p>
+  </details>
+</section>
+
+<script>
+(function(){
+  const slider=document.getElementById('hero-slider');
+  if(!slider) return;
+  const slides=Array.from(slider.querySelectorAll('.hero-slide'));
+  let index=0;
+  setInterval(()=>{
+    slides[index].classList.remove('active');
+    index=(index+1)%slides.length;
+    slides[index].classList.add('active');
+  },3500);
+})();
+
+(function(){
+  const form=document.getElementById('public-estimator');
+  const output=document.getElementById('public-estimate-result');
+  if(!form||!output) return;
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(form);
+    const payload = {
+      apps:Number(fd.get('apps')||0),
+      symbols:Number(fd.get('symbols')||0),
+      daily_movements:Number(fd.get('daily_movements')||0)
+    };
+    try{
+      const res = await fetch('/api/public/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      output.classList.add('status-ok');
+      output.classList.remove('status-error');
+      output.innerHTML = `Infraestructura estimada: <strong>USD $${data.infra_cost_usd.toFixed(2)}</strong> · RAM ${data.estimated_ram_gb} GB · Disco ${data.estimated_disk_gb} GB · Comisión base USD $${data.base_commission_usd.toFixed(2)} · <strong>Total USD $${data.estimated_total_usd.toFixed(2)}/mes</strong>`;
+    }catch(err){
+      output.classList.add('status-error');
+      output.classList.remove('status-ok');
+      output.textContent='No se pudo calcular en este momento.';
+    }
+  });
+})();
+
+(function(){
+  const form=document.getElementById('public-profit-calculator');
+  const output=document.getElementById('public-profit-result');
+  if(!form||!output) return;
+  form.addEventListener('submit',(e)=>{
+    e.preventDefault();
+    const fd=new FormData(form);
+    const investment=Math.max(0,Number(fd.get('investment')||0));
+    const apps=Math.max(1,Number(fd.get('apps')||1));
+    const strategies=Math.max(1,Number(fd.get('strategies')||1));
+    const conservativeMonthlyYield=0.018;
+    const efficiencyFactor=Math.min(1.8,(apps*0.08)+(strategies*0.06));
+    const avgProfit=investment*conservativeMonthlyYield*efficiencyFactor;
+    const pct=(investment>0)?(avgProfit/investment*100):0;
+    output.classList.add('status-ok');
+    output.classList.remove('status-error');
+    output.innerHTML=`Ganancia promedio estimada: <strong>${avgProfit.toFixed(2)} USDT/mes</strong> · rendimiento aproximado <strong>${pct.toFixed(2)}%</strong> mensual.`;
+  });
+})();
+
+</script>
 {% endblock %}
