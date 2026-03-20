@@ -93,7 +93,6 @@ function renderPolicies(policies) {
           </select>
         </label>
         <label>Top symbols<input name="top_symbols" value="${(policy.top_symbols || []).join(', ')}"></label>
-        <label>Allowed symbols<input name="allowed_symbols" value="${(policy.allowed_symbols || []).join(', ')}"></label>
         <button class="btn btn-sm primary" type="submit">Guardar política</button>
       </div>
     </form>
@@ -111,7 +110,6 @@ function renderPolicies(policies) {
             is_enabled_global: fd.get('is_enabled_global') === 'true',
             allow_manual_symbols: fd.get('allow_manual_symbols') === 'true',
             top_symbols: String(fd.get('top_symbols') || '').split(',').map((x) => x.trim()).filter(Boolean),
-            allowed_symbols: String(fd.get('allowed_symbols') || '').split(',').map((x) => x.trim()).filter(Boolean),
           }),
         });
         setFeedback(`Política ${form.dataset.platform} actualizada.`, 'ok');
@@ -203,8 +201,29 @@ async function refreshSelectedUserProfile() {
         <label>Administrador
           <select name="is_admin"><option value="true" ${profile.user.is_admin ? 'selected' : ''}>Sí</option><option value="false" ${!profile.user.is_admin ? 'selected' : ''}>No</option></select>
         </label>
+        <label class="checkbox"><input name="telegram_alerts_enabled" type="checkbox" ${profile.user.telegram_alerts_enabled ? 'checked' : ''}> Telegram habilitado</label>
+        <label>Telegram bot key<input name="telegram_bot_key" value="${profile.user.telegram_bot_key || ''}"></label>
+        <label>Telegram chat id<input name="telegram_chat_id" value="${profile.user.telegram_chat_id || ''}"></label>
         <button class="btn btn-sm primary" type="submit">Guardar usuario</button>
       </form>
+
+      <div class="connector-item fade-in-up">
+        <strong>Telegram y diagnóstico rápido</strong>
+        <div class="admin-section-grid" style="margin-top:12px;">
+          <article class="admin-mini-card">
+            <strong>Telegram</strong>
+            <small>${profile.telegram?.alerts_enabled ? 'Alertas activas' : 'Alertas inactivas'}</small>
+            <small>Bot: ${profile.telegram?.bot_key || 'Sin configurar'}</small>
+            <small>Chat: ${profile.telegram?.chat_id || 'Sin configurar'}</small>
+          </article>
+          <article class="admin-mini-card">
+            <strong>Diagnóstico</strong>
+            <small>Conectores: ${(profile.connectors || []).length}</small>
+            <small>Sesiones: ${(profile.recent_sessions || []).length}</small>
+            <small>Logs recientes: ${(profile.recent_runs || []).length}</small>
+          </article>
+        </div>
+      </div>
 
       <div class="connector-item fade-in-up">
         <strong>Conectores del usuario</strong>
@@ -228,6 +247,28 @@ async function refreshSelectedUserProfile() {
             </form>
           `;
         }).join('')}
+      </div>
+
+      <div class="connector-item fade-in-up">
+        <strong>Errores, sesiones y reportes recientes</strong>
+        <div class="admin-section-grid" style="margin-top:12px;">
+          ${(profile.recent_sessions || []).map((session) => `
+            <article class="admin-mini-card">
+              <strong>${session.strategy_slug}</strong>
+              <small>${session.connector_label} · ${session.market_type}</small>
+              <small>${session.is_active ? 'Activa' : 'Pausada'} · ${session.last_status || '-'}</small>
+              <small>${session.last_error || 'Sin error reportado'}</small>
+            </article>
+          `).join('') || '<small class="hint">Sin sesiones recientes.</small>'}
+          ${(profile.recent_runs || []).map((run) => `
+            <article class="admin-mini-card">
+              <strong>${run.display_symbol || run.symbol}</strong>
+              <small>${run.connector_label}</small>
+              <small>${run.status}</small>
+              <small>${run.reason}</small>
+            </article>
+          `).join('') || '<small class="hint">Sin logs recientes.</small>'}
+        </div>
       </div>
 
       <form id="strategy-control-form" class="connector-item fade-in-up form-grid">

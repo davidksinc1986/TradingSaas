@@ -128,7 +128,7 @@ class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
+class BotSessionUpdate(BaseModel):
     is_active: bool | None = None
     trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] | None = None
     amount_per_trade: float | None = Field(default=None, gt=0)
@@ -155,6 +155,30 @@ class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
     risk_per_trade: float | None = Field(default=None, gt=0, le=100)
     min_ml_probability: float | None = Field(default=None, ge=0, le=100)
     use_live_if_available: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_partial_rules(self):
+        mode = getattr(self, "trade_amount_mode", None)
+        amount = getattr(self, "amount_per_trade", None)
+        percent = getattr(self, "amount_percentage", None)
+        if mode == "fixed_usd" and (amount is None or float(amount) <= 0):
+            raise ValueError("Debes indicar una cantidad por trade mayor a 0")
+        if mode == "balance_percent" and (percent is None or float(percent) <= 0):
+            raise ValueError("Debes indicar un porcentaje por trade mayor a 0")
+        tp_mode = getattr(self, "take_profit_mode", None)
+        sl_mode = getattr(self, "stop_loss_mode", None)
+        tp_value = getattr(self, "take_profit_value", None)
+        sl_value = getattr(self, "stop_loss_value", None)
+        trailing_value = getattr(self, "trailing_stop_value", None)
+        if sl_value is not None and float(sl_value) <= 0:
+            raise ValueError("Toda posición debe incluir stop loss obligatorio")
+        if tp_value is not None and float(tp_value) <= 0 and trailing_value is not None and float(trailing_value) <= 0:
+            raise ValueError("Toda posición debe incluir take profit o trailing stop")
+        if tp_value is not None and sl_value is not None and tp_mode and sl_mode and tp_mode == sl_mode and float(sl_value) >= float(tp_value):
+            raise ValueError("Stop loss debe ser menor al take profit cuando usan la misma unidad")
+        if sl_mode == "percent" and sl_value is not None and float(sl_value) > 1.5:
+            raise ValueError("Stop loss porcentual no puede superar 1.5%")
+        return self
 
 
 class BotSessionCopyPayload(BaseModel):
@@ -198,6 +222,10 @@ class AdminUserUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=40)
     is_active: bool | None = None
     is_admin: bool | None = None
+    alert_language: str | None = None
+    telegram_alerts_enabled: bool | None = None
+    telegram_bot_key: str | None = None
+    telegram_chat_id: str | None = None
 
 
 class AdminUserCreate(BaseModel):
@@ -220,7 +248,6 @@ class AdminPolicyUpdate(BaseModel):
     is_enabled_global: bool | None = None
     allow_manual_symbols: bool | None = None
     top_symbols: list[str] | None = None
-    allowed_symbols: list[str] | None = None
 
 
 class AdminStrategyControlUpdate(BaseModel):

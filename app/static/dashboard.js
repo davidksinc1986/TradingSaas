@@ -264,8 +264,11 @@ function renderConnectorFields() {
   const platform = document.getElementById('connector-platform')?.value || 'binance';
   const marketType = document.getElementById('connector-market-type');
   const fieldsWrap = document.getElementById('connector-friendly-fields');
+  const previousMarketType = marketType?.value || 'spot';
   if (marketType) {
-    marketType.innerHTML = (PLATFORM_MARKET_TYPES[platform] || ['spot']).map((type) => `<option value="${type}">${prettyMarketType(type)}</option>`).join('');
+    const options = PLATFORM_MARKET_TYPES[platform] || ['spot'];
+    marketType.innerHTML = options.map((type) => `<option value="${type}">${prettyMarketType(type)}</option>`).join('');
+    marketType.value = options.includes(previousMarketType) ? previousMarketType : options[0];
   }
   if (fieldsWrap) {
     const selectedMarketType = marketType?.value || 'spot';
@@ -376,7 +379,7 @@ function renderProfile() {
   document.getElementById('profile-phone').value = user.phone || '';
   document.getElementById('profile-alert-language').value = user.alert_language || 'es';
   document.getElementById('profile-telegram-enabled').checked = Boolean(user.telegram_alerts_enabled);
-  document.getElementById('profile-telegram-bot-key').value = user.has_telegram_bot_key ? '••••••••' : '';
+  document.getElementById('profile-telegram-bot-key').value = user.telegram_bot_key || '';
   document.getElementById('profile-telegram-chat-id').value = user.telegram_chat_id || '';
   document.getElementById('trade-amount-mode').value = user.trade_amount_mode || 'fixed_usd';
   document.getElementById('fixed-trade-amount-usd').value = Number(user.fixed_trade_amount_usd || 10);
@@ -477,6 +480,7 @@ function renderBotSessions() {
             <span>${prettyPlatform(session.platform)}</span>
             <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
           </div>
+          <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
         </div>
         <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
       </div>
@@ -570,21 +574,43 @@ function renderExecutionLogs() {
   const body = document.querySelector('#execution-logs-table tbody');
   if (!body) return;
   if (!state.executionLogs.length) {
-    body.innerHTML = '<tr><td colspan="6"><small class="hint">Sin logs todavía.</small></td></tr>';
+    body.innerHTML = '<tr><td colspan="8"><small class="hint">Sin logs todavía.</small></td></tr>';
     return;
   }
   body.innerHTML = state.executionLogs.map((item) => `
     <tr>
       <td>${formatDate(item.created_at)}</td>
-      <td>${item.symbol || '-'}</td>
+      <td>${prettyPlatform(item.platform)} · ${prettyMarketType(item.market_type, item.connector_id)}</td>
+      <td>${prettyLabel(item.connector_label, '-')}</td>
+      <td>${item.display_symbol || displaySymbol(item.symbol)}</td>
       <td>${item.timeframe || '-'}</td>
       <td>${item.signal || '-'}</td>
-      <td>${item.status || '-'}</td>
+      <td>${item.status_reason || item.status || '-'}</td>
       <td>${Number(item.ml_probability || 0).toFixed(3)}</td>
     </tr>
   `).join('');
   const meta = document.getElementById('execution-logs-refresh-meta');
   if (meta) meta.textContent = `Mostrando ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
+}
+
+function renderActivity() {
+  const activity = state.activity || {};
+  const summary = activity.summary || {};
+  const equityWrap = document.getElementById('activity-equity-chart');
+  const monthlyWrap = document.getElementById('activity-monthly-chart');
+  const metricsWrap = document.getElementById('activity-performance-cards');
+  if (equityWrap) equityWrap.innerHTML = svgLineChart(activity.equity_curve || [], { color: '#f0b90b', fill: 'rgba(240,185,11,.12)' });
+  if (monthlyWrap) monthlyWrap.innerHTML = svgLineChart(activity.monthly_returns || [], { color: '#38bdf8', fill: 'rgba(56,189,248,.12)' });
+  if (metricsWrap) {
+    metricsWrap.innerHTML = [
+      activitySummaryCard('Sharpe', Number(summary.sharpe_ratio || 0).toFixed(2), 'accent'),
+      activitySummaryCard('Max DD', `${Number(summary.max_drawdown || 0).toFixed(2)}`, 'danger'),
+      activitySummaryCard('Profit factor', Number(summary.profit_factor || 0).toFixed(2), 'ok'),
+      activitySummaryCard('Win rate', `${Number(summary.win_rate || 0).toFixed(1)}%`, 'accent'),
+      activitySummaryCard('Total trades', Number(summary.total_trades || 0), 'neutral'),
+      activitySummaryCard('Avg win/loss', `${Number(summary.average_win || 0).toFixed(2)} / ${Number(summary.average_loss || 0).toFixed(2)}`, 'neutral'),
+    ].join('');
+  }
 }
 
 function renderSummary() {
@@ -610,23 +636,26 @@ function renderSummary() {
 }
 
 async function refreshDashboard() {
-  const [me, summary, connectors, botSessions, executionLogs] = await Promise.all([
+  const [me, summary, connectors, botSessions, executionLogs, activity] = await Promise.all([
     api('/api/me'),
     api('/api/dashboard'),
     api('/api/connectors'),
     api('/api/bot-sessions'),
     api('/api/execution-logs?limit=25'),
+    api('/api/activity/performance'),
   ]);
   state.me = me;
   state.summary = summary;
   state.connectors = Array.isArray(connectors) ? connectors : [];
   state.botSessions = Array.isArray(botSessions) ? botSessions : [];
   state.executionLogs = Array.isArray(executionLogs) ? executionLogs : [];
+  state.activity = activity || null;
   renderProfile();
   renderConnectors();
   renderBotSessions();
   renderExecutionLogs();
   renderSummary();
+  renderActivity();
 }
 
 function collectProfilePayload() {
@@ -638,7 +667,7 @@ function collectProfilePayload() {
     phone: fd.get('phone'),
     alert_language: fd.get('alert_language'),
     telegram_alerts_enabled: fd.get('telegram_alerts_enabled') === 'on',
-    telegram_bot_key: botKey.startsWith('••••') ? undefined : botKey,
+    telegram_bot_key: botKey,
     telegram_chat_id: fd.get('telegram_chat_id'),
   };
 }

@@ -76,6 +76,12 @@ ALL_STRATEGIES = list(AVAILABLE_STRATEGIES)
 
 logger = logging.getLogger("trading_saas.api")
 BOT_SESSION_INITIAL_DELAY_SECONDS = 10
+FUTURES_ONLY_CONNECTOR_CONFIG_KEYS = {
+    "futures_margin_mode",
+    "futures_position_mode",
+    "futures_leverage",
+    "leverage_profile",
+}
 
 
 def _extract_http_error_detail(exc: HTTPException) -> str:
@@ -101,6 +107,59 @@ def _safe_symbols(value) -> list[str]:
     else:
         items = []
     return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _display_symbol(value: str | None) -> str:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return "-"
+    for suffix in ("/USDT", "USDT"):
+        if raw.endswith(suffix):
+            clean = raw[: -len(suffix)]
+            return clean.rstrip("/") or raw
+    return raw
+
+
+def _translate_status_reason(reason_code: str | None) -> str:
+    mapping = {
+        "market_data_anomaly": "circuit_breaker: volatilidad_excesiva",
+        "portfolio_heat_limit": "circuit_breaker: riesgo_global_alto",
+        "symbol_concentration_limit": "circuit_breaker: riesgo_global_alto",
+        "max_open_positions_reached": "circuit_breaker: overtrading",
+        "max_open_positions": "circuit_breaker: overtrading",
+        "trade_size_collapsed": "circuit_breaker: riesgo_global_alto",
+        "balance_unavailable": "circuit_breaker: problemas_tecnicos",
+        "missing_market_data": "circuit_breaker: problemas_tecnicos",
+        "exchange_environment_not_ready": "circuit_breaker: problemas_tecnicos",
+        "strategy_hold": "circuit_breaker: mercado_lateral_ruidoso",
+        "low_confidence": "circuit_breaker: baja_calidad_de_senal",
+        "short_disabled": "circuit_breaker: riesgo_global_alto",
+        "spot_sell_without_inventory": "circuit_breaker: riesgo_global_alto",
+        "invalid_symbol": "circuit_breaker: problemas_tecnicos",
+        "last_candle_not_confirmed": "circuit_breaker: baja_calidad_de_senal",
+        "rejected_invalid_quantity": "circuit_breaker: problemas_tecnicos",
+        "skipped_min_qty": "circuit_breaker: problemas_tecnicos",
+        "skipped_min_notional": "circuit_breaker: drawdown_reciente",
+        "market_price_mismatch": "circuit_breaker: eventos_extremos_de_mercado",
+        "suspicious_price_scale_detected": "circuit_breaker: eventos_extremos_de_mercado",
+        "risk_engine_blocked": "circuit_breaker: riesgo_global_alto",
+        "ok": "operativa_normal",
+    }
+    return mapping.get(str(reason_code or "ok"), f"circuit_breaker: {str(reason_code or 'ok')}")
+
+
+def _trade_run_primary_reason(run: TradeRun | None) -> str:
+    if run is None:
+        return "ok"
+    note = str(getattr(run, "notes", "") or "").strip()
+    if not note or not note.startswith("{"):
+        return "ok"
+    try:
+        parsed = json.loads(note)
+    except json.JSONDecodeError:
+        return "ok"
+    summary = parsed.get("decision_summary") or {}
+    return str(summary.get("primary_reason") or parsed.get("reason_code") or "ok")
 
 
 def _safe_float(value, fallback: float = 0.0) -> float:
@@ -131,6 +190,63 @@ def _resolve_connector_market_type(*, platform: str, market_type: str | None = N
 
 def _sync_connector_config_market_type(config: dict | None, market_type: str) -> dict:
     return sync_connector_config_market_type(config, market_type)
+
+
+def _merge_connector_config(current: dict | None, incoming: dict | None, *, market_type: str) -> dict:
+    merged = dict(current or {})
+    for key, value in dict(incoming or {}).items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    if market_type != "futures":
+        for key in FUTURES_ONLY_CONNECTOR_CONFIG_KEYS:
+            merged.pop(key, None)
+    return _sync_connector_config_market_type(merged, market_type)
+
+
+def _normalize_session_trade_amount_payload(
+    *,
+    mode: str | None,
+    amount_per_trade: float | None,
+    amount_percentage: float | None,
+    current_mode: str | None = None,
+    current_amount_per_trade: float | None = None,
+    current_amount_percentage: float | None = None,
+) -> dict[str, float | str | None]:
+    resolved_mode = str(mode or current_mode or "inherit").lower()
+    resolved_amount_per_trade = amount_per_trade if amount_per_trade is not None else current_amount_per_trade
+    resolved_amount_percentage = amount_percentage if amount_percentage is not None else current_amount_percentage
+
+    if resolved_mode == "inherit":
+        return {
+            "trade_amount_mode": "inherit",
+            "amount_per_trade": None,
+            "amount_percentage": None,
+        }
+    if resolved_mode == "fixed_usd":
+        if resolved_amount_per_trade is None or _safe_float(resolved_amount_per_trade) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="PRECHECK_CONFIG_NOT_PERSISTED: amount_per_trade es obligatorio cuando trade_amount_mode=fixed_usd",
+            )
+        return {
+            "trade_amount_mode": "fixed_usd",
+            "amount_per_trade": _safe_float(resolved_amount_per_trade),
+            "amount_percentage": None,
+        }
+    if resolved_mode == "balance_percent":
+        if resolved_amount_percentage is None or _safe_float(resolved_amount_percentage) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="PRECHECK_CONFIG_NOT_PERSISTED: amount_percentage es obligatorio cuando trade_amount_mode=balance_percent",
+            )
+        return {
+            "trade_amount_mode": "balance_percent",
+            "amount_per_trade": None,
+            "amount_percentage": _safe_float(resolved_amount_percentage),
+        }
+    raise HTTPException(status_code=400, detail=f"Unsupported trade_amount_mode: {resolved_mode}")
 
 
 def _normalize_timeframe(value: str | None) -> str:
@@ -268,6 +384,7 @@ def me(user=Depends(current_user), db=Depends(get_db)):
         "admin_alerts_enabled": bool((settings.telegram_admin_bot_token or "").strip() and (settings.telegram_admin_chat_id or "").strip()),
         "telegram_alerts_enabled": bool(getattr(user, "telegram_alerts_enabled", False)),
         "has_telegram_bot_key": bool((decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip()),
+        "telegram_bot_key": (decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip() or None,
         "telegram_chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip() or None,
         "trade_amount_mode": user.trade_amount_mode or "fixed_usd",
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
@@ -299,12 +416,10 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         user.telegram_alerts_enabled = bool(payload.get("telegram_alerts_enabled"))
     if "telegram_bot_key" in payload:
         bot_key = str(payload.get("telegram_bot_key") or "").strip()
-        if bot_key:
-            user.telegram_bot_token_encrypted = encrypt_payload({"value": bot_key})
+        user.telegram_bot_token_encrypted = encrypt_payload({"value": bot_key}) if bot_key else None
     if "telegram_chat_id" in payload:
         chat_id = str(payload.get("telegram_chat_id") or "").strip()
-        if chat_id:
-            user.telegram_chat_id_encrypted = encrypt_payload({"value": chat_id})
+        user.telegram_chat_id_encrypted = encrypt_payload({"value": chat_id}) if chat_id else None
 
     next_trade_mode = payload.get("trade_amount_mode")
     if next_trade_mode is not None:
@@ -342,7 +457,9 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         "alert_language": normalize_alert_locale(user.alert_language),
         "admin_alerts_enabled": bool((settings.telegram_admin_bot_token or "").strip() and (settings.telegram_admin_chat_id or "").strip()),
         "telegram_alerts_enabled": bool(getattr(user, "telegram_alerts_enabled", False)),
-        "has_telegram_bot_key": bool((user.telegram_bot_token_encrypted or "")),
+        "has_telegram_bot_key": bool((decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip()),
+        "telegram_bot_key": (decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip() or None,
+        "telegram_chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip() or None,
         "trade_amount_mode": user.trade_amount_mode,
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
@@ -451,7 +568,7 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
         mode=payload.mode,
         market_type=market_type,
         symbols_json={"symbols": payload.symbols},
-        config_json=_sync_connector_config_market_type(payload.config, market_type),
+        config_json=_merge_connector_config({}, payload.config, market_type=market_type),
         encrypted_secret_blob=encrypt_payload(payload.secrets),
     )
     ensure_connector_market_type_state(connector)
@@ -486,9 +603,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
         connector.label = payload.label
     if payload.mode is not None:
         connector.mode = payload.mode
-    next_config = dict(connector.config_json or {})
-    if payload.config is not None:
-        next_config.update(payload.config)
+    next_config = _merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type)
     connector.market_type = _resolve_connector_market_type(
         platform=connector.platform,
         market_type=payload.market_type or getattr(connector, "market_type", None),
@@ -496,12 +611,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     )
     if payload.symbols is not None:
         connector.symbols_json = {"symbols": payload.symbols}
-    if payload.config is not None:
-        current = connector.config_json or {}
-        current.update(payload.config)
-        connector.config_json = _sync_connector_config_market_type(current, connector.market_type)
-    else:
-        connector.config_json = _sync_connector_config_market_type(next_config, connector.market_type)
+    connector.config_json = _merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type)
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -585,9 +695,11 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
 
     if payload.config is not None:
-        current = connector.config_json or {}
-        current.update(payload.config)
-        connector.config_json = current
+        connector.config_json = _merge_connector_config(
+            connector.config_json,
+            payload.config,
+            market_type=normalize_market_type(getattr(connector, "market_type", None) or "spot"),
+        )
     ensure_connector_market_type_state(connector, persist=True, db=db)
 
     db.commit()
@@ -770,6 +882,9 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "capital_per_operation": capital,
                 "capital_currency": "USDT",
                 "trade_amount_mode": effective_mode,
+                "configured_trade_amount_mode": session_mode,
+                "configured_amount_per_trade": _safe_float(getattr(session, "amount_per_trade", None), 0.0) or None,
+                "configured_amount_percentage": _safe_float(getattr(session, "amount_percentage", None), 0.0) or None,
                 "created_at": _safe_iso(session.created_at),
             })
         except Exception as exc:
@@ -841,6 +956,11 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     trade_amount_settings = _resolve_trade_amount_settings(user, payload)
+    normalized_amounts = _normalize_session_trade_amount_payload(
+        mode=str(trade_amount_settings["trade_amount_mode"]),
+        amount_per_trade=_safe_float(trade_amount_settings["amount_per_trade"], 0.0) or None,
+        amount_percentage=_safe_float(trade_amount_settings["amount_percentage"], 0.0) or None,
+    )
     resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
 
     normalized_timeframe = _normalize_timeframe(payload.timeframe)
@@ -857,9 +977,9 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         },
         interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
         risk_per_trade=risk_value,
-        trade_amount_mode=trade_amount_settings["trade_amount_mode"],
-        amount_per_trade=trade_amount_settings["amount_per_trade"],
-        amount_percentage=trade_amount_settings["amount_percentage"],
+        trade_amount_mode=str(normalized_amounts["trade_amount_mode"]),
+        amount_per_trade=normalized_amounts["amount_per_trade"],
+        amount_percentage=normalized_amounts["amount_percentage"],
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
         take_profit_mode=payload.take_profit_mode,
@@ -936,12 +1056,18 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     if payload.risk_per_trade is not None:
         session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
-    if payload.trade_amount_mode is not None:
-        session.trade_amount_mode = payload.trade_amount_mode
-    if payload.amount_per_trade is not None:
-        session.amount_per_trade = payload.amount_per_trade
-    if payload.amount_percentage is not None:
-        session.amount_percentage = payload.amount_percentage
+    if payload.trade_amount_mode is not None or payload.amount_per_trade is not None or payload.amount_percentage is not None:
+        normalized_amounts = _normalize_session_trade_amount_payload(
+            mode=payload.trade_amount_mode,
+            amount_per_trade=payload.amount_per_trade,
+            amount_percentage=payload.amount_percentage,
+            current_mode=getattr(session, "trade_amount_mode", "inherit"),
+            current_amount_per_trade=getattr(session, "amount_per_trade", None),
+            current_amount_percentage=getattr(session, "amount_percentage", None),
+        )
+        session.trade_amount_mode = str(normalized_amounts["trade_amount_mode"])
+        session.amount_per_trade = normalized_amounts["amount_per_trade"]
+        session.amount_percentage = normalized_amounts["amount_percentage"]
     if payload.min_ml_probability is not None:
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:
@@ -1119,16 +1245,22 @@ def download_execution_logs(limit: int = 500, db=Depends(get_db), user=Depends(c
 
     stream = io.StringIO()
     writer = csv.writer(stream)
-    writer.writerow(["id", "created_at", "connector_id", "symbol", "timeframe", "signal", "status", "ml_probability", "quantity", "notes_json"])
+    writer.writerow(["id", "created_at", "connector_id", "platform", "market_type", "connector_label", "symbol", "display_symbol", "timeframe", "signal", "status", "status_reason", "ml_probability", "quantity", "notes_json"])
     for run in runs:
+        connector = db.query(Connector).filter(Connector.id == run.connector_id).first()
         writer.writerow([
             run.id,
             run.created_at.isoformat() if run.created_at else "",
             run.connector_id,
+            connector.platform if connector else "-",
+            ensure_connector_market_type_state(connector, persist=False) if connector else "spot",
+            connector.label if connector else "-",
             run.symbol,
+            _display_symbol(run.symbol),
             run.timeframe,
             run.signal,
             run.status,
+            _translate_status_reason(_trade_run_primary_reason(run)),
             run.ml_probability,
             run.quantity,
             run.notes or "",
@@ -1497,14 +1629,23 @@ def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_us
             parsed_note = json.loads(note) if note else {}
         except json.JSONDecodeError:
             parsed_note = {"raw_notes": note}
+        connector = db.query(Connector).filter(Connector.id == run.connector_id).first()
+        decision_summary = parsed_note.get("decision_summary") or {}
+        reason_code = decision_summary.get("primary_reason") or parsed_note.get("reason_code") or "ok"
         payload.append({
             "id": run.id,
             "connector_id": run.connector_id,
+            "connector_label": connector.label if connector else "-",
+            "platform": connector.platform if connector else "-",
+            "market_type": ensure_connector_market_type_state(connector, persist=False) if connector else "spot",
             "symbol": run.symbol,
+            "display_symbol": _display_symbol(run.symbol),
             "strategy_slug": run.strategy_slug,
             "timeframe": run.timeframe,
             "signal": run.signal,
             "status": run.status,
+            "status_reason_code": reason_code,
+            "status_reason": _translate_status_reason(reason_code),
             "ml_probability": run.ml_probability,
             "quantity": run.quantity,
             "created_at": run.created_at.isoformat(),
@@ -1733,6 +1874,8 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
     grants = db.query(UserPlatformGrant).filter(UserPlatformGrant.user_id == user_id).all()
     grants_by_platform = {g.platform: g for g in grants}
     strategy_control = _ensure_strategy_control(db, user.id)
+    recent_runs = db.query(TradeRun).filter(TradeRun.user_id == user_id).order_by(TradeRun.created_at.desc()).limit(8).all()
+    recent_sessions = db.query(BotSession).filter(BotSession.user_id == user_id).order_by(BotSession.updated_at.desc()).limit(6).all()
 
     return {
         "user": {
@@ -1743,6 +1886,10 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "is_admin": user.is_admin,
             "is_active": user.is_active,
             "is_root": _is_root_admin(user),
+            "alert_language": normalize_alert_locale(user.alert_language),
+            "telegram_alerts_enabled": bool(user.telegram_alerts_enabled),
+            "telegram_bot_key": (decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip() or None,
+            "telegram_chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip() or None,
         },
         "grants": [{
             "platform": grant.platform,
@@ -1773,7 +1920,32 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "managed_by_admin": strategy_control.managed_by_admin,
             "allowed_strategies": (strategy_control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
             "all_strategies": ALL_STRATEGIES,
-        }
+        },
+        "telegram": {
+            "alerts_enabled": bool(user.telegram_alerts_enabled),
+            "bot_key": (decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip() or None,
+            "chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip() or None,
+        },
+        "recent_runs": [{
+            "id": run.id,
+            "created_at": _safe_iso(run.created_at),
+            "connector_id": run.connector_id,
+            "connector_label": next((c.label for c in connectors if c.id == run.connector_id), "-"),
+            "symbol": run.symbol,
+            "display_symbol": _display_symbol(run.symbol),
+            "status": run.status,
+            "reason": _translate_status_reason(_trade_run_primary_reason(run)),
+        } for run in recent_runs],
+        "recent_sessions": [{
+            "id": session.id,
+            "strategy_slug": session.strategy_slug,
+            "connector_label": next((c.label for c in connectors if c.id == session.connector_id), "-"),
+            "market_type": normalize_market_type(session.market_type),
+            "is_active": bool(session.is_active),
+            "last_status": session.last_status,
+            "last_error": session.last_error,
+            "updated_at": _safe_iso(session.updated_at),
+        } for session in recent_sessions],
     }
 
 
@@ -1821,7 +1993,7 @@ def admin_list_policies(db=Depends(get_db), _: User = Depends(admin_user)):
         "is_enabled_global": p.is_enabled_global,
         "allow_manual_symbols": p.allow_manual_symbols,
         "top_symbols": (p.top_symbols_json or {}).get("symbols", []),
-        "allowed_symbols": (p.allowed_symbols_json or {}).get("symbols", []),
+        "allowed_symbols": [],
         "guide": p.guide_json,
     } for p in policies]
 
@@ -1837,8 +2009,7 @@ def admin_update_policy(platform: str, payload: AdminPolicyUpdate, db=Depends(ge
         policy.allow_manual_symbols = payload.allow_manual_symbols
     if payload.top_symbols is not None:
         policy.top_symbols_json = {"symbols": payload.top_symbols}
-    if payload.allowed_symbols is not None:
-        policy.allowed_symbols_json = {"symbols": payload.allowed_symbols}
+    policy.allowed_symbols_json = {"symbols": []}
     db.commit()
     return {"ok": True}
 
