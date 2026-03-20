@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.models import BotSession, Connector
 from app.services.connector_state import ensure_connector_market_type_state, normalize_market_type, resolve_runtime_market_type
 from app.services.position_lifecycle import run_position_lifecycle
+from app.services.strategies import get_strategy_rule
 from app.services.trading import run_strategy
 
 logger = logging.getLogger("trading_saas.bot_runner")
@@ -18,6 +19,29 @@ _WORKER_THREAD: threading.Thread | None = None
 
 def _now_utc() -> datetime:
     return datetime.utcnow()
+
+
+def _resolve_session_market_type(session: BotSession, connector: Connector | None) -> str:
+    explicit_market_type = None
+    if getattr(session, "market_type", None):
+        explicit_market_type = normalize_market_type(getattr(session, "market_type", None))
+
+    connector_market_type = None
+    if connector is not None:
+        connector_market_type = resolve_runtime_market_type(connector)
+
+    allowed_market_types = [
+        normalize_market_type(item)
+        for item in get_strategy_rule(getattr(session, "strategy_slug", "")).get("market_types", ["spot", "futures"])
+    ]
+    for candidate in (explicit_market_type, connector_market_type):
+        if candidate and candidate in allowed_market_types:
+            return candidate
+
+    if len(allowed_market_types) == 1:
+        return allowed_market_types[0]
+
+    return explicit_market_type or connector_market_type or "spot"
 
 
 def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
@@ -39,13 +63,9 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             processed += 1
             continue
 
-        connector_market_type = ensure_connector_market_type_state(connector, persist=True, db=db) if connector else "spot"
+        ensure_connector_market_type_state(connector, persist=True, db=db) if connector else "spot"
         session_market_type = normalize_market_type(getattr(session, "market_type", None))
-        resolved_market_type = resolve_runtime_market_type(
-            connector,
-            requested_market_type=session_market_type,
-            fallback_market_type=connector_market_type,
-        ) if connector else (session_market_type or "spot")
+        resolved_market_type = _resolve_session_market_type(session, connector)
 
         if session_market_type != resolved_market_type:
             session.market_type = resolved_market_type

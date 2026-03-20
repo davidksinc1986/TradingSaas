@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.db import get_db
@@ -121,6 +121,37 @@ def _interval_from_timeframe(timeframe: str, fallback: int = 5) -> int:
 
 def _normalize_market_type(value: str | None) -> str:
     return normalize_market_type(value)
+
+
+def _strategy_allowed_market_types(strategy_slug: str | None) -> list[str]:
+    rule = get_strategy_rule(str(strategy_slug or "").strip())
+    items = [normalize_market_type(item) for item in rule.get("market_types", ["spot", "futures"])]
+    return [item for item in items if item]
+
+
+def _resolve_effective_bot_session_market_type(
+    *,
+    strategy_slug: str | None,
+    connector: Connector | None = None,
+    session_market_type: str | None = None,
+) -> str:
+    explicit_market_type = None
+    if session_market_type is not None and str(session_market_type).strip():
+        explicit_market_type = _normalize_market_type(session_market_type)
+
+    connector_market_type = None
+    if connector is not None:
+        connector_market_type = resolve_runtime_market_type(connector)
+
+    allowed_market_types = _strategy_allowed_market_types(strategy_slug)
+    for candidate in (explicit_market_type, connector_market_type):
+        if candidate and (not allowed_market_types or candidate in allowed_market_types):
+            return candidate
+
+    if len(allowed_market_types) == 1:
+        return allowed_market_types[0]
+
+    return explicit_market_type or connector_market_type or "spot"
 
 
 def _resolve_connector_market_type(*, platform: str, market_type: str | None = None, config: dict | None = None) -> str:
@@ -735,13 +766,13 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
     for session in sessions:
         try:
             connector = session.connector
-            if connector:
-                resolved_market_type = resolve_runtime_market_type(
-                    connector,
-                    requested_market_type=getattr(session, "market_type", None),
-                )
-            else:
-                resolved_market_type = _normalize_market_type(getattr(session, "market_type", None) or "spot")
+            resolved_market_type = _resolve_effective_bot_session_market_type(
+                strategy_slug=getattr(session, "strategy_slug", None),
+                connector=connector,
+                session_market_type=getattr(session, "market_type", None),
+            )
+            if getattr(session, "market_type", None) != resolved_market_type:
+                session.market_type = resolved_market_type
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
             session_user = getattr(session, "user", None) or user
@@ -755,6 +786,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "market_type": _normalize_market_type(
                     resolved_market_type or getattr(session, "market_type", None)
                 ),
+                "connector_market_type": _normalize_market_type(resolve_runtime_market_type(connector)) if connector else None,
                 "strategy_slug": session.strategy_slug,
                 "timeframe": session.timeframe,
                 "symbols": symbols,
@@ -847,7 +879,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
 
 
 @router.post("/bot-sessions")
-def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depends(current_user)):
+def create_bot_session(payload: BotSessionCreate, background_tasks: BackgroundTasks, db=Depends(get_db), user=Depends(current_user)):
     control = _ensure_strategy_control(db, user.id)
     allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
     if control.managed_by_admin and payload.strategy_slug not in allowed:
@@ -860,9 +892,10 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     ).first()
     if not connector:
         raise HTTPException(status_code=404, detail="Enabled connector not found")
-    resolved_market_type = resolve_runtime_market_type(
-        connector,
-        requested_market_type=payload.market_type,
+    resolved_market_type = _resolve_effective_bot_session_market_type(
+        strategy_slug=payload.strategy_slug,
+        connector=connector,
+        session_market_type=payload.market_type,
     )
 
     _validate_strategy_connectors(
@@ -919,7 +952,8 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     session_timeframe = session.timeframe
     db.commit()
 
-    _notify_user_info(
+    background_tasks.add_task(
+        _notify_user_info,
         user,
         title="Bot 24/7 activado",
         detail=f"Sesión #{session_id} creada con estrategia {session_strategy} en timeframe {session_timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
@@ -931,13 +965,16 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
 
 
 @router.put("/bot-sessions/{session_id}")
-def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(get_db), user=Depends(current_user)):
+def update_bot_session(session_id: int, payload: BotSessionUpdate, background_tasks: BackgroundTasks, db=Depends(get_db), user=Depends(current_user)):
     session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Bot session not found")
 
     control = _ensure_strategy_control(db, user.id)
     allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+    connector = db.query(Connector).filter(Connector.id == session.connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
 
     if payload.is_active is not None:
         session.is_active = payload.is_active
@@ -956,14 +993,6 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
     if payload.strategy_slug is not None:
         if control.managed_by_admin and payload.strategy_slug not in allowed:
             raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
-        effective_market_type = _normalize_market_type(payload.market_type or session.market_type)
-        _validate_strategy_connectors(
-            db,
-            user_id=user.id,
-            connector_ids=[session.connector_id],
-            strategy_slug=payload.strategy_slug,
-            market_type=effective_market_type,
-        )
         session.strategy_slug = payload.strategy_slug
     if payload.timeframe is not None:
         normalized_timeframe = _normalize_timeframe(payload.timeframe)
@@ -983,14 +1012,20 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.trade_amount_mode = trade_amount_settings["trade_amount_mode"]
         session.amount_per_trade = trade_amount_settings["amount_per_trade"]
         session.amount_percentage = trade_amount_settings["amount_percentage"]
-    if payload.market_type is not None:
-        connector = db.query(Connector).filter(Connector.id == session.connector_id, Connector.user_id == user.id).first()
-        if not connector:
-            raise HTTPException(status_code=404, detail="Enabled connector not found")
-        session.market_type = resolve_runtime_market_type(
-            connector,
-            requested_market_type=payload.market_type,
+    next_market_type = _resolve_effective_bot_session_market_type(
+        strategy_slug=session.strategy_slug,
+        connector=connector,
+        session_market_type=payload.market_type if payload.market_type is not None else getattr(session, "market_type", None),
+    )
+    if payload.market_type is not None or payload.strategy_slug is not None:
+        _validate_strategy_connectors(
+            db,
+            user_id=user.id,
+            connector_ids=[session.connector_id],
+            strategy_slug=session.strategy_slug,
+            market_type=next_market_type,
         )
+    session.market_type = next_market_type
     if payload.min_ml_probability is not None:
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:
@@ -1021,8 +1056,8 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
 
     db.commit()
-    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
-    _notify_user_info(
+    background_tasks.add_task(
+        _notify_user_info,
         user,
         title="Bot actualizado",
         detail=f"Sesión #{session.id} ahora está {'activa' if session.is_active else 'pausada'} con estrategia {session.strategy_slug} y timeframe {session.timeframe}.",
@@ -1033,7 +1068,7 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
 
 @router.delete("/bot-sessions/{session_id}")
-def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current_user)):
+def delete_bot_session(session_id: int, background_tasks: BackgroundTasks, db=Depends(get_db), user=Depends(current_user)):
     session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Bot session not found")
@@ -1041,7 +1076,8 @@ def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current
     detail = f"Se eliminó la sesión #{session.id} con estrategia {session.strategy_slug}."
     db.delete(session)
     db.commit()
-    _notify_user_info(
+    background_tasks.add_task(
+        _notify_user_info,
         user,
         title="Bot eliminado",
         detail=detail,
@@ -1052,7 +1088,7 @@ def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current
 
 
 @router.post("/bot-sessions/{session_id}/copy")
-def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends(get_db), user=Depends(current_user)):
+def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, background_tasks: BackgroundTasks, db=Depends(get_db), user=Depends(current_user)):
     source = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
     if not source:
         raise HTTPException(status_code=404, detail="Bot session not found")
@@ -1066,9 +1102,10 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
     cloned = BotSession(
         user_id=user.id,
         connector_id=connector.id,
-        market_type=resolve_runtime_market_type(
-            connector,
-            requested_market_type=getattr(source, "market_type", None),
+        market_type=_resolve_effective_bot_session_market_type(
+            strategy_slug=source.strategy_slug,
+            connector=connector,
+            session_market_type=getattr(source, "market_type", None),
         ),
         strategy_slug=source.strategy_slug,
         timeframe=source.timeframe,
@@ -1102,7 +1139,8 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
     db.flush()
     cloned_id = cloned.id
     db.commit()
-    _notify_user_info(
+    background_tasks.add_task(
+        _notify_user_info,
         user,
         title="Bot clonado",
         detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned_id}.",
