@@ -37,6 +37,19 @@ const PLATFORM_FIELD_MAP = {
   ],
 };
 
+const COMMON_CONNECTOR_CONFIG_FIELDS = [
+  { key: 'recv_window_ms', label: 'Recv window (ms)', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Ventana de recepción para APIs firmadas.' },
+  { key: 'request_timeout_ms', label: 'Request timeout (ms)', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Timeout total por request al exchange.' },
+  { key: 'futures_margin_mode', label: 'Margin mode', target: 'config', type: 'select', options: ['isolated', 'cross'], platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'Modo de margen para futures.' },
+  { key: 'futures_position_mode', label: 'Position mode', target: 'config', type: 'select', options: ['oneway', 'hedge'], platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'One-way o hedge según tu operativa.' },
+  { key: 'futures_leverage', label: 'Leverage fijo', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'Opcional; si lo dejas vacío usa leverage_profile.' },
+  { key: 'leverage_profile', label: 'Leverage profile', target: 'config', type: 'select', options: ['none', 'conservative', 'balanced', 'aggressive'], platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'Perfil de apalancamiento usado por la lógica runtime.' },
+  { key: 'retry_attempts', label: 'Retry attempts', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Número de reintentos para timeouts/rechazos recuperables.' },
+  { key: 'retry_delay_ms', label: 'Retry delay (ms)', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Espera entre reintentos; 0 = inmediato.' },
+  { key: 'paper_balance', label: 'Paper balance', target: 'config', type: 'number', hint: 'Balance de referencia cuando el conector corre en paper.' },
+  { key: 'sandbox', label: 'Sandbox/Testnet', target: 'config', type: 'checkbox', platforms: ['binance', 'bybit', 'okx'], hint: 'Activa testnet/sandbox cuando el exchange lo soporte.' },
+];
+
 const STRATEGIES = [
   'ema_rsi',
   'mean_reversion_zscore',
@@ -128,6 +141,7 @@ const state = {
   connectors: [],
   botSessions: [],
   executionLogs: [],
+  editingConnectorId: null,
 };
 
 async function api(url, options = {}) {
@@ -177,6 +191,46 @@ function prettyMarketType(value, connectorId = null) {
   return labels[normalized] || prettyLabel(value ?? connector?.market_type, 'Spot');
 }
 
+function prettyPlatform(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  const labels = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', mt5: 'MT5', ctrader: 'cTrader', tradingview: 'TradingView' };
+  return labels[raw] || prettyLabel(value, '-');
+}
+
+function connectorFieldDefinitions(platform, marketType = null) {
+  const normalizedMarket = String(marketType || document.getElementById('connector-market-type')?.value || 'spot').toLowerCase();
+  return [
+    ...(PLATFORM_FIELD_MAP[platform] || []),
+    ...COMMON_CONNECTOR_CONFIG_FIELDS.filter((field) => {
+      if (field.platforms && !field.platforms.includes(platform)) return false;
+      if (field.futuresOnly && normalizedMarket !== 'futures') return false;
+      return true;
+    }),
+  ];
+}
+
+function configEntriesForDisplay(config = {}) {
+  const orderedKeys = [
+    'recv_window_ms',
+    'request_timeout_ms',
+    'futures_margin_mode',
+    'futures_position_mode',
+    'futures_leverage',
+    'leverage_profile',
+    'retry_attempts',
+    'retry_delay_ms',
+    'sandbox',
+    'paper_balance',
+  ];
+  return orderedKeys
+    .filter((key) => config[key] !== undefined && config[key] !== null && config[key] !== '')
+    .map((key) => ({
+      key,
+      label: key.replaceAll('_', ' '),
+      value: typeof config[key] === 'boolean' ? (config[key] ? 'Sí' : 'No') : String(config[key]),
+    }));
+}
+
 function reportMarkup(items = []) {
   return items.map((item) => `
     <article class="quantum-report-item fade-in-up">
@@ -214,25 +268,104 @@ function renderConnectorFields() {
     marketType.innerHTML = (PLATFORM_MARKET_TYPES[platform] || ['spot']).map((type) => `<option value="${type}">${prettyMarketType(type)}</option>`).join('');
   }
   if (fieldsWrap) {
-    fieldsWrap.innerHTML = (PLATFORM_FIELD_MAP[platform] || []).map((field) => `
-      <label>${field.label}
-        <input name="field_${field.target}_${field.key}" ${field.required ? 'required' : ''}>
-      </label>
-    `).join('');
+    const selectedMarketType = marketType?.value || 'spot';
+    fieldsWrap.innerHTML = connectorFieldDefinitions(platform, selectedMarketType).map((field) => {
+      const name = `field_${field.target}_${field.key}`;
+      const inputType = field.type || 'text';
+      if (inputType === 'select') {
+        return `
+          <label>${field.label}
+            <select name="${name}" ${field.required ? 'required' : ''}>
+              <option value="">Auto / sin definir</option>
+              ${(field.options || []).map((option) => `<option value="${option}">${prettyLabel(option, option)}</option>`).join('')}
+            </select>
+            ${field.hint ? `<small class="hint">${field.hint}</small>` : ''}
+          </label>
+        `;
+      }
+      if (inputType === 'checkbox') {
+        return `
+          <label class="checkbox">${field.label}
+            <input type="checkbox" name="${name}" ${field.required ? 'required' : ''}>
+            <span class="hint">${field.hint || ''}</span>
+          </label>
+        `;
+      }
+      return `
+        <label>${field.label}
+          <input name="${name}" type="${inputType}" ${field.required ? 'required' : ''} ${inputType === 'number' ? 'step="1"' : ''}>
+          ${field.hint ? `<small class="hint">${field.hint}</small>` : ''}
+        </label>
+      `;
+    }).join('');
   }
+  const form = document.querySelector('#connector-form');
+  if (form) delete form.dataset.advisoriesBound;
+  bindFieldAdvisories('#connector-form', 'connector');
 }
 
 function readConnectorFriendlyFields(formEl, platform) {
   const fd = new FormData(formEl);
   const config = {};
   const secrets = {};
-  (PLATFORM_FIELD_MAP[platform] || []).forEach((field) => {
-    const value = String(fd.get(`field_${field.target}_${field.key}`) || '').trim();
+  const marketType = String(fd.get('market_type') || 'spot');
+  connectorFieldDefinitions(platform, marketType).forEach((field) => {
+    const rawValue = field.type === 'checkbox' ? fd.get(`field_${field.target}_${field.key}`) === 'on' : fd.get(`field_${field.target}_${field.key}`);
+    if (field.type === 'checkbox') {
+      if (field.target === 'secrets') secrets[field.key] = Boolean(rawValue);
+      else config[field.key] = Boolean(rawValue);
+      return;
+    }
+    const value = String(rawValue || '').trim();
     if (!value) return;
-    if (field.target === 'secrets') secrets[field.key] = value;
-    else config[field.key] = value;
+    const normalizedValue = field.type === 'number' ? Number(value) : value;
+    if (field.target === 'secrets') secrets[field.key] = normalizedValue;
+    else config[field.key] = normalizedValue;
   });
   return { config, secrets };
+}
+
+function resetConnectorForm() {
+  const form = document.getElementById('connector-form');
+  if (!form) return;
+  state.editingConnectorId = null;
+  form.reset();
+  document.getElementById('connector-edit-id').value = '';
+  document.getElementById('connector-form-title').textContent = 'Nuevo conector';
+  document.getElementById('connector-form-mode-label').textContent = 'Creación';
+  document.getElementById('connector-submit-btn').textContent = 'Guardar conector';
+  document.getElementById('cancel-connector-edit-btn').classList.add('hidden');
+  renderConnectorFields();
+  bindFieldAdvisories('#connector-form', 'connector');
+}
+
+function populateConnectorForm(connectorId) {
+  const connector = getConnectorById(connectorId);
+  const form = document.getElementById('connector-form');
+  if (!connector || !form) return;
+  state.editingConnectorId = connector.id;
+  document.getElementById('connector-edit-id').value = String(connector.id);
+  form.querySelector('#connector-platform').value = connector.platform;
+  renderConnectorFields();
+  form.querySelector('#connector-market-type').value = connector.market_type || 'spot';
+  renderConnectorFields();
+  form.querySelector('#connector-label').value = connector.label || '';
+  form.querySelector('#connector-mode').value = connector.mode || 'paper';
+  form.querySelector('#symbols-input').value = (connector.symbols || []).join(', ');
+  connectorFieldDefinitions(connector.platform, connector.market_type).forEach((field) => {
+    const input = form.querySelector(`[name="field_${field.target}_${field.key}"]`);
+    if (!input) return;
+    const value = field.target === 'secrets' ? '' : connector.config?.[field.key];
+    if (field.type === 'checkbox') input.checked = Boolean(value);
+    else input.value = value ?? '';
+    if (field.target === 'secrets') input.placeholder = 'Deja vacío para conservar el valor actual';
+  });
+  document.getElementById('connector-form-title').textContent = `Editar conector · ${connector.label}`;
+  document.getElementById('connector-form-mode-label').textContent = 'Edición';
+  document.getElementById('connector-submit-btn').textContent = 'Guardar cambios';
+  document.getElementById('cancel-connector-edit-btn').classList.remove('hidden');
+  setStatus('connector-feedback', `Editando ${connector.label}. Puedes actualizar configuración, símbolos o credenciales.`, 'ok');
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderProfile() {
@@ -254,6 +387,7 @@ function renderProfile() {
     { title: 'Alertas', body: user.telegram_alerts_enabled ? `Telegram activo · idioma ${String(user.alert_language || 'es').toUpperCase()}` : 'Telegram inactivo' },
     { title: 'Sizing', body: user.trade_amount_mode === 'balance_percent' ? `${user.trade_balance_percent}% del balance por operación` : `${Number(user.fixed_trade_amount_usd || 0).toFixed(2)} USD por operación` },
     { title: 'Canal admin', body: user.admin_alerts_enabled ? 'Canal administrativo de contingencias disponible' : 'Canal administrativo no configurado' },
+    { title: 'Cobertura Telegram', body: 'Conexión, errores, mercado conectado, velas revisadas y tendencia de la corrida manual se notifican en el canal configurado.' },
   ]);
 }
 
@@ -262,12 +396,12 @@ function renderConnectors() {
   const panel = document.getElementById('connector-health-panel');
   const runSelect = document.getElementById('run-connector-select');
   if (runSelect) {
-    runSelect.innerHTML = state.connectors.filter((c) => c.is_enabled).map((c) => `<option value="${c.id}">${c.label} · ${c.platform} · ${prettyMarketType(c.market_type, c.id)}</option>`).join('');
+    runSelect.innerHTML = state.connectors.filter((c) => c.is_enabled).map((c) => `<option value="${c.id}">${c.label} · ${prettyPlatform(c.platform)} · ${prettyMarketType(c.market_type, c.id)}</option>`).join('');
   }
   if (panel) {
     panel.innerHTML = state.connectors.length ? reportMarkup(state.connectors.map((c) => ({
-      title: `${c.label} · ${c.platform}`,
-      body: `${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'} · ${(c.symbols || []).length} símbolos`,
+      title: `${c.label} · ${prettyPlatform(c.platform)}`,
+      body: `${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'} · ${(c.symbols || []).length} símbolos · ${configEntriesForDisplay(c.config || {}).length} parámetros visibles`,
     }))) : reportMarkup([{ title: 'Sin conectores', body: 'Crea al menos un conector para operar o automatizar.' }]);
   }
   if (!list) return;
@@ -276,20 +410,25 @@ function renderConnectors() {
     return;
   }
   list.innerHTML = state.connectors.map((connector) => `
-    <article class="connector-item fade-in-up">
+    <article class="connector-item fade-in-up ${state.editingConnectorId === connector.id ? 'is-editing' : ''}">
       <div class="row-between">
         <div>
           <strong>${connector.label}</strong>
           <div class="connector-meta">
-            <span>${connector.platform}</span>
+            <span>${prettyPlatform(connector.platform)}</span>
             <span>${connector.mode}</span>
             <span>${prettyMarketType(connector.market_type, connector.id)}</span>
+            <span>${(connector.symbols || []).length} símbolos</span>
           </div>
         </div>
         <span class="pill tiny ${connector.is_enabled ? 'pill-on' : 'pill-off'}">${connector.is_enabled ? 'Activo' : 'Inactivo'}</span>
       </div>
       <small class="hint">Símbolos: ${(connector.symbols || []).join(', ') || 'Sin símbolos configurados'}.</small>
+      <div class="chip-wrap">
+        ${configEntriesForDisplay(connector.config || {}).map((entry) => `<span class="chip chip-static"><strong>${entry.label}:</strong> ${entry.value}</span>`).join('') || '<span class="chip chip-static">Sin parámetros visibles adicionales</span>'}
+      </div>
       <div class="row-wrap" style="margin-top:12px;">
+        <button class="btn btn-sm" type="button" data-action="edit" data-id="${connector.id}">Editar</button>
         <button class="btn btn-sm" type="button" data-action="test" data-id="${connector.id}">Test</button>
         <button class="btn btn-sm" type="button" data-action="toggle" data-id="${connector.id}" data-enabled="${connector.is_enabled}">${connector.is_enabled ? 'Desactivar' : 'Activar'}</button>
         <button class="btn btn-sm" type="button" data-action="delete" data-id="${connector.id}">Eliminar</button>
@@ -302,7 +441,9 @@ function renderConnectors() {
       const id = Number(button.dataset.id);
       const action = button.dataset.action;
       try {
-        if (action === 'test') {
+        if (action === 'edit') {
+          populateConnectorForm(id);
+        } else if (action === 'test') {
           const out = await api(`/api/connectors/${id}/test`, { method: 'POST' });
           setStatus('connector-feedback', out.message || 'Conector validado.', 'ok');
         } else if (action === 'toggle') {
@@ -333,34 +474,93 @@ function renderBotSessions() {
           <strong>${prettyLabel(session.strategy_slug, 'strategy')}</strong>
           <div class="connector-meta">
             <span>${prettyLabel(session.connector_label, 'Cuenta')}</span>
-            <span>${prettyLabel(session.platform, '-')}</span>
+            <span>${prettyPlatform(session.platform)}</span>
             <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
           </div>
         </div>
         <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
       </div>
-      <small class="hint">${(session.symbols || []).join(', ')} · ${session.timeframe} · Próxima corrida: ${formatDate(session.next_run_at)}.</small>
-      <small class="hint">Sizing: ${session.trade_amount_mode || 'inherit'} · Capital ref: ${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}.</small>
-      <small class="hint">Estado: ${session.last_status || '-'}${session.last_error ? ` · ${session.last_error}` : ''}</small>
-      <div class="row-wrap" style="margin-top:12px;">
-        <button class="btn btn-sm" type="button" data-bot-action="toggle" data-id="${session.id}" data-enabled="${session.is_active}">${session.is_active ? 'Pausar' : 'Activar'}</button>
-        <button class="btn btn-sm" type="button" data-bot-action="delete" data-id="${session.id}">Eliminar</button>
+      <div class="chip-wrap">
+        <span class="chip chip-static">${session.timeframe}</span>
+        <span class="chip chip-static">${session.trade_amount_mode || 'inherit'}</span>
+        <span class="chip chip-static">Capital ref ${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}</span>
       </div>
+      <small class="hint">Próxima corrida: ${formatDate(session.next_run_at)} · Último estado: ${session.last_status || '-'}${session.last_error ? ` · ${session.last_error}` : ''}</small>
+      <form class="bot-session-form form-grid" data-session-id="${session.id}" style="margin-top:12px;">
+        <label>Estrategia
+          <select name="strategy_slug">${STRATEGIES.map((slug) => `<option value="${slug}" ${slug === session.strategy_slug ? 'selected' : ''}>${slug}</option>`).join('')}</select>
+        </label>
+        <label>Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
+        <label>Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
+        <label>Riesgo por trade (%)<input name="risk_per_trade" type="number" min="0.1" max="100" step="0.1" value="${Number(session.risk_per_trade || 0) * 100}"></label>
+        <label>Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${Number(session.min_ml_probability || 0) * 100}"></label>
+        <label>Modo sizing
+          <select name="trade_amount_mode">
+            <option value="inherit" ${session.trade_amount_mode === 'inherit' ? 'selected' : ''}>Heredar</option>
+            <option value="fixed_usd" ${session.trade_amount_mode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
+            <option value="balance_percent" ${session.trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
+          </select>
+        </label>
+        <label>Use live
+          <select name="use_live_if_available">
+            <option value="true" ${session.use_live_if_available ? 'selected' : ''}>Sí</option>
+            <option value="false" ${!session.use_live_if_available ? 'selected' : ''}>No</option>
+          </select>
+        </label>
+        <label>Estado
+          <select name="is_active">
+            <option value="true" ${session.is_active ? 'selected' : ''}>Activo</option>
+            <option value="false" ${!session.is_active ? 'selected' : ''}>Pausado</option>
+          </select>
+        </label>
+        <div class="row-wrap">
+          <button class="btn btn-sm primary" type="submit">Guardar sesión</button>
+          <button class="btn btn-sm" type="button" data-bot-action="copy" data-id="${session.id}">Duplicar</button>
+          <button class="btn btn-sm" type="button" data-bot-action="delete" data-id="${session.id}">Eliminar</button>
+        </div>
+      </form>
     </article>
   `).join('');
+
+  panel.querySelectorAll('.bot-session-form').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const fd = new FormData(form);
+      const id = Number(form.dataset.sessionId);
+      try {
+        await api(`/api/bot-sessions/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            strategy_slug: fd.get('strategy_slug'),
+            timeframe: fd.get('timeframe'),
+            symbols: String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
+            risk_per_trade: Number(fd.get('risk_per_trade')),
+            min_ml_probability: Number(fd.get('min_ml_probability')),
+            trade_amount_mode: fd.get('trade_amount_mode'),
+            use_live_if_available: fd.get('use_live_if_available') === 'true',
+            is_active: fd.get('is_active') === 'true',
+          }),
+        });
+        setStatus('bot-session-feedback', 'Sesión automática actualizada.', 'ok');
+        await refreshDashboard();
+      } catch (error) {
+        setStatus('bot-session-feedback', parseApiError(error), 'error');
+      }
+    });
+  });
 
   panel.querySelectorAll('button[data-bot-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       const id = Number(button.dataset.id);
       try {
-        if (button.dataset.botAction === 'toggle') {
-          await api(`/api/bot-sessions/${id}`, { method: 'PUT', body: JSON.stringify({ is_active: button.dataset.enabled !== 'true' }) });
+        if (button.dataset.botAction === 'copy') {
+          await api(`/api/bot-sessions/${id}/copy`, { method: 'POST', body: JSON.stringify({}) });
         } else {
           await api(`/api/bot-sessions/${id}`, { method: 'DELETE' });
         }
         await refreshDashboard();
       } catch (error) {
-        setStatus('run-feedback', parseApiError(error), 'error');
+        setStatus('bot-session-feedback', parseApiError(error), 'error');
       }
     });
   });
@@ -490,8 +690,9 @@ async function saveConnector(event) {
   const platform = String(fd.get('platform'));
   const { config, secrets } = readConnectorFriendlyFields(form, platform);
   try {
-    await api('/api/connectors', {
-      method: 'POST',
+    const isEditing = Boolean(state.editingConnectorId);
+    await api(isEditing ? `/api/connectors/${state.editingConnectorId}` : '/api/connectors', {
+      method: isEditing ? 'PUT' : 'POST',
       body: JSON.stringify({
         platform,
         label: fd.get('label'),
@@ -499,13 +700,11 @@ async function saveConnector(event) {
         market_type: fd.get('market_type'),
         symbols: String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
         config,
-        secrets,
+        ...(Object.keys(secrets).length ? { secrets } : {}),
       }),
     });
-    form.reset();
-    renderConnectorFields();
-    bindFieldAdvisories('#connector-form', 'connector');
-    setStatus('connector-feedback', 'Conector guardado correctamente.', 'ok');
+    resetConnectorForm();
+    setStatus('connector-feedback', isEditing ? 'Conector actualizado correctamente.' : 'Conector guardado correctamente.', 'ok');
     await refreshDashboard();
   } catch (error) {
     setStatus('connector-feedback', parseApiError(error), 'error');
@@ -787,8 +986,11 @@ function downloadExecutionLogs() {
 async function init() {
   initTabs();
   renderStrategyOptions();
-  renderConnectorFields();
+  resetConnectorForm();
   document.getElementById('connector-platform')?.addEventListener('change', renderConnectorFields);
+  document.getElementById('connector-market-type')?.addEventListener('change', renderConnectorFields);
+  document.getElementById('reset-connector-form-btn')?.addEventListener('click', resetConnectorForm);
+  document.getElementById('cancel-connector-edit-btn')?.addEventListener('click', resetConnectorForm);
   document.getElementById('profile-form')?.addEventListener('submit', saveProfile);
   document.getElementById('test-telegram-btn')?.addEventListener('click', testTelegram);
   document.getElementById('profile-trade-amount-form')?.addEventListener('submit', saveTradeAmountSettings);
