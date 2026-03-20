@@ -89,6 +89,9 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
                 run_source="bot",
                 bot_session_id=session.id,
                 market_type=resolved_market_type,
+                trade_amount_mode=getattr(session, "trade_amount_mode", None),
+                fixed_trade_amount_usd=getattr(session, "amount_per_trade", None),
+                trade_balance_percent=getattr(session, "amount_percentage", None),
             )
             session.last_status = "ok"
             session.last_error = None

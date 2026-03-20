@@ -59,7 +59,25 @@ class StrategyRiskMixin(BaseModel):
         return self
 
 
-class StrategyRequest(StrategyRiskMixin):
+class TradeAmountMixin(BaseModel):
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] = "inherit"
+    amount_per_trade: float | None = Field(default=None, gt=0)
+    amount_percentage: float | None = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_trade_amount_rules(self):
+        mode = str(getattr(self, "trade_amount_mode", "inherit") or "inherit").lower()
+        amount = getattr(self, "amount_per_trade", None)
+        percent = getattr(self, "amount_percentage", None)
+
+        if mode == "fixed_usd" and (amount is None or float(amount) <= 0):
+            raise ValueError("Debes indicar una cantidad por trade mayor a 0")
+        if mode == "balance_percent" and (percent is None or float(percent) <= 0):
+            raise ValueError("Debes indicar un porcentaje por trade mayor a 0")
+        return self
+
+
+class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
     connector_ids: list[int]
     market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     symbols: list[str]
@@ -84,7 +102,7 @@ class StrategyRequest(StrategyRiskMixin):
     atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionCreate(StrategyRiskMixin):
+class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     connector_id: int
     market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     symbols: list[str]
@@ -110,8 +128,11 @@ class BotSessionCreate(StrategyRiskMixin):
     atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionUpdate(StrategyRiskMixin):
+class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
     is_active: bool | None = None
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] | None = None
+    amount_per_trade: float | None = Field(default=None, gt=0)
+    amount_percentage: float | None = Field(default=None, gt=0, le=100)
     market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None

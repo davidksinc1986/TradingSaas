@@ -68,4 +68,4 @@ def test_schema_migration_adds_missing_legacy_columns(monkeypatch, tmp_path):
 
     assert {"phone", "telegram_bot_token_encrypted", "trade_amount_mode", "trade_balance_percent"}.issubset(users)
     assert "market_type" in connectors
-    assert {"take_profit_mode", "take_profit_value", "trailing_stop_mode", "trailing_stop_value", "indicator_exit_enabled", "indicator_exit_rule"}.issubset(bot_sessions)
+    assert {"take_profit_mode", "take_profit_value", "trailing_stop_mode", "trailing_stop_value", "indicator_exit_enabled", "indicator_exit_rule", "trade_amount_mode", "amount_per_trade", "amount_percentage"}.issubset(bot_sessions)
