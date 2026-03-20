@@ -968,16 +968,10 @@ def _resolve_connector_trade_amount_config(
     trade_balance_percent: float | None = None,
 ) -> dict[str, float | str]:
     mode = str(trade_amount_mode or "").strip().lower()
-    if mode == "inherit":
-        mode = str(((getattr(connector, "config_json", {}) or {}).get("trade_amount_mode") or "fixed_usd")).lower()
-        fixed_trade_amount_usd = _safe_float(
-            fixed_trade_amount_usd if fixed_trade_amount_usd is not None else ((getattr(connector, "config_json", {}) or {}).get("fixed_trade_amount_usd")),
-            0.0,
-        )
-        trade_balance_percent = _safe_float(
-            trade_balance_percent if trade_balance_percent is not None else ((getattr(connector, "config_json", {}) or {}).get("trade_balance_percent")),
-            0.0,
-        )
+    if mode in {"", "inherit"}:
+        mode = "fixed_usd"
+        fixed_trade_amount_usd = _safe_float(fixed_trade_amount_usd, 0.0)
+        trade_balance_percent = _safe_float(trade_balance_percent, 0.0)
     resolved = _resolve_trade_amount_config(
         user,
         trade_amount_mode=mode or trade_amount_mode,
@@ -989,6 +983,14 @@ def _resolve_connector_trade_amount_config(
     if str(resolved["mode"]).lower() == "balance_percent" and _safe_float(resolved["trade_balance_percent"], 0.0) <= 0:
         resolved["trade_balance_percent"] = 10.0
     return resolved
+
+
+def _symbol_min_notional_budget(client, symbol: str) -> float:
+    try:
+        requirements = client.min_requirements(symbol) if hasattr(client, "min_requirements") else {}
+    except Exception:
+        requirements = {}
+    return max(_safe_float((requirements or {}).get("min_notional"), 0.0), 0.0)
 
 
 def _resolve_trade_amount_config(
@@ -1241,8 +1243,34 @@ def run_strategy(
             normalized = client.normalize_symbol(symbol)
             notes["symbol_normalization"] = normalized
             normalized_symbol = normalized.get("normalized_symbol") or symbol
+            symbol_min_budget = _symbol_min_notional_budget(client, normalized_symbol)
+            effective_trade_amount_config = dict(trade_amount_config)
+            if str(effective_trade_amount_config.get("mode") or "").lower() == "fixed_usd":
+                current_fixed_amount = _safe_float(effective_trade_amount_config.get("fixed_trade_amount_usd"), 0.0)
+                if current_fixed_amount <= 0:
+                    effective_trade_amount_config["fixed_trade_amount_usd"] = max(
+                        symbol_min_budget,
+                        _recommended_connector_fixed_amount(runtime_connector),
+                    )
+                elif fixed_trade_amount_usd in {None, 0} and str(trade_amount_mode or "").lower() in {"", "inherit"}:
+                    effective_trade_amount_config["fixed_trade_amount_usd"] = max(
+                        current_fixed_amount,
+                        symbol_min_budget,
+                    )
             if not normalized.get("found", False) and connector.platform in {"binance", "bybit", "okx"}:
                 decision_reasons.append("invalid_symbol")
+
+            notes["strategy_config"] = {
+                "requested_strategy": strategy_slug,
+                "configured_symbols": list(symbols),
+                "configured_symbol_count": len(list(symbols)),
+                "selected_symbols": list(selected_symbols),
+                "selected_symbol_count": len(list(selected_symbols)),
+                "trade_amount_mode": str(effective_trade_amount_config.get("mode") or "fixed_usd"),
+                "fixed_trade_amount_usd": _safe_float(effective_trade_amount_config.get("fixed_trade_amount_usd"), 0.0),
+                "trade_balance_percent": _safe_float(effective_trade_amount_config.get("trade_balance_percent"), 0.0),
+                "symbol_min_notional": symbol_min_budget,
+            }
 
             execution_environment = client.prepare_execution_environment(
                 normalized_symbol,
@@ -1378,9 +1406,9 @@ def run_strategy(
                 user,
                 _safe_float(balance.get("available_balance"), 0.0),
                 price,
-                trade_amount_mode=str(trade_amount_config["mode"]),
-                fixed_trade_amount_usd=_safe_float(trade_amount_config["fixed_trade_amount_usd"], 0.0),
-                trade_balance_percent=_safe_float(trade_amount_config["trade_balance_percent"], 0.0),
+                trade_amount_mode=str(effective_trade_amount_config["mode"]),
+                fixed_trade_amount_usd=_safe_float(effective_trade_amount_config["fixed_trade_amount_usd"], 0.0),
+                trade_balance_percent=_safe_float(effective_trade_amount_config["trade_balance_percent"], 0.0),
             )
             quantity = min(risk_qty, budget_cap_qty) if budget_cap_qty > 0 else risk_qty
 
@@ -1692,15 +1720,15 @@ def run_strategy(
                     "capital_allocated": round(
                         min(
                             _safe_float(balance.get("available_balance"), 0.0),
-                            _safe_float(trade_amount_config["fixed_trade_amount_usd"], 10.0)
-                            if str(trade_amount_config["mode"]).lower() == "fixed_usd"
-                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(trade_amount_config["trade_balance_percent"], 10.0) / 100.0)),
+                            _safe_float(effective_trade_amount_config["fixed_trade_amount_usd"], 10.0)
+                            if str(effective_trade_amount_config["mode"]).lower() == "fixed_usd"
+                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(effective_trade_amount_config["trade_balance_percent"], 10.0) / 100.0)),
                         ),
                         8,
                     ),
-                    "trade_amount_mode": trade_amount_config["mode"],
-                    "trade_amount_fixed_usd": trade_amount_config["fixed_trade_amount_usd"],
-                    "trade_amount_percent": trade_amount_config["trade_balance_percent"],
+                    "trade_amount_mode": effective_trade_amount_config["mode"],
+                    "trade_amount_fixed_usd": effective_trade_amount_config["fixed_trade_amount_usd"],
+                    "trade_amount_percent": effective_trade_amount_config["trade_balance_percent"],
                     "market_data": market_result.meta,
                     "pretrade": pretrade,
                     "balance": balance,

@@ -60,7 +60,7 @@ class StrategyRiskMixin(BaseModel):
 
 
 class TradeAmountMixin(BaseModel):
-    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] = "inherit"
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] = "fixed_usd"
     amount_per_trade: float | None = Field(default=None, gt=0)
     amount_percentage: float | None = Field(default=None, gt=0, le=100)
 
