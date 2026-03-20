@@ -975,8 +975,8 @@ def run_strategy(
             connector_id=connector.id,
             timeframe=timeframe,
             fallback_symbols=symbols,
-            cfg=runtime_connector.config_json or {},
-            connector=runtime_connector,
+            cfg=connector.config_json or {},
+            connector=connector,
             force_dynamic=str(symbol_source_mode or "manual").lower() == "dynamic",
             max_symbols_override=dynamic_symbol_limit,
         )

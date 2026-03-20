@@ -474,6 +474,562 @@ def get_strategy_control(db=Depends(get_db), user=Depends(current_user)):
     }
 
 
+@router.put("/strategy-control")
+def update_strategy_control(payload: StrategyControlUpdate, db=Depends(get_db), user=Depends(current_user)):
+    control = _ensure_strategy_control(db, user.id)
+    if control.managed_by_admin:
+        raise HTTPException(status_code=403, detail="Strategy selection is managed by admin for this user")
+
+    allowed = [s for s in payload.allowed_strategies if s in ALL_STRATEGIES]
+    control.allowed_strategies_json = {"items": allowed or ALL_STRATEGIES}
+    db.add(control)
+    db.commit()
+    return {
+        "ok": True,
+        "managed_by_admin": control.managed_by_admin,
+        "allowed_strategies": (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES),
+        "all_strategies": ALL_STRATEGIES,
+    }
+
+
+@router.get("/bot-sessions")
+def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
+    sessions = db.query(BotSession).outerjoin(Connector, BotSession.connector_id == Connector.id).filter(
+        BotSession.user_id == user.id
+    ).order_by(BotSession.created_at.desc()).all()
+    payload = []
+    serialization_errors = []
+    for session in sessions:
+        try:
+            connector = session.connector
+            symbols = _safe_symbols(getattr(session, "symbols_json", {}))
+            config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
+            capital = _safe_float(getattr(session.user, "fixed_trade_amount_usd", 0) or config.get("allocation_value", config.get("default_quantity", 0)) or 0)
+            payload.append({
+                "id": session.id,
+                "connector_id": session.connector_id,
+                "connector_label": connector.label if connector else "-",
+                "platform": connector.platform if connector else "-",
+                "mode": connector.mode if connector else "-",
+                "market_type": connector.market_type if connector else "spot",
+                "strategy_slug": session.strategy_slug,
+                "timeframe": session.timeframe,
+                "symbols": symbols,
+                "symbol_source_mode": str((session.symbols_json or {}).get("symbol_source_mode") or "manual"),
+                "dynamic_symbol_limit": int((session.symbols_json or {}).get("dynamic_symbol_limit") or len(symbols) or 1),
+                "interval_minutes": session.interval_minutes,
+                "risk_per_trade": session.risk_per_trade,
+                "min_ml_probability": session.min_ml_probability,
+                "take_profit_mode": session.take_profit_mode,
+                "take_profit_value": session.take_profit_value,
+                "stop_loss_mode": session.stop_loss_mode,
+                "stop_loss_value": session.stop_loss_value,
+                "trailing_stop_mode": session.trailing_stop_mode,
+                "trailing_stop_value": session.trailing_stop_value,
+                "indicator_exit_enabled": session.indicator_exit_enabled,
+                "indicator_exit_rule": session.indicator_exit_rule,
+                "leverage_profile": getattr(session, "leverage_profile", "none"),
+                "max_open_positions": max(int(getattr(session, "max_open_positions", 1) or 1), 1),
+                "compound_growth_enabled": bool(getattr(session, "compound_growth_enabled", False)),
+                "atr_volatility_filter_enabled": bool(getattr(session, "atr_volatility_filter_enabled", True)),
+                "is_active": session.is_active,
+                "last_run_at": _safe_iso(session.last_run_at),
+                "next_run_at": _safe_iso(session.next_run_at),
+                "last_status": session.last_status,
+                "last_error": session.last_error,
+                "capital_per_operation": capital,
+                "capital_currency": "USDT",
+                "created_at": _safe_iso(session.created_at),
+            })
+        except Exception as exc:
+            detail = f"user_id={user.id} session_id={getattr(session, 'id', '-')}: {exc}"
+            logger.exception("Failed serializing bot session: %s", detail)
+            serialization_errors.append(detail)
+            payload.append({
+                "id": getattr(session, "id", None),
+                "connector_id": getattr(session, "connector_id", None),
+                "connector_label": "-",
+                "platform": "-",
+                "mode": "-",
+                "market_type": "spot",
+                "strategy_slug": getattr(session, "strategy_slug", "-"),
+                "timeframe": getattr(session, "timeframe", "5m"),
+                "symbols": [],
+                "symbol_source_mode": "manual",
+                "dynamic_symbol_limit": 1,
+                "interval_minutes": getattr(session, "interval_minutes", 5),
+                "risk_per_trade": _safe_float(getattr(session, "risk_per_trade", 0.0)),
+                "min_ml_probability": _safe_float(getattr(session, "min_ml_probability", 0.0)),
+                "take_profit_mode": "percent",
+                "take_profit_value": 1.5,
+                "stop_loss_mode": "percent",
+                "stop_loss_value": 1.0,
+                "trailing_stop_mode": "percent",
+                "trailing_stop_value": 0.8,
+                "indicator_exit_enabled": False,
+                "indicator_exit_rule": "macd_cross",
+                "leverage_profile": "none",
+                "max_open_positions": 1,
+                "compound_growth_enabled": False,
+                "atr_volatility_filter_enabled": True,
+                "is_active": bool(getattr(session, "is_active", False)),
+                "last_run_at": _safe_iso(getattr(session, "last_run_at", None)),
+                "next_run_at": _safe_iso(getattr(session, "next_run_at", None)),
+                "last_status": "error",
+                "last_error": "No se pudo serializar esta sesión. Revisa configuración y logs.",
+                "capital_per_operation": 0.0,
+                "capital_currency": "USDT",
+                "created_at": _safe_iso(getattr(session, "created_at", None)),
+            })
+
+    if serialization_errors:
+        _alert_admin_failure(
+            "API /api/bot-sessions serialization",
+            " | ".join(serialization_errors)[:1500],
+        )
+    return payload
+
+
+@router.post("/bot-sessions")
+def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depends(current_user)):
+    control = _ensure_strategy_control(db, user.id)
+    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+    if control.managed_by_admin and payload.strategy_slug not in allowed:
+        raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+
+    connector = db.query(Connector).filter(
+        Connector.id == payload.connector_id,
+        Connector.user_id == user.id,
+        Connector.is_enabled.is_(True),
+    ).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
+
+    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
+
+    risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+
+    normalized_timeframe = _normalize_timeframe(payload.timeframe)
+    session = BotSession(
+        user_id=user.id,
+        connector_id=connector.id,
+        strategy_slug=payload.strategy_slug,
+        timeframe=normalized_timeframe,
+        symbols_json={
+            "symbols": payload.symbols,
+            "symbol_source_mode": payload.symbol_source_mode,
+            "dynamic_symbol_limit": payload.dynamic_symbol_limit,
+        },
+        interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
+        risk_per_trade=risk_value,
+        min_ml_probability=ml_value,
+        use_live_if_available=payload.use_live_if_available,
+        take_profit_mode=payload.take_profit_mode,
+        take_profit_value=payload.take_profit_value,
+        stop_loss_mode=payload.stop_loss_mode,
+        stop_loss_value=payload.stop_loss_value,
+        trailing_stop_mode=payload.trailing_stop_mode,
+        trailing_stop_value=payload.trailing_stop_value,
+        indicator_exit_enabled=payload.indicator_exit_enabled,
+        indicator_exit_rule=payload.indicator_exit_rule,
+        leverage_profile=payload.leverage_profile,
+        max_open_positions=payload.max_open_positions,
+        compound_growth_enabled=payload.compound_growth_enabled,
+        atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
+        is_active=True,
+        last_status="queued",
+        next_run_at=datetime.utcnow(),
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    _notify_user_info(
+        user,
+        title="Bot 24/7 activado",
+        detail=f"Sesión #{session.id} creada con estrategia {session.strategy_slug} en timeframe {session.timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
+
+    return {"ok": True, "session_id": session.id}
+
+
+@router.put("/bot-sessions/{session_id}")
+def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(get_db), user=Depends(current_user)):
+    session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Bot session not found")
+
+    control = _ensure_strategy_control(db, user.id)
+    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+
+    if payload.is_active is not None:
+        session.is_active = payload.is_active
+    if payload.symbols is not None:
+        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+        current_symbols_json["symbols"] = payload.symbols
+        session.symbols_json = current_symbols_json
+    if payload.symbol_source_mode is not None:
+        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+        current_symbols_json["symbol_source_mode"] = payload.symbol_source_mode
+        session.symbols_json = current_symbols_json
+    if payload.dynamic_symbol_limit is not None:
+        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+        current_symbols_json["dynamic_symbol_limit"] = payload.dynamic_symbol_limit
+        session.symbols_json = current_symbols_json
+    if payload.strategy_slug is not None:
+        if control.managed_by_admin and payload.strategy_slug not in allowed:
+            raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+        _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
+        session.strategy_slug = payload.strategy_slug
+    if payload.timeframe is not None:
+        normalized_timeframe = _normalize_timeframe(payload.timeframe)
+        session.timeframe = normalized_timeframe
+        session.interval_minutes = _interval_from_timeframe(normalized_timeframe, payload.interval_minutes or session.interval_minutes)
+    elif payload.interval_minutes is not None:
+        session.interval_minutes = payload.interval_minutes
+
+    if payload.risk_per_trade is not None:
+        session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    if payload.min_ml_probability is not None:
+        session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+    if payload.use_live_if_available is not None:
+        session.use_live_if_available = payload.use_live_if_available
+    if payload.take_profit_mode is not None:
+        session.take_profit_mode = payload.take_profit_mode
+    if payload.take_profit_value is not None:
+        session.take_profit_value = payload.take_profit_value
+    if payload.stop_loss_mode is not None:
+        session.stop_loss_mode = payload.stop_loss_mode
+    if payload.stop_loss_value is not None:
+        session.stop_loss_value = payload.stop_loss_value
+    if payload.trailing_stop_mode is not None:
+        session.trailing_stop_mode = payload.trailing_stop_mode
+    if payload.trailing_stop_value is not None:
+        session.trailing_stop_value = payload.trailing_stop_value
+    if payload.indicator_exit_enabled is not None:
+        session.indicator_exit_enabled = payload.indicator_exit_enabled
+    if payload.indicator_exit_rule is not None:
+        session.indicator_exit_rule = payload.indicator_exit_rule
+    if payload.leverage_profile is not None:
+        session.leverage_profile = payload.leverage_profile
+    if payload.max_open_positions is not None:
+        session.max_open_positions = payload.max_open_positions
+    if payload.compound_growth_enabled is not None:
+        session.compound_growth_enabled = payload.compound_growth_enabled
+    if payload.atr_volatility_filter_enabled is not None:
+        session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
+
+    db.commit()
+    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    _notify_user_info(
+        user,
+        title="Bot actualizado",
+        detail=f"Sesión #{session.id} ahora está {'activa' if session.is_active else 'pausada'} con estrategia {session.strategy_slug} y timeframe {session.timeframe}.",
+        connector_label=connector.label if connector else None,
+        platform=connector.platform if connector else None,
+    )
+    return {"ok": True}
+
+
+@router.delete("/bot-sessions/{session_id}")
+def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current_user)):
+    session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Bot session not found")
+    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    detail = f"Se eliminó la sesión #{session.id} con estrategia {session.strategy_slug}."
+    db.delete(session)
+    db.commit()
+    _notify_user_info(
+        user,
+        title="Bot eliminado",
+        detail=detail,
+        connector_label=connector.label if connector else None,
+        platform=connector.platform if connector else None,
+    )
+    return {"ok": True}
+
+
+@router.post("/bot-sessions/{session_id}/copy")
+def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends(get_db), user=Depends(current_user)):
+    source = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Bot session not found")
+
+    target_connector_id = payload.connector_id or source.connector_id
+    connector = db.query(Connector).filter(Connector.id == target_connector_id, Connector.user_id == user.id, Connector.is_enabled.is_(True)).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
+
+    source_symbols_json = _safe_json_object(getattr(source, "symbols_json", {}))
+    cloned = BotSession(
+        user_id=user.id,
+        connector_id=connector.id,
+        strategy_slug=source.strategy_slug,
+        timeframe=source.timeframe,
+        symbols_json={
+            **source_symbols_json,
+            "symbols": payload.symbols if payload.symbols is not None else (source_symbols_json.get("symbols", [])),
+        },
+        interval_minutes=source.interval_minutes,
+        risk_per_trade=source.risk_per_trade,
+        min_ml_probability=source.min_ml_probability,
+        use_live_if_available=source.use_live_if_available,
+        take_profit_mode=source.take_profit_mode,
+        take_profit_value=source.take_profit_value,
+        stop_loss_mode=source.stop_loss_mode,
+        stop_loss_value=source.stop_loss_value,
+        trailing_stop_mode=source.trailing_stop_mode,
+        trailing_stop_value=source.trailing_stop_value,
+        indicator_exit_enabled=source.indicator_exit_enabled,
+        indicator_exit_rule=source.indicator_exit_rule,
+        leverage_profile=getattr(source, "leverage_profile", "none"),
+        max_open_positions=max(int(getattr(source, "max_open_positions", 1) or 1), 1),
+        compound_growth_enabled=bool(getattr(source, "compound_growth_enabled", False)),
+        atr_volatility_filter_enabled=bool(getattr(source, "atr_volatility_filter_enabled", True)),
+        is_active=bool(source.is_active),
+        last_status="cloned",
+    )
+    db.add(cloned)
+    db.commit()
+    db.refresh(cloned)
+    _notify_user_info(
+        user,
+        title="Bot clonado",
+        detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned.id}.",
+        connector_label=connector.label,
+        platform=connector.platform,
+    )
+    return {"ok": True, "session_id": cloned.id}
+
+
+@router.get("/connectors/{connector_id}/symbols-catalog")
+def connector_symbols_catalog(connector_id: int, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(
+        Connector.id == connector_id,
+        Connector.user_id == user.id,
+    ).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    policy = db.query(PlatformPolicy).filter(PlatformPolicy.platform == connector.platform).first()
+    symbols = sorted({
+        *(_safe_symbols(getattr(connector, "symbols_json", {}))),
+        *((policy.top_symbols_json or {}).get("symbols", []) if policy else []),
+        *((policy.allowed_symbols_json or {}).get("symbols", []) if policy else []),
+    })
+    source = "configured_universe"
+
+    if connector.platform in {"binance", "bybit", "okx"}:
+        try:
+            client = get_client(connector)
+            exchange = client.build_exchange()
+            markets = exchange.load_markets()
+            market_type = str(getattr(connector, "market_type", "spot") or "spot").lower()
+            symbols = sorted(
+                symbol
+                for symbol, market in (markets or {}).items()
+                if market.get("active", True)
+                and (
+                    (market_type == "spot" and market.get("spot"))
+                    or (market_type == "futures" and (market.get("future") or market.get("swap")))
+                    or market_type not in {"spot", "futures"}
+                )
+            )
+            if market_type in {"spot", "futures"}:
+                symbols = [symbol for symbol in symbols if symbol.endswith("/USDT")] or symbols
+            source = "exchange_markets"
+        except Exception as exc:
+            source = f"configured_universe_fallback:{exc}"
+
+    payload = symbols[:2000]
+    return {
+        "connector_id": connector.id,
+        "platform": connector.platform,
+        "market_type": connector.market_type,
+        "symbols": payload,
+        "count": len(payload),
+        "source": source,
+    }
+
+
+@router.get("/execution-logs/download")
+def download_execution_logs(limit: int = 500, db=Depends(get_db), user=Depends(current_user)):
+    target = min(max(limit, 1), 2000)
+    runs = db.query(TradeRun).filter(TradeRun.user_id == user.id).order_by(TradeRun.created_at.desc()).limit(target).all()
+
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(["id", "created_at", "connector_id", "symbol", "timeframe", "signal", "status", "ml_probability", "quantity", "notes_json"])
+    for run in runs:
+        writer.writerow([
+            run.id,
+            run.created_at.isoformat() if run.created_at else "",
+            run.connector_id,
+            run.symbol,
+            run.timeframe,
+            run.signal,
+            run.status,
+            run.ml_probability,
+            run.quantity,
+            run.notes or "",
+        ])
+    stream.seek(0)
+    filename = f"execution_logs_user_{user.id}.csv"
+    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@router.get("/strategy-templates")
+def list_strategy_templates(db=Depends(get_db), user=Depends(current_user)):
+    mine = db.query(StrategyTemplate).filter(StrategyTemplate.user_id == user.id).order_by(StrategyTemplate.created_at.desc()).all()
+    public_templates = db.query(StrategyTemplate).filter(StrategyTemplate.is_public.is_(True), StrategyTemplate.user_id != user.id).order_by(StrategyTemplate.created_at.desc()).limit(200).all()
+    rows = []
+    for item in [*mine, *public_templates]:
+        rows.append({
+            "id": item.id,
+            "user_id": item.user_id,
+            "name": item.name,
+            "description": item.description,
+            "is_public": bool(item.is_public),
+            "source_template_id": item.source_template_id,
+            "config": item.config_json or {},
+            "created_at": _safe_iso(item.created_at),
+            "owned": item.user_id == user.id,
+        })
+    return rows
+
+
+@router.post("/strategy-templates")
+def create_strategy_template(payload: StrategyTemplateCreate, db=Depends(get_db), user=Depends(current_user)):
+    config = payload.config or {}
+    if payload.source_bot_session_id:
+        source = db.query(BotSession).filter(BotSession.id == payload.source_bot_session_id, BotSession.user_id == user.id).first()
+        if not source:
+            raise HTTPException(status_code=404, detail="Source bot session not found")
+        config = {
+            "strategy_slug": source.strategy_slug,
+            "timeframe": source.timeframe,
+            "risk_per_trade": source.risk_per_trade,
+            "min_ml_probability": source.min_ml_probability,
+            "use_live_if_available": source.use_live_if_available,
+            "take_profit_mode": source.take_profit_mode,
+            "take_profit_value": source.take_profit_value,
+            "stop_loss_mode": source.stop_loss_mode,
+            "stop_loss_value": source.stop_loss_value,
+            "trailing_stop_mode": source.trailing_stop_mode,
+            "trailing_stop_value": source.trailing_stop_value,
+            "indicator_exit_enabled": source.indicator_exit_enabled,
+            "indicator_exit_rule": source.indicator_exit_rule,
+            "interval_minutes": source.interval_minutes,
+            "symbols": ((source.symbols_json or {}).get("symbols") or []),
+            "connector_id": source.connector_id,
+        }
+
+    tpl = StrategyTemplate(
+        user_id=user.id,
+        name=payload.name,
+        description=payload.description,
+        is_public=payload.is_public,
+        config_json=config,
+    )
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return {"ok": True, "template_id": tpl.id}
+
+
+@router.post("/strategy-templates/{template_id}/copy")
+def copy_strategy_template(template_id: int, db=Depends(get_db), user=Depends(current_user)):
+    source = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if source.user_id != user.id and not source.is_public:
+        raise HTTPException(status_code=403, detail="Template is private")
+
+    clone = StrategyTemplate(
+        user_id=user.id,
+        name=f"{source.name} (copy)",
+        description=source.description,
+        is_public=False,
+        source_template_id=source.id,
+        config_json=source.config_json or {},
+    )
+    db.add(clone)
+    db.commit()
+    db.refresh(clone)
+    return {"ok": True, "template_id": clone.id}
+
+
+@router.post("/strategy-templates/{template_id}/apply")
+def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayload, db=Depends(get_db), user=Depends(current_user)):
+    template = db.query(StrategyTemplate).filter(StrategyTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if template.user_id != user.id and not template.is_public:
+        raise HTTPException(status_code=403, detail="Template is private")
+
+    connector = db.query(Connector).filter(Connector.id == payload.connector_id, Connector.user_id == user.id, Connector.is_enabled.is_(True)).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Enabled connector not found")
+
+    cfg = template.config_json or {}
+    session = BotSession(
+        user_id=user.id,
+        connector_id=connector.id,
+        strategy_slug=cfg.get("strategy_slug", "ema_rsi"),
+        timeframe=cfg.get("timeframe", "5m"),
+        symbols_json={"symbols": payload.symbols},
+        interval_minutes=int(cfg.get("interval_minutes", _interval_from_timeframe(cfg.get("timeframe", "5m"), 5))),
+        risk_per_trade=float(cfg.get("risk_per_trade", 0.03)),
+        min_ml_probability=float(cfg.get("min_ml_probability", 0.58)),
+        use_live_if_available=bool(cfg.get("use_live_if_available", False)),
+        take_profit_mode=cfg.get("take_profit_mode", "percent"),
+        take_profit_value=float(cfg.get("take_profit_value", 1.8)),
+        stop_loss_mode=cfg.get("stop_loss_mode", "percent"),
+        stop_loss_value=float(cfg.get("stop_loss_value", 1.1)),
+        trailing_stop_mode=cfg.get("trailing_stop_mode", "percent"),
+        trailing_stop_value=float(cfg.get("trailing_stop_value", 0.9)),
+        indicator_exit_enabled=bool(cfg.get("indicator_exit_enabled", False)),
+        indicator_exit_rule=cfg.get("indicator_exit_rule", "macd_cross"),
+        leverage_profile=cfg.get("leverage_profile", "none"),
+        max_open_positions=max(int(cfg.get("max_open_positions", 1) or 1), 1),
+        compound_growth_enabled=bool(cfg.get("compound_growth_enabled", False)),
+        atr_volatility_filter_enabled=bool(cfg.get("atr_volatility_filter_enabled", True)),
+        is_active=payload.is_active,
+        last_status="from_template",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return {"ok": True, "session_id": session.id}
+
+
+@router.get("/activity/performance")
+def activity_performance(db=Depends(get_db), user=Depends(current_user)):
+    try:
+        return activity_metrics(db, user.id)
+    except Exception as exc:
+        detail = f"user_id={user.id}: {exc}"
+        logger.exception("Activity metrics build failed: %s", detail)
+        _alert_admin_failure("API /api/activity/performance", detail)
+        return {
+            "equity_curve": [],
+            "drawdown_curve": [],
+            "monthly_returns": [],
+            "yearly_returns": [],
+            "summary": {
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "profit_factor": 0.0,
+                "win_rate": 0.0,
+                "total_trades": 0,
+            },
+        }
+
+
 @router.get("/dashboard")
 def dashboard(db=Depends(get_db), user=Depends(current_user)):
     try:
