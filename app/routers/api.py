@@ -84,6 +84,19 @@ FUTURES_ONLY_CONNECTOR_CONFIG_KEYS = {
     "futures_leverage",
     "leverage_profile",
 }
+LIVE_ONLY_CONNECTOR_MODE = "live"
+DEFAULT_SESSION_BALANCE_PERCENT = 10.0
+SYMBOL_MIN_NOTIONAL_HINTS = {
+    "BTC": 10.0,
+    "ETH": 5.0,
+    "BNB": 5.0,
+    "SOL": 5.0,
+}
+PLATFORM_MIN_FIXED_USD = {
+    "binance": 10.0,
+    "bybit": 5.0,
+    "okx": 5.0,
+}
 
 
 def _extract_http_error_detail(exc: HTTPException) -> str:
@@ -115,6 +128,148 @@ def _clean_optional_name(value: str | None, *, fallback: str | None = None) -> s
     candidate = value if value is not None else fallback
     clean = str(candidate or "").strip()
     return clean or None
+
+
+def _normalize_connector_mode(value: str | None = None) -> str:
+    _ = value
+    return LIVE_ONLY_CONNECTOR_MODE
+
+
+def _normalize_trade_amount_mode(
+    value: str | None,
+    *,
+    amount_per_trade: float | None = None,
+    amount_percentage: float | None = None,
+    fallback: str = "fixed_usd",
+) -> str:
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "fixed": "fixed_usd",
+        "fixed_amount": "fixed_usd",
+        "usd": "fixed_usd",
+        "inherit": "inherit",
+        "connector": "inherit",
+        "balance": "balance_percent",
+        "percentage": "balance_percent",
+        "percent": "balance_percent",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in {"inherit", "fixed_usd", "balance_percent"}:
+        return normalized
+    if _safe_float(amount_percentage, 0.0) > 0:
+        return "balance_percent"
+    if _safe_float(amount_per_trade, 0.0) > 0:
+        return "fixed_usd"
+    return fallback
+
+
+def _recommended_fixed_trade_amount_usd(
+    *,
+    platform: str | None = None,
+    symbols: list[str] | None = None,
+    market_type: str | None = None,
+) -> float:
+    baseline = PLATFORM_MIN_FIXED_USD.get(str(platform or "").strip().lower(), 5.0)
+    if normalize_market_type(market_type) == "futures":
+        baseline = max(baseline, 5.0)
+    for symbol in symbols or []:
+        base = str(symbol or "").strip().upper().split("/")[0].split(":")[0].replace("USDT", "")
+        for prefix, min_value in SYMBOL_MIN_NOTIONAL_HINTS.items():
+            if base.startswith(prefix):
+                baseline = max(baseline, min_value)
+    return round(float(baseline), 8)
+
+
+def _sanitize_connector_config(
+    *,
+    platform: str,
+    market_type: str,
+    config: dict | None,
+    symbols: list[str] | None = None,
+) -> dict:
+    cleaned = _safe_json_object(config)
+    inferred_mode = _normalize_trade_amount_mode(
+        cleaned.get("trade_amount_mode") or cleaned.get("allocation_mode"),
+        amount_per_trade=cleaned.get("fixed_trade_amount_usd", cleaned.get("allocation_value")),
+        amount_percentage=cleaned.get("trade_balance_percent"),
+        fallback="fixed_usd",
+    )
+    recommended_fixed = _recommended_fixed_trade_amount_usd(
+        platform=platform,
+        symbols=symbols,
+        market_type=market_type,
+    )
+    fixed_amount = _safe_float(cleaned.get("fixed_trade_amount_usd", cleaned.get("allocation_value")), 0.0)
+    balance_percent = _safe_float(cleaned.get("trade_balance_percent"), 0.0)
+    if inferred_mode == "balance_percent" and balance_percent <= 0:
+        balance_percent = DEFAULT_SESSION_BALANCE_PERCENT
+    if fixed_amount <= 0:
+        fixed_amount = recommended_fixed
+    cleaned["trade_amount_mode"] = inferred_mode
+    cleaned["fixed_trade_amount_usd"] = fixed_amount
+    cleaned["trade_balance_percent"] = balance_percent if balance_percent > 0 else DEFAULT_SESSION_BALANCE_PERCENT
+    cleaned["sandbox"] = False
+    cleaned.pop("paper_balance", None)
+    return _merge_connector_config(cleaned, {}, market_type=market_type)
+
+
+def _sanitize_session_runtime_state(session: BotSession, connector: Connector | None = None) -> bool:
+    changed = False
+    clean_name = _clean_optional_name(getattr(session, "session_name", None))
+    if getattr(session, "session_name", None) != clean_name:
+        session.session_name = clean_name
+        changed = True
+
+    if not bool(getattr(session, "use_live_if_available", False)):
+        session.use_live_if_available = True
+        changed = True
+
+    connector_symbols = _safe_symbols(getattr(connector, "symbols_json", {})) if connector is not None else []
+    session_symbols = _safe_symbols(getattr(session, "symbols_json", {}))
+    effective_symbols = session_symbols or connector_symbols
+    connector_defaults = _connector_trade_amount_defaults(connector)
+    next_mode = _normalize_trade_amount_mode(
+        getattr(session, "trade_amount_mode", None),
+        amount_per_trade=getattr(session, "amount_per_trade", None),
+        amount_percentage=getattr(session, "amount_percentage", None),
+        fallback=str(connector_defaults.get("trade_amount_mode") or "fixed_usd"),
+    )
+    next_fixed = _safe_float(
+        getattr(session, "amount_per_trade", None)
+        or connector_defaults.get("amount_per_trade")
+        or _recommended_fixed_trade_amount_usd(
+            platform=getattr(connector, "platform", None),
+            symbols=effective_symbols,
+            market_type=getattr(session, "market_type", None) or getattr(connector, "market_type", None),
+        ),
+        0.0,
+    )
+    next_percent = _safe_float(
+        getattr(session, "amount_percentage", None)
+        or connector_defaults.get("amount_percentage")
+        or DEFAULT_SESSION_BALANCE_PERCENT,
+        0.0,
+    )
+    if next_mode == "balance_percent" and next_percent <= 0:
+        next_percent = DEFAULT_SESSION_BALANCE_PERCENT
+    if next_mode == "fixed_usd" and next_fixed <= 0:
+        next_fixed = _recommended_fixed_trade_amount_usd(
+            platform=getattr(connector, "platform", None),
+            symbols=effective_symbols,
+            market_type=getattr(session, "market_type", None) or getattr(connector, "market_type", None),
+        )
+    if str(getattr(session, "trade_amount_mode", None) or "").lower() != next_mode:
+        session.trade_amount_mode = next_mode
+        changed = True
+    target_fixed = next_fixed if next_mode == "fixed_usd" else None
+    target_percent = next_percent if next_mode == "balance_percent" else None
+    if getattr(session, "amount_per_trade", None) != target_fixed:
+        session.amount_per_trade = target_fixed
+        changed = True
+    if getattr(session, "amount_percentage", None) != target_percent:
+        session.amount_percentage = target_percent
+        changed = True
+    return changed
 
 
 def _display_symbol(value: str | None) -> str:
@@ -335,19 +490,27 @@ def _merge_connector_config(current: dict | None, incoming: dict | None, *, mark
 
 def _connector_trade_amount_defaults(connector: Connector | None) -> dict[str, float | str | None]:
     config = _safe_json_object(getattr(connector, "config_json", {})) if connector is not None else {}
-    mode = str(config.get("trade_amount_mode") or config.get("allocation_mode") or "fixed_usd").strip().lower()
-    if mode in {"fixed", "fixed_amount"}:
-        mode = "fixed_usd"
+    mode = _normalize_trade_amount_mode(
+        config.get("trade_amount_mode") or config.get("allocation_mode"),
+        amount_per_trade=config.get("fixed_trade_amount_usd", config.get("allocation_value")),
+        amount_percentage=config.get("trade_balance_percent"),
+        fallback="fixed_usd",
+    )
+    recommended_fixed = _recommended_fixed_trade_amount_usd(
+        platform=getattr(connector, "platform", None) if connector is not None else None,
+        symbols=_safe_symbols(getattr(connector, "symbols_json", {})) if connector is not None else [],
+        market_type=getattr(connector, "market_type", None) if connector is not None else None,
+    )
     if mode == "balance_percent":
         return {
             "trade_amount_mode": "balance_percent",
             "amount_per_trade": None,
-            "amount_percentage": _safe_float(config.get("trade_balance_percent"), 10.0),
+            "amount_percentage": _safe_float(config.get("trade_balance_percent"), DEFAULT_SESSION_BALANCE_PERCENT),
         }
     fixed_value = config.get("fixed_trade_amount_usd", config.get("allocation_value"))
     return {
         "trade_amount_mode": "fixed_usd",
-        "amount_per_trade": _safe_float(fixed_value, 10.0),
+        "amount_per_trade": _safe_float(fixed_value, recommended_fixed),
         "amount_percentage": None,
     }
 
@@ -361,7 +524,12 @@ def _normalize_session_trade_amount_payload(
     current_amount_per_trade: float | None = None,
     current_amount_percentage: float | None = None,
 ) -> dict[str, float | str | None]:
-    resolved_mode = str(mode or current_mode or "inherit").lower()
+    resolved_mode = _normalize_trade_amount_mode(
+        mode or current_mode,
+        amount_per_trade=amount_per_trade if amount_per_trade is not None else current_amount_per_trade,
+        amount_percentage=amount_percentage if amount_percentage is not None else current_amount_percentage,
+        fallback="inherit",
+    )
     resolved_amount_per_trade = amount_per_trade if amount_per_trade is not None else current_amount_per_trade
     resolved_amount_percentage = amount_percentage if amount_percentage is not None else current_amount_percentage
 
@@ -664,18 +832,32 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
     connectors = db.query(Connector).filter(Connector.user_id == user.id).order_by(Connector.created_at.desc()).all()
     payload = []
     serialization_errors = []
+    changed = False
     for connector in connectors:
         try:
             resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+            sanitized_mode = _normalize_connector_mode(getattr(connector, "mode", None))
+            sanitized_config = _sanitize_connector_config(
+                platform=connector.platform,
+                market_type=resolved_market_type,
+                config=getattr(connector, "config_json", {}),
+                symbols=_safe_symbols(getattr(connector, "symbols_json", {})),
+            )
+            if connector.mode != sanitized_mode:
+                connector.mode = sanitized_mode
+                changed = True
+            if getattr(connector, "config_json", None) != sanitized_config:
+                connector.config_json = sanitized_config
+                changed = True
             payload.append({
                 "id": connector.id,
                 "platform": connector.platform,
                 "label": connector.label,
-                "mode": connector.mode,
+                "mode": sanitized_mode,
                 "market_type": resolved_market_type,
                 "is_enabled": bool(connector.is_enabled),
                 "symbols": _safe_symbols(getattr(connector, "symbols_json", {})),
-                "config": _safe_json_object(getattr(connector, "config_json", {})),
+                "config": sanitized_config,
                 "has_saved_credentials": bool((decrypt_payload(getattr(connector, "encrypted_secret_blob", None)) or {}).keys()),
                 "created_at": _safe_iso(getattr(connector, "created_at", None)),
             })
@@ -687,7 +869,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
                 "id": getattr(connector, "id", None),
                 "platform": getattr(connector, "platform", "-"),
                 "label": getattr(connector, "label", "Conector inválido"),
-                "mode": getattr(connector, "mode", "paper"),
+                "mode": getattr(connector, "mode", "live"),
                 "market_type": _normalize_market_type(getattr(connector, "market_type", "spot") or "spot"),
                 "is_enabled": bool(getattr(connector, "is_enabled", False)),
                 "symbols": [],
@@ -759,10 +941,15 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
         user_id=target_user.id,
         platform=payload.platform,
         label=payload.label,
-        mode=payload.mode,
+        mode=_normalize_connector_mode(payload.mode),
         market_type=market_type,
         symbols_json={"symbols": payload.symbols},
-        config_json=_merge_connector_config({}, payload.config, market_type=market_type),
+        config_json=_sanitize_connector_config(
+            platform=payload.platform,
+            market_type=market_type,
+            config=payload.config,
+            symbols=payload.symbols,
+        ),
         encrypted_secret_blob=encrypt_payload(payload.secrets),
     )
     ensure_connector_market_type_state(connector)
@@ -796,7 +983,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     if payload.label is not None:
         connector.label = payload.label
     if payload.mode is not None:
-        connector.mode = payload.mode
+        connector.mode = _normalize_connector_mode(payload.mode)
     next_config = _merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type)
     connector.market_type = _resolve_connector_market_type(
         platform=connector.platform,
@@ -805,7 +992,13 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     )
     if payload.symbols is not None:
         connector.symbols_json = {"symbols": payload.symbols}
-    connector.config_json = _merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type)
+    connector.mode = _normalize_connector_mode(getattr(connector, "mode", None))
+    connector.config_json = _sanitize_connector_config(
+        platform=connector.platform,
+        market_type=connector.market_type,
+        config=_merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type),
+        symbols=_safe_symbols(getattr(connector, "symbols_json", {})),
+    )
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -889,11 +1082,17 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
 
     if payload.config is not None:
-        connector.config_json = _merge_connector_config(
-            connector.config_json,
-            payload.config,
+        connector.config_json = _sanitize_connector_config(
+            platform=connector.platform,
             market_type=normalize_market_type(getattr(connector, "market_type", None) or "spot"),
+            config=_merge_connector_config(
+                connector.config_json,
+                payload.config,
+                market_type=normalize_market_type(getattr(connector, "market_type", None) or "spot"),
+            ),
+            symbols=_safe_symbols(getattr(connector, "symbols_json", {})),
         )
+    connector.mode = _normalize_connector_mode(getattr(connector, "mode", None))
     ensure_connector_market_type_state(connector, persist=True, db=db)
 
     db.commit()
@@ -927,7 +1126,7 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         strategy_slug=payload.strategy_slug,
         risk_per_trade=risk_value,
         min_ml_probability=ml_value,
-        use_live_if_available=payload.use_live_if_available,
+        use_live_if_available=True,
         take_profit_mode=payload.take_profit_mode,
         take_profit_value=payload.take_profit_value,
         stop_loss_mode=payload.stop_loss_mode,
@@ -1019,9 +1218,27 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
     ).order_by(BotSession.created_at.desc()).all()
     payload = []
     serialization_errors = []
+    changed = False
     for session in sessions:
         try:
             connector = session.connector
+            if connector is not None:
+                resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+                sanitized_mode = _normalize_connector_mode(getattr(connector, "mode", None))
+                sanitized_config = _sanitize_connector_config(
+                    platform=connector.platform,
+                    market_type=resolved_market_type,
+                    config=getattr(connector, "config_json", {}),
+                    symbols=_safe_symbols(getattr(connector, "symbols_json", {})),
+                )
+                if connector.mode != sanitized_mode:
+                    connector.mode = sanitized_mode
+                    changed = True
+                if getattr(connector, "config_json", None) != sanitized_config:
+                    connector.config_json = sanitized_config
+                    changed = True
+            if _sanitize_session_runtime_state(session, connector):
+                changed = True
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
             session_mode = str(getattr(session, "trade_amount_mode", None) or "inherit").lower()
@@ -1134,6 +1351,8 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             "API /api/bot-sessions serialization",
             " | ".join(serialization_errors)[:1500],
         )
+    if changed:
+        commit_with_retry(db)
     return payload
 
 
@@ -1184,7 +1403,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
             amount_per_trade=normalized_amounts["amount_per_trade"],
             amount_percentage=normalized_amounts["amount_percentage"],
             min_ml_probability=ml_value,
-            use_live_if_available=payload.use_live_if_available,
+            use_live_if_available=True,
             take_profit_mode=payload.take_profit_mode,
             take_profit_value=payload.take_profit_value,
             stop_loss_mode=payload.stop_loss_mode,
@@ -1203,6 +1422,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         )
         db.add(session)
         flush_with_retry(db)
+        _sanitize_session_runtime_state(session, connector)
         session_id = session.id
         strategy_slug = session.strategy_slug
         timeframe = session.timeframe
@@ -1257,6 +1477,8 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
             _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
             session.strategy_slug = payload.strategy_slug
         connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+        if connector is not None:
+            connector.mode = _normalize_connector_mode(getattr(connector, "mode", None))
         if payload.market_type is not None and connector is not None:
             session.market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
         if payload.timeframe is not None:
@@ -1283,7 +1505,7 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         if payload.min_ml_probability is not None:
             session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
         if payload.use_live_if_available is not None:
-            session.use_live_if_available = payload.use_live_if_available
+            session.use_live_if_available = True
         if payload.take_profit_mode is not None:
             session.take_profit_mode = payload.take_profit_mode
         if payload.take_profit_value is not None:
@@ -1309,6 +1531,7 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         if payload.atr_volatility_filter_enabled is not None:
             session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
 
+        _sanitize_session_runtime_state(session, connector)
         commit_with_retry(db)
         connector = connector or db.query(Connector).filter(Connector.id == session.connector_id).first()
     except HTTPException:
@@ -1388,7 +1611,7 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
             amount_per_trade=getattr(source, "amount_per_trade", None),
             amount_percentage=getattr(source, "amount_percentage", None),
             min_ml_probability=source.min_ml_probability,
-            use_live_if_available=source.use_live_if_available,
+            use_live_if_available=True,
             take_profit_mode=source.take_profit_mode,
             take_profit_value=source.take_profit_value,
             stop_loss_mode=source.stop_loss_mode,
@@ -1407,6 +1630,7 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         )
         db.add(cloned)
         flush_with_retry(db)
+        _sanitize_session_runtime_state(cloned, connector)
         cloned_id = cloned.id
         commit_with_retry(db)
     except HTTPException:
@@ -1570,7 +1794,7 @@ def create_strategy_template(payload: StrategyTemplateCreate, db=Depends(get_db)
             "amount_per_trade": getattr(source, "amount_per_trade", None),
             "amount_percentage": getattr(source, "amount_percentage", None),
             "min_ml_probability": source.min_ml_probability,
-            "use_live_if_available": source.use_live_if_available,
+            "use_live_if_available": True,
             "take_profit_mode": source.take_profit_mode,
             "take_profit_value": source.take_profit_value,
             "stop_loss_mode": source.stop_loss_mode,
@@ -1647,7 +1871,7 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         amount_per_trade=cfg.get("amount_per_trade"),
         amount_percentage=cfg.get("amount_percentage"),
         min_ml_probability=float(cfg.get("min_ml_probability", 0.58)),
-        use_live_if_available=bool(cfg.get("use_live_if_available", False)),
+        use_live_if_available=True,
         take_profit_mode=cfg.get("take_profit_mode", "percent"),
         take_profit_value=float(cfg.get("take_profit_value", 1.8)),
         stop_loss_mode=cfg.get("stop_loss_mode", "percent"),
@@ -1666,6 +1890,7 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
     )
     db.add(session)
     db.flush()
+    _sanitize_session_runtime_state(session, connector)
     session_id = session.id
     db.commit()
     return {"ok": True, "session_id": session_id}
@@ -1904,6 +2129,9 @@ def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_us
             "connector_label": connector_meta["connector_label"],
             "platform": connector_meta["platform"],
             "market_type": connector_meta["market_type"],
+            "bot_session_id": parsed_note.get("bot_session_id"),
+            "bot_session_name": _clean_optional_name(parsed_note.get("bot_session_name")),
+            "bot_session_display_name": _clean_optional_name(parsed_note.get("bot_session_display_name")),
             "symbol": run.symbol,
             "display_symbol": _display_symbol(run.symbol),
             "strategy_slug": run.strategy_slug,
@@ -2148,6 +2376,28 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
     strategy_control = _ensure_strategy_control(db, user.id)
     recent_runs = db.query(TradeRun).filter(TradeRun.user_id == user_id).order_by(TradeRun.created_at.desc()).limit(8).all()
     recent_sessions = db.query(BotSession).filter(BotSession.user_id == user_id).order_by(BotSession.updated_at.desc()).limit(6).all()
+    changed = False
+    for connector in connectors:
+        resolved_market_type = ensure_connector_market_type_state(connector, persist=True, db=db)
+        sanitized_mode = _normalize_connector_mode(getattr(connector, "mode", None))
+        sanitized_config = _sanitize_connector_config(
+            platform=connector.platform,
+            market_type=resolved_market_type,
+            config=getattr(connector, "config_json", {}),
+            symbols=_safe_symbols(getattr(connector, "symbols_json", {})),
+        )
+        if connector.mode != sanitized_mode:
+            connector.mode = sanitized_mode
+            changed = True
+        if getattr(connector, "config_json", None) != sanitized_config:
+            connector.config_json = sanitized_config
+            changed = True
+    connector_by_id = {connector.id: connector for connector in connectors}
+    for session in recent_sessions:
+        if _sanitize_session_runtime_state(session, connector_by_id.get(session.connector_id)):
+            changed = True
+    if changed:
+        commit_with_retry(db)
 
     return {
         "user": {
@@ -2174,14 +2424,19 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "id": c.id,
             "platform": c.platform,
             "label": c.label,
-            "mode": c.mode,
-            "market_type": c.market_type,
+            "mode": _normalize_connector_mode(c.mode),
+            "market_type": normalize_market_type(c.market_type),
             "is_enabled": c.is_enabled,
             "symbols": c.symbols_json.get("symbols", []),
             "allocation_mode": (c.config_json or {}).get("allocation_mode", "fixed"),
             "allocation_value": (c.config_json or {}).get("allocation_value", (c.config_json or {}).get("default_quantity", 0)),
             "has_saved_credentials": bool((decrypt_payload(c.encrypted_secret_blob) or {}).keys()),
-            "config": c.config_json or {},
+            "config": _sanitize_connector_config(
+                platform=c.platform,
+                market_type=normalize_market_type(c.market_type),
+                config=c.config_json or {},
+                symbols=_safe_symbols(getattr(c, "symbols_json", {})),
+            ),
         } for c in connectors],
         "policies": [{
             "platform": p.platform,
@@ -2212,7 +2467,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
         "recent_sessions": [{
             "id": session.id,
             "session_name": _clean_optional_name(getattr(session, "session_name", None)),
-            "display_name": _session_display_name(session, next((c for c in connectors if c.id == session.connector_id), None)),
+            "display_name": _session_display_name(session, connector_by_id.get(session.connector_id)),
             "strategy_slug": session.strategy_slug,
             "connector_label": next((c.label for c in connectors if c.id == session.connector_id), "-"),
             "market_type": normalize_market_type(session.market_type),
@@ -2225,6 +2480,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
 
 
 @router.get("/admin/overview")
+@router.get("/admin/overview/")
 def admin_overview(db=Depends(get_db), _: User = Depends(admin_user)):
     users = db.query(User).all()
     connectors = db.query(Connector).all()

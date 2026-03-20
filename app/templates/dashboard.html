@@ -91,9 +91,7 @@
         <label>Nombre<input name="label" id="connector-label" placeholder="Binance principal" required></label>
         <label>Modo
           <select name="mode" id="connector-mode">
-            <option value="paper">Paper</option>
             <option value="live">Live</option>
-            <option value="signal">Signal</option>
           </select>
         </label>
         <label>Mercado
@@ -180,7 +178,6 @@
         </label>
         <label>Monto por trade<input name="amount_per_trade" type="number" min="0.01" step="0.01"></label>
         <label>% por trade<input name="amount_percentage" type="number" min="0.1" max="100" step="0.1"></label>
-        <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
         <div class="row-wrap">
           <button class="btn primary" type="submit" id="run-strategy-btn">Ejecutar estrategia</button>
           <button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button>

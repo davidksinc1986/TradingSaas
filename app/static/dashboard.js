@@ -49,8 +49,6 @@ const COMMON_CONNECTOR_CONFIG_FIELDS = [
   { key: 'trade_amount_mode', label: 'Sizing por conector', target: 'config', type: 'select', options: ['fixed_usd', 'balance_percent'], hint: 'Cada conector guarda su sizing de forma independiente.' },
   { key: 'fixed_trade_amount_usd', label: 'Monto fijo USD', target: 'config', type: 'number', hint: 'Monto fijo que usará este conector cuando opere en sizing fijo.' },
   { key: 'trade_balance_percent', label: '% balance', target: 'config', type: 'number', hint: 'Porcentaje de balance que usará este conector cuando opere en %.' },
-  { key: 'paper_balance', label: 'Paper balance', target: 'config', type: 'number', hint: 'Balance de referencia cuando el conector corre en paper.' },
-  { key: 'sandbox', label: 'Sandbox/Testnet', target: 'config', type: 'checkbox', platforms: ['binance', 'bybit', 'okx'], hint: 'Activa testnet/sandbox cuando el exchange lo soporte.' },
 ];
 
 const STRATEGIES = [
@@ -373,8 +371,6 @@ function configEntriesForDisplay(config = {}) {
     'trade_amount_mode',
     'fixed_trade_amount_usd',
     'trade_balance_percent',
-    'sandbox',
-    'paper_balance',
   ];
   return orderedKeys
     .filter((key) => config[key] !== undefined && config[key] !== null && config[key] !== '')
@@ -510,7 +506,7 @@ function populateConnectorForm(connectorId) {
   form.querySelector('#connector-market-type').value = connector.market_type || 'spot';
   renderConnectorFields();
   form.querySelector('#connector-label').value = connector.label || '';
-  form.querySelector('#connector-mode').value = connector.mode || 'paper';
+  form.querySelector('#connector-mode').value = connector.mode || 'live';
   form.querySelector('#symbols-input').value = (connector.symbols || []).join(', ');
   connectorFieldDefinitions(connector.platform, connector.market_type).forEach((field) => {
     const input = form.querySelector(`[name="field_${field.target}_${field.key}"]`);
@@ -709,11 +705,8 @@ function renderBotSessions() {
         <label class="compact-field sizing-value-field ${session.configured_trade_amount_mode === 'balance_percent' ? '' : 'hidden'}" data-mode-field="balance_percent">% por trade
           <input name="amount_percentage" type="number" min="0.1" max="100" step="0.1" value="${session.configured_amount_percentage ?? ''}">
         </label>
-        <label class="compact-field">Use live
-          <select name="use_live_if_available">
-            <option value="true" ${session.use_live_if_available ? 'selected' : ''}>Sí</option>
-            <option value="false" ${!session.use_live_if_available ? 'selected' : ''}>No</option>
-          </select>
+        <label class="compact-field">Ejecución
+          <input value="Live" disabled>
         </label>
         <label class="compact-field">Estado
           <select name="is_active">
@@ -778,7 +771,7 @@ function renderBotSessions() {
             trade_amount_mode: fd.get('trade_amount_mode'),
             amount_per_trade: fd.get('trade_amount_mode') === 'fixed_usd' ? Number(fd.get('amount_per_trade')) : null,
             amount_percentage: fd.get('trade_amount_mode') === 'balance_percent' ? Number(fd.get('amount_percentage')) : null,
-            use_live_if_available: fd.get('use_live_if_available') === 'true',
+            use_live_if_available: true,
             is_active: fd.get('is_active') === 'true',
           }),
         });
@@ -852,6 +845,7 @@ function renderExecutionLogs() {
           <td>
             <strong>${escapeHtml(prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`))}</strong>
             <div class="connector-meta">
+              <span>${escapeHtml(prettyLabel(item.bot_session_display_name || item.bot_session_name, item.strategy_slug || 'Sesión'))}</span>
               <span>${escapeHtml(prettyPlatform(item.platform))}</span>
               <span>${escapeHtml(prettyMarketType(item.market_type, item.connector_id))}</span>
             </div>
@@ -1149,7 +1143,7 @@ function buildRunPayload(form) {
     trade_amount_mode: fd.get('trade_amount_mode'),
     amount_per_trade: parseOptionalNumber(fd.get('amount_per_trade')),
     amount_percentage: parseOptionalNumber(fd.get('amount_percentage')),
-    use_live_if_available: fd.get('use_live_if_available') === 'on',
+    use_live_if_available: true,
     indicator_exit_enabled: false,
     indicator_exit_rule: 'macd_cross',
     leverage_profile: 'none',
@@ -1229,7 +1223,6 @@ function advisoryForField(formKind, input) {
     if (input.name === 'connector_id') {
       if (!connector) return { severity: 'danger', message: 'Debes elegir un conector válido y activo.' };
       if (!connector.is_enabled) return { severity: 'danger', message: 'Ese conector está desactivado. Actívalo antes de operar.' };
-      if (connector.mode !== 'live' && fd.get('use_live_if_available') === 'on') return { severity, message: 'El conector no está en modo live; aunque actives live, la orden no saldrá al exchange.' };
       return meta?.recommend ? { severity: 'ok', message: `${meta.recommend} Conector actual: ${connector.label} · ${prettyMarketType(connector.market_type)}.` } : null;
     }
 
@@ -1314,10 +1307,6 @@ function advisoryForField(formKind, input) {
       return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
     }
 
-    if (input.name === 'use_live_if_available') {
-      if (input.checked && connector?.mode !== 'live') return { severity, message: 'Marcaste live, pero el conector actual no está en modo live.' };
-      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
-    }
   }
 
   return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
@@ -1400,9 +1389,14 @@ async function activateBotFromForm() {
     setStatus('run-feedback', 'Creando estrategia automática...', 'ok');
     setButtonsBusy([document.getElementById('activate-bot-btn'), document.getElementById('run-strategy-btn')], true, 'Procesando...');
     const payload = buildRunPayload(form);
-    await api('/api/bot-sessions', { method: 'POST', body: JSON.stringify(payload) });
+    const result = await api('/api/bot-sessions', { method: 'POST', body: JSON.stringify(payload) });
+    const targetSessionId = Number(result?.session_id || 0);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await refreshDashboard();
+      if (!targetSessionId || state.botSessions.some((item) => Number(item.id) === targetSessionId)) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    }
     setStatus('run-feedback', 'Bot 24/7 activado correctamente.', 'ok');
-    await refreshDashboard();
   } catch (error) {
     setStatus('run-feedback', parseApiError(error), 'error');
   } finally {

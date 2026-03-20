@@ -203,9 +203,7 @@ function connectorFormMarkup(connector) {
       <label>Label<input name="label" value="${connector.label}"></label>
       <label>Modo
         <select name="mode">
-          <option value="paper" ${connector.mode === 'paper' ? 'selected' : ''}>Paper</option>
           <option value="live" ${connector.mode === 'live' ? 'selected' : ''}>Live</option>
-          <option value="signal" ${connector.mode === 'signal' ? 'selected' : ''}>Signal</option>
         </select>
       </label>
       <label>Mercado
@@ -508,7 +506,21 @@ async function refreshAdmin() {
   });
   const [users, policies, overview] = values;
   usersState = Array.isArray(users) ? users : [];
-  adminOverviewState = overview || null;
+  adminOverviewState = overview || {
+    metrics: {
+      users_total: usersState.length,
+      users_active: usersState.filter((user) => user.is_active).length,
+      connectors_total: 0,
+      connectors_enabled: 0,
+      connectors_live: 0,
+      sessions_total: 0,
+      sessions_active: 0,
+      sessions_with_errors: 0,
+      recent_run_errors: 0,
+    },
+    platforms: [],
+    events: [],
+  };
   renderUserList();
   renderPolicies(Array.isArray(policies) ? policies : []);
   renderAdminOverview();
@@ -517,8 +529,11 @@ async function refreshAdmin() {
   } else {
     document.getElementById('selected-user-profile').innerHTML = '<small class="hint">No hay usuarios disponibles.</small>';
   }
-  if (failures.length) {
-    setFeedback(`Panel cargado parcialmente: ${failures.join(' | ')}`, 'error');
+  const relevantFailures = failures.filter((item) => !item.startsWith('overview: Not Found'));
+  if (relevantFailures.length) {
+    setFeedback(`Panel cargado parcialmente: ${relevantFailures.join(' | ')}`, 'error');
+  } else if (failures.length) {
+    setFeedback('Panel cargado con fallback local mientras se recompone el overview.', 'ok');
   }
 }
 
