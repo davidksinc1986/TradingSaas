@@ -339,6 +339,59 @@ def test_resolve_trade_amount_settings_uses_connector_defaults_when_inheriting()
     assert result["amount_per_trade"] is None
 
 
+def test_list_bot_sessions_prefers_session_display_name():
+    connector = SimpleNamespace(
+        id=48,
+        label="Binance Principal",
+        platform="binance",
+        mode="live",
+        market_type="futures",
+        config_json={"market_type": "futures", "trade_amount_mode": "fixed_usd", "fixed_trade_amount_usd": 25},
+    )
+    session = SimpleNamespace(
+        id=25,
+        connector_id=48,
+        connector=connector,
+        user=SimpleNamespace(trade_amount_mode="fixed_usd", fixed_trade_amount_usd=25, trade_balance_percent=10),
+        session_name="Momentum Quantum",
+        strategy_slug="momentum_breakout",
+        timeframe="15m",
+        symbols_json={"symbols": ["BTC/USDT"], "symbol_source_mode": "dynamic", "dynamic_symbol_limit": 8},
+        interval_minutes=15,
+        risk_per_trade=0.01,
+        trade_amount_mode="inherit",
+        amount_per_trade=None,
+        amount_percentage=None,
+        min_ml_probability=0.55,
+        take_profit_mode="percent",
+        take_profit_value=1.2,
+        stop_loss_mode="percent",
+        stop_loss_value=0.6,
+        trailing_stop_mode="percent",
+        trailing_stop_value=0.4,
+        indicator_exit_enabled=False,
+        indicator_exit_rule="macd_cross",
+        leverage_profile="balanced",
+        max_open_positions=1,
+        compound_growth_enabled=False,
+        atr_volatility_filter_enabled=True,
+        is_active=True,
+        last_run_at=None,
+        next_run_at=None,
+        last_status="queued",
+        last_error=None,
+        created_at=None,
+        market_type="futures",
+    )
+
+    rows = api.list_bot_sessions(db=_FakeDB([session]), user=SimpleNamespace(id=7))
+
+    assert rows[0]["session_name"] == "Momentum Quantum"
+    assert rows[0]["display_name"] == "Momentum Quantum"
+    assert rows[0]["symbol_source_mode"] == "dynamic"
+    assert rows[0]["dynamic_symbol_limit"] == 8
+
+
 def test_create_bot_session_flushes_and_returns_session_id_without_refresh(monkeypatch):
     connector = SimpleNamespace(
         id=77,

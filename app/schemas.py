@@ -104,6 +104,7 @@ class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
 
 class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     connector_id: int
+    session_name: str | None = Field(default=None, min_length=2, max_length=255)
     market_type: MARKET_TYPES | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
@@ -130,6 +131,7 @@ class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
 
 class BotSessionUpdate(BaseModel):
     is_active: bool | None = None
+    session_name: str | None = Field(default=None, min_length=2, max_length=255)
     trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] | None = None
     amount_per_trade: float | None = Field(default=None, gt=0)
     amount_percentage: float | None = Field(default=None, gt=0, le=100)

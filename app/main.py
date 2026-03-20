@@ -73,6 +73,7 @@ def ensure_schema_updates(db):
     })
 
     add_missing_columns("bot_sessions", {
+        "session_name": "ALTER TABLE bot_sessions ADD COLUMN session_name VARCHAR(255)",
         "market_type": "ALTER TABLE bot_sessions ADD COLUMN market_type VARCHAR(20) DEFAULT 'spot'",
         "trade_amount_mode": "ALTER TABLE bot_sessions ADD COLUMN trade_amount_mode VARCHAR(20)",
         "amount_per_trade": "ALTER TABLE bot_sessions ADD COLUMN amount_per_trade FLOAT",

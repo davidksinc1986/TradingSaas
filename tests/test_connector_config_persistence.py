@@ -162,3 +162,59 @@ def test_update_bot_session_switches_modes_and_clears_opposite_amount_field(tmp_
         assert session.amount_per_trade is None
     finally:
         db.close()
+
+
+def test_update_bot_session_persists_live_name_and_dynamic_scan_settings(tmp_path, monkeypatch):
+    Session = _session_factory(tmp_path)
+    db = Session()
+    monkeypatch.setattr(api, "_notify_user_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "_ensure_strategy_control", lambda db, user_id: type("Ctl", (), {"managed_by_admin": False, "allowed_strategies_json": {"items": api.ALL_STRATEGIES}})())
+    try:
+        user, connector = _base_user_and_connector(db, market_type="futures")
+        session = BotSession(
+            user_id=user.id,
+            connector_id=connector.id,
+            session_name="Base",
+            market_type="futures",
+            strategy_slug="ema_rsi_adx_stack",
+            timeframe="15m",
+            symbols_json={"symbols": ["BTC/USDT"], "symbol_source_mode": "manual", "dynamic_symbol_limit": 5},
+            interval_minutes=15,
+            risk_per_trade=0.01,
+            trade_amount_mode="fixed_usd",
+            amount_per_trade=75.0,
+            min_ml_probability=0.55,
+            use_live_if_available=False,
+            take_profit_mode="percent",
+            take_profit_value=1.5,
+            stop_loss_mode="percent",
+            stop_loss_value=1.0,
+            trailing_stop_mode="percent",
+            trailing_stop_value=0.8,
+            is_active=True,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        api.update_bot_session(
+            session.id,
+            payload=api.BotSessionUpdate(
+                session_name="Quantum Momentum",
+                symbol_source_mode="dynamic",
+                dynamic_symbol_limit=12,
+                use_live_if_available=True,
+                amount_per_trade=90.0,
+            ),
+            db=db,
+            user=user,
+        )
+        db.refresh(session)
+
+        assert session.session_name == "Quantum Momentum"
+        assert session.use_live_if_available is True
+        assert session.amount_per_trade == 90.0
+        assert session.symbols_json["symbol_source_mode"] == "dynamic"
+        assert session.symbols_json["dynamic_symbol_limit"] == 12
+    finally:
+        db.close()

@@ -147,7 +147,15 @@
         <label>Conector
           <select id="run-connector-select" name="connector_id"></select>
         </label>
+        <label>Nombre estrategia / sesión<input name="session_name" placeholder="Momentum BTC principal"></label>
         <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+        <label>Origen de símbolos
+          <select name="symbol_source_mode" id="run-symbol-source-mode">
+            <option value="manual">Lista manual</option>
+            <option value="dynamic">Auto scan dinámico</option>
+          </select>
+        </label>
+        <label id="run-dynamic-limit-field" class="hidden">Máx. símbolos auto scan<input name="dynamic_symbol_limit" type="number" min="1" max="50" step="1" value="10"></label>
         <label>Timeframe<input name="timeframe" value="15m"></label>
         <label>Estrategia
           <select name="strategy_slug" id="strategy-select"></select>
@@ -180,6 +188,16 @@
         <div id="run-feedback" class="status-msg"></div>
       </form>
       <small class="hint subtle-guide">Los campos marcados con <span class="field-asterisk-inline">*</span> muestran recomendaciones discretas según el contexto.</small>
+      <div class="quantum-report-list" style="margin-top:14px;">
+        <article class="quantum-report-item">
+          <strong>Auto scan dinámico</strong>
+          <small>Evalúa el universo base del conector y selecciona automáticamente los símbolos con mejor score reciente para cada corrida.</small>
+        </article>
+        <article class="quantum-report-item">
+          <strong>Regla operativa</strong>
+          <small>Si el auto scan está activo, la sesión guarda tu watchlist como fallback y toma solo el top dinámico configurado.</small>
+        </article>
+      </div>
     </article>
 
     <article class="card">

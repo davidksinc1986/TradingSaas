@@ -32,7 +32,8 @@ function formatDate(value) {
   if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString();
+  const two = (number) => String(number).padStart(2, '0');
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}, ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
 
@@ -335,7 +336,7 @@ async function refreshSelectedUserProfile() {
         <div class="admin-section-grid" style="margin-top:12px;">
           ${(profile.recent_sessions || []).map((session) => `
             <article class="admin-mini-card">
-              <strong>${session.strategy_slug}</strong>
+              <strong>${session.display_name || session.session_name || session.strategy_slug}</strong>
               <small>${session.connector_label} · ${session.market_type}</small>
               <small>${session.is_active ? 'Activa' : 'Pausada'} · ${session.last_status || '-'}</small>
               <small>${session.last_error || 'Sin error reportado'}</small>
@@ -493,17 +494,32 @@ async function refreshSelectedUserProfile() {
 }
 
 async function refreshAdmin() {
-  const [users, policies, overview] = await Promise.all([
+  const settled = await Promise.allSettled([
     api('/api/admin/users'),
     api('/api/admin/policies'),
     api('/api/admin/overview'),
   ]);
+  const labels = ['usuarios', 'políticas', 'overview'];
+  const failures = [];
+  const values = settled.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value;
+    failures.push(`${labels[index]}: ${parseApiError(result.reason)}`);
+    return null;
+  });
+  const [users, policies, overview] = values;
   usersState = Array.isArray(users) ? users : [];
   adminOverviewState = overview || null;
   renderUserList();
   renderPolicies(Array.isArray(policies) ? policies : []);
   renderAdminOverview();
-  await refreshSelectedUserProfile();
+  if (usersState.length) {
+    await refreshSelectedUserProfile();
+  } else {
+    document.getElementById('selected-user-profile').innerHTML = '<small class="hint">No hay usuarios disponibles.</small>';
+  }
+  if (failures.length) {
+    setFeedback(`Panel cargado parcialmente: ${failures.join(' | ')}`, 'error');
+  }
 }
 
 async function createUser(event) {

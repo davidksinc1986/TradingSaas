@@ -1399,8 +1399,11 @@ def run_strategy(
 
             risk_context = {
                 "allow_adjust_up": True,
-                "max_qty": quantity,
-                "max_cost": budget_cap_qty * max(price, 0.0000001) if budget_cap_qty > 0 else None,
+                "max_qty": max(
+                    quantity,
+                    _safe_float(balance.get("available_balance"), 0.0) / max(price, 0.0000001),
+                ) if signal == "buy" else quantity,
+                "max_cost": _safe_float(balance.get("available_balance"), 0.0) if signal == "buy" else (budget_cap_qty * max(price, 0.0000001) if budget_cap_qty > 0 else None),
                 "risk_qty": risk_qty,
                 "budget_cap_qty": budget_cap_qty,
                 "available_balance": _safe_float(balance.get("available_balance"), 0.0),

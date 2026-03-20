@@ -142,6 +142,7 @@ const state = {
   me: null,
   summary: null,
   connectors: [],
+  connectorBalances: {},
   botSessions: [],
   executionLogs: [],
   heartbeat: null,
@@ -196,7 +197,8 @@ function formatDate(value) {
   if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString();
+  const two = (number) => String(number).padStart(2, '0');
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}, ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
 function prettyLabel(value, fallback = '-') {
@@ -223,6 +225,16 @@ function displaySymbol(value) {
   const raw = String(value || '').trim().toUpperCase();
   if (!raw) return '-';
   return raw.replace('/USDT', '').replace('USDT', '').replace('/', '') || raw;
+}
+
+function formatBalanceSnapshot(connectorId) {
+  const balance = state.connectorBalances?.[connectorId];
+  if (!balance) return 'Balance cargando…';
+  if (!balance.ok) return `Balance no disponible${balance.error ? ` · ${balance.error}` : ''}`;
+  const asset = prettyLabel(balance.quote_asset, 'USDT');
+  const available = Number(balance.available_balance || 0).toFixed(2);
+  const total = Number(balance.total_balance || 0).toFixed(2);
+  return `Disponible ${available} ${asset} · Total ${total} ${asset}`;
 }
 
 function escapeHtml(value) {
@@ -570,6 +582,7 @@ function renderConnectors() {
       </div>
       <small class="hint">Símbolos: ${(connector.symbols || []).join(', ') || 'Sin símbolos configurados'}.</small>
       <small class="hint">Sizing independiente: ${connectorSizingSummary(connector)}.</small>
+      <small class="hint">Balance: ${formatBalanceSnapshot(connector.id)}.</small>
       <div class="chip-wrap">
         ${configEntriesForDisplay(connector.config || {}).map((entry) => `<span class="chip chip-static"><strong>${entry.label}:</strong> ${entry.value}</span>`).join('') || '<span class="chip chip-static">Sin parámetros visibles adicionales</span>'}
       </div>
@@ -617,8 +630,9 @@ function renderBotSessions() {
     <article class="connector-item fade-in-up bot-session-card ${session.is_active ? 'is-active' : 'is-paused'}">
       <div class="row-between">
         <div>
-          <strong>${prettyLabel(session.strategy_slug, 'strategy')}</strong>
+          <strong>${prettyLabel(session.display_name || session.session_name || session.strategy_slug, 'strategy')}</strong>
           <div class="connector-meta">
+            <span>${prettyLabel(session.session_name, 'Sin alias manual')}</span>
             <span>${prettyLabel(session.connector_label, 'Cuenta')}</span>
             <span>${prettyPlatform(session.platform)}</span>
             <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
@@ -643,6 +657,10 @@ function renderBotSessions() {
           <small>Modo sizing</small>
           <strong>${formatTradeAmountMode(session.configured_trade_amount_mode || 'inherit')}</strong>
         </div>
+        <div class="bot-session-stat">
+          <small>Auto scan</small>
+          <strong>${session.symbol_source_mode === 'dynamic' ? `Sí · Top ${Number(session.dynamic_symbol_limit || 10)}` : 'Manual'}</strong>
+        </div>
         <div class="bot-session-stat bot-session-stat-wide">
           <small>Capital</small>
           <strong>${formatSessionCapital(session)}</strong>
@@ -659,11 +677,23 @@ function renderBotSessions() {
         <button class="btn btn-sm" type="button" data-bot-action="delete" data-id="${session.id}">Eliminar</button>
       </div>
       <form class="bot-session-form form-grid hidden" data-session-id="${session.id}" style="margin-top:12px;">
+        <label class="compact-field compact-field-wide">Nombre estrategia / sesión
+          <input name="session_name" value="${session.session_name ?? ''}" placeholder="Momentum Binance principal">
+        </label>
         <label class="compact-field">Estrategia
           <select name="strategy_slug">${STRATEGIES.map((slug) => `<option value="${slug}" ${slug === session.strategy_slug ? 'selected' : ''}>${slug}</option>`).join('')}</select>
         </label>
         <label class="compact-field">Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
         <label class="compact-field compact-field-wide">Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
+        <label class="compact-field">Origen símbolos
+          <select name="symbol_source_mode">
+            <option value="manual" ${session.symbol_source_mode !== 'dynamic' ? 'selected' : ''}>Lista manual</option>
+            <option value="dynamic" ${session.symbol_source_mode === 'dynamic' ? 'selected' : ''}>Auto scan</option>
+          </select>
+        </label>
+        <label class="compact-field ${session.symbol_source_mode === 'dynamic' ? '' : 'hidden'}" data-session-dynamic-field="limit">Máx. símbolos auto scan
+          <input name="dynamic_symbol_limit" type="number" min="1" max="50" step="1" value="${Number(session.dynamic_symbol_limit || 10)}">
+        </label>
         <label class="compact-field">Riesgo por trade (%)<input name="risk_per_trade" type="number" min="0.1" max="100" step="0.1" value="${percentFromStoredValue(session.risk_per_trade)}"></label>
         <label class="compact-field">Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${percentFromStoredValue(session.min_ml_probability)}"></label>
         <label class="compact-field">Modo sizing
@@ -701,6 +731,7 @@ function renderBotSessions() {
 
   panel.querySelectorAll('.bot-session-form').forEach((form) => {
     const modeSelect = form.querySelector('[name="trade_amount_mode"]');
+    const sourceModeSelect = form.querySelector('[name="symbol_source_mode"]');
     const syncSizingFields = () => {
       const currentMode = String(modeSelect?.value || 'inherit');
       form.querySelectorAll('.sizing-value-field').forEach((field) => {
@@ -715,6 +746,16 @@ function renderBotSessions() {
     };
     modeSelect?.addEventListener('change', syncSizingFields);
     syncSizingFields();
+    const syncSymbolSourceFields = () => {
+      const dynamic = String(sourceModeSelect?.value || 'manual') === 'dynamic';
+      form.querySelectorAll('[data-session-dynamic-field]').forEach((field) => {
+        field.classList.toggle('hidden', !dynamic);
+        const input = field.querySelector('input');
+        if (input) input.disabled = !dynamic;
+      });
+    };
+    sourceModeSelect?.addEventListener('change', syncSymbolSourceFields);
+    syncSymbolSourceFields();
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -726,9 +767,12 @@ function renderBotSessions() {
         await api(`/api/bot-sessions/${id}`, {
           method: 'PUT',
           body: JSON.stringify({
+            session_name: String(fd.get('session_name') || '').trim() || null,
             strategy_slug: fd.get('strategy_slug'),
             timeframe: fd.get('timeframe'),
             symbols: String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
+            symbol_source_mode: fd.get('symbol_source_mode'),
+            dynamic_symbol_limit: fd.get('symbol_source_mode') === 'dynamic' ? Number(fd.get('dynamic_symbol_limit') || 10) : null,
             risk_per_trade: Number(fd.get('risk_per_trade')),
             min_ml_probability: Number(fd.get('min_ml_probability')),
             trade_amount_mode: fd.get('trade_amount_mode'),
@@ -917,6 +961,42 @@ function renderSummary() {
   ]);
 }
 
+async function refreshHeartbeat({ quiet = false } = {}) {
+  try {
+    state.heartbeat = await api('/api/heartbeat');
+    renderSummary();
+  } catch (error) {
+    if (!quiet) {
+      setStatus('activity-command-feedback', parseApiError(error), 'error');
+    }
+  }
+}
+
+async function refreshConnectorBalances() {
+  const connectors = Array.isArray(state.connectors) ? state.connectors : [];
+  if (!connectors.length) {
+    state.connectorBalances = {};
+    renderConnectors();
+    return;
+  }
+  const settled = await Promise.allSettled(connectors.map((connector) => api(`/api/connectors/${connector.id}/balance`)));
+  const nextBalances = {};
+  settled.forEach((result, index) => {
+    const connector = connectors[index];
+    if (!connector) return;
+    nextBalances[connector.id] = result.status === 'fulfilled'
+      ? result.value
+      : {
+        connector_id: connector.id,
+        connector_label: connector.label,
+        ok: false,
+        error: parseApiError(result.reason),
+      };
+  });
+  state.connectorBalances = nextBalances;
+  renderConnectors();
+}
+
 async function refreshDashboard() {
   const settled = await Promise.allSettled([
     api('/api/me'),
@@ -925,29 +1005,31 @@ async function refreshDashboard() {
     api('/api/bot-sessions'),
     api('/api/execution-logs?limit=25'),
     api('/api/activity/performance'),
-    api('/api/heartbeat'),
   ]);
-  const labels = ['perfil', 'dashboard', 'conectores', 'bots', 'logs', 'actividad', 'heartbeat'];
+  const labels = ['perfil', 'dashboard', 'conectores', 'bots', 'logs', 'actividad'];
   const failures = [];
   const values = settled.map((result, index) => {
     if (result.status === 'fulfilled') return result.value;
     failures.push(`${labels[index]}: ${parseApiError(result.reason)}`);
     return null;
   });
-  const [me, summary, connectors, botSessions, executionLogs, activity, heartbeat] = values;
+  const [me, summary, connectors, botSessions, executionLogs, activity] = values;
   state.me = me || state.me;
   state.summary = summary || state.summary || {};
   state.connectors = Array.isArray(connectors) ? connectors : (state.connectors || []);
   state.botSessions = Array.isArray(botSessions) ? botSessions : (state.botSessions || []);
   state.executionLogs = Array.isArray(executionLogs) ? executionLogs : (state.executionLogs || []);
   state.activity = activity || state.activity || null;
-  state.heartbeat = heartbeat || state.heartbeat || null;
   renderProfile();
   renderConnectors();
   renderBotSessions();
   renderExecutionLogs();
   renderSummary();
   renderActivity();
+  refreshConnectorBalances().catch((error) => {
+    setStatus('connector-feedback', `No se pudieron cargar balances: ${parseApiError(error)}`, 'error');
+  });
+  refreshHeartbeat({ quiet: true }).catch(() => {});
   if (failures.length) {
     setStatus('run-feedback', `Algunas secciones no pudieron actualizarse: ${failures.join(' | ')}`, 'error');
   }
@@ -1049,8 +1131,11 @@ function buildRunPayload(form) {
   return {
     connector_ids: [connectorId],
     connector_id: connectorId,
+    session_name: String(fd.get('session_name') || '').trim() || null,
     market_type: connector?.market_type || 'spot',
     symbols,
+    symbol_source_mode: fd.get('symbol_source_mode') || 'manual',
+    dynamic_symbol_limit: Number(fd.get('dynamic_symbol_limit') || 10),
     timeframe: fd.get('timeframe'),
     strategy_slug: fd.get('strategy_slug'),
     risk_per_trade: parseRequiredNumber(fd.get('risk_per_trade_percent'), 'el riesgo por trade'),
@@ -1071,8 +1156,6 @@ function buildRunPayload(form) {
     max_open_positions: 1,
     compound_growth_enabled: false,
     atr_volatility_filter_enabled: true,
-    symbol_source_mode: 'manual',
-    dynamic_symbol_limit: 10,
   };
 }
 
@@ -1335,8 +1418,7 @@ function downloadExecutionLogs() {
 async function runHeartbeatCheck() {
   try {
     setStatus('activity-command-feedback', 'Ejecutando heartbeat...', 'ok');
-    state.heartbeat = await api('/api/heartbeat');
-    renderSummary();
+    await refreshHeartbeat();
     setStatus('activity-command-feedback', 'Heartbeat completado.', 'ok');
   } catch (error) {
     setStatus('activity-command-feedback', parseApiError(error), 'error');
@@ -1382,6 +1464,12 @@ async function init() {
   document.getElementById('refresh-bot-sessions-btn')?.addEventListener('click', refreshDashboard);
   document.getElementById('refresh-execution-logs-btn')?.addEventListener('click', refreshDashboard);
   document.getElementById('download-execution-logs-btn')?.addEventListener('click', downloadExecutionLogs);
+  document.getElementById('run-symbol-source-mode')?.addEventListener('change', (event) => {
+    const dynamic = String(event.currentTarget?.value || 'manual') === 'dynamic';
+    const wrap = document.getElementById('run-dynamic-limit-field');
+    wrap?.classList.toggle('hidden', !dynamic);
+  });
+  document.getElementById('run-symbol-source-mode')?.dispatchEvent(new Event('change'));
   window.addEventListener('scroll', hideFieldPopover, { passive: true });
   window.addEventListener('resize', hideFieldPopover);
   bindFieldAdvisories('#connector-form', 'connector');

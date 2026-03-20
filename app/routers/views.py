@@ -20,6 +20,7 @@ def base_context(request: Request, **kwargs):
         "request": request,
         "locale": locale,
         "supported_locales": SUPPORTED_LOCALES,
+        "static_version": settings.static_version,
         "tr": lambda key: translate(key, locale),
     }
     ctx.update(kwargs)
