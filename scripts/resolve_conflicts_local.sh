@@ -8,27 +8,8 @@ set -euo pipefail
 
 TARGET_BRANCH="${1:-main}"
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "Run this script inside a git repository."
-  exit 1
-fi
-
-if ! git remote get-url origin >/dev/null 2>&1; then
-  echo "No 'origin' remote configured."
-  echo "Add it first, for example:"
-  echo "  git remote add origin git@github.com:davidksinc1986/TradingSaas.git"
-  echo "Then run this script again."
-  exit 1
-fi
-
 echo "[1/6] Fetching latest refs..."
 git fetch origin
-
-if ! git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
-  echo "Remote branch origin/${TARGET_BRANCH} not found."
-  echo "Available remotes:" && git branch -r
-  exit 1
-fi
 
 echo "[2/6] Rebasing current branch onto origin/${TARGET_BRANCH}..."
 git rebase "origin/${TARGET_BRANCH}" || true

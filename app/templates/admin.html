@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="dashboard-header admin-lux-header">
-  <span class="pill">Admin Studio</span>
-  <h1>Control rápido, limpio y elegante</h1>
-  <p>Gestión integral en tarjetas compactas con tabs y acciones on/off para ejecutar todo en menos clics.</p>
+<section class="dashboard-header">
+  <span class="pill">Admin</span>
+  <h1>Panel de control administrativo</h1>
+  <p>Gestiona usuarios, permisos por plataforma y configuración de movimiento por app para el usuario seleccionado.</p>
 </section>
 
 <section class="admin-command-grid">
@@ -49,39 +49,20 @@
       <button class="btn primary btn-sm" type="submit">+ Crear</button>
     </form>
     <div id="admin-feedback" class="status-msg hidden"></div>
-    <div id="admin-users" class="stack" style="margin-top:10px;"></div>
-  </aside>
+    <label style="margin-top:12px;display:block;">Usuario a gestionar
+      <select id="selected-user"></select>
+    </label>
+    <div id="admin-users" class="stack"></div>
+  </div>
+  <div class="card">
+    <h2>Perfil del usuario seleccionado</h2>
+    <div id="selected-user-profile" class="stack"></div>
+  </div>
+</section>
 
-  <main class="admin-main-stack">
-    <section class="card">
-      <div id="selected-user-profile"></div>
-    </section>
-
-    <section class="card">
-      <div class="row-between">
-        <h2>Políticas globales</h2>
-        <small class="hint">Switches rápidos por plataforma</small>
-      </div>
-      <div id="admin-policies" class="admin-compact-grid" style="margin-top:10px;"></div>
-    </section>
-
-    <section class="card">
-      <div class="row-between">
-        <h2>Pricing & planes</h2>
-        <button id="add-plan-btn" class="btn btn-sm" type="button">+ Plan</button>
-      </div>
-      <div class="admin-tabs" id="settings-tabs" style="margin-top:10px;">
-        <button class="admin-tab active" data-tab="pricing">Pricing</button>
-        <button class="admin-tab" data-tab="plans">Planes</button>
-      </div>
-      <div class="admin-tab-panel active" data-panel="pricing">
-        <form id="pricing-config-form" class="form-grid admin-form-grid" style="margin-top:10px;"></form>
-      </div>
-      <div class="admin-tab-panel" data-panel="plans">
-        <div id="admin-plans" class="plan-grid" style="margin-top:10px;"></div>
-      </div>
-    </section>
-  </main>
+<section class="card">
+  <h2>Políticas globales de plataforma</h2>
+  <div id="admin-policies" class="stack"></div>
 </section>
 
 <div id="strategy-modal" class="modal hidden">

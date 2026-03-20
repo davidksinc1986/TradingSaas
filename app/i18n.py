@@ -2,31 +2,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
-SUPPORTED_LOCALES = ("es", "en", "fr", "pt")
-DEFAULT_LOCALE = "es"
-AUTO_LOCALE = "auto"
-
-
-def normalize_locale(value: str | None) -> str | None:
-    raw = (value or "").strip().lower()
-    if not raw:
-        return None
-    code = raw.split(",")[0].split(";")[0].strip().split("-")[0]
-    if code == AUTO_LOCALE:
-        return AUTO_LOCALE
-    if code in SUPPORTED_LOCALES:
-        return code
-    return None
-
-
-def detect_header_locale(header_value: str | None) -> str:
-    header = (header_value or "").lower()
-    for chunk in header.split(","):
-        code = normalize_locale(chunk)
-        if code in SUPPORTED_LOCALES:
-            return code
-    return DEFAULT_LOCALE
-
+SUPPORTED_LOCALES = ("es", "en", "pt", "fr")
 
 TRANSLATIONS = {
     "es": {
@@ -38,12 +14,6 @@ TRANSLATIONS = {
         "nav.login": "Login",
         "nav.logout": "Salir",
         "lang.label": "Idioma",
-        "lang.auto": "Automático",
-        "nav.lang_auto": "Auto",
-        "modal.guide": "Guía",
-        "modal.close": "Cerrar",
-        "modal.required_data": "Datos requeridos",
-        "modal.step_by_step": "Paso a paso",
         "home.pill": "Estrategias multi-mercado, ejecución inteligente",
         "home.title": "Construye tu ecosistema de trading premium con visión de crecimiento patrimonial.",
         "home.body": "Conecta brokers, exchanges y señales desde un solo lugar. Diseñado para operar con disciplina, automatizar decisiones y convertir análisis en resultados consistentes de largo plazo.",
@@ -65,12 +35,6 @@ TRANSLATIONS = {
         "nav.login": "Login",
         "nav.logout": "Logout",
         "lang.label": "Language",
-        "lang.auto": "Automatic",
-        "nav.lang_auto": "Auto",
-        "modal.guide": "Guide",
-        "modal.close": "Close",
-        "modal.required_data": "Required data",
-        "modal.step_by_step": "Step by step",
         "home.pill": "Multi-market strategies, smart execution",
         "home.title": "Build your premium trading ecosystem with a long-term wealth vision.",
         "home.body": "Connect brokers, exchanges and signals from one place. Built to trade with discipline, automate decisions and convert analysis into consistent long-term outcomes.",
@@ -92,12 +56,6 @@ TRANSLATIONS = {
         "nav.login": "Login",
         "nav.logout": "Sair",
         "lang.label": "Idioma",
-        "lang.auto": "Automático",
-        "nav.lang_auto": "Auto",
-        "modal.guide": "Guia",
-        "modal.close": "Fechar",
-        "modal.required_data": "Dados obrigatórios",
-        "modal.step_by_step": "Passo a passo",
         "home.pill": "Estratégias multi-mercado, execução inteligente",
         "home.title": "Construa seu ecossistema premium de trading com visão de patrimônio.",
         "home.body": "Conecte corretoras, exchanges e sinais em um só lugar. Feito para operar com disciplina, automatizar decisões e transformar análise em resultados consistentes.",
@@ -119,12 +77,6 @@ TRANSLATIONS = {
         "nav.login": "Connexion",
         "nav.logout": "Sortir",
         "lang.label": "Langue",
-        "lang.auto": "Automatique",
-        "nav.lang_auto": "Auto",
-        "modal.guide": "Guide",
-        "modal.close": "Fermer",
-        "modal.required_data": "Données requises",
-        "modal.step_by_step": "Étapes",
         "home.pill": "Stratégies multi-marché, exécution intelligente",
         "home.title": "Construisez votre écosystème trading premium orienté croissance patrimoniale.",
         "home.body": "Connectez brokers, exchanges et signaux en un seul endroit. Conçu pour trader avec discipline, automatiser les décisions et transformer l'analyse en résultats réguliers.",
@@ -141,12 +93,17 @@ TRANSLATIONS = {
 
 
 def detect_locale(request: Request) -> str:
-    cookie_lang = normalize_locale(request.cookies.get("lang"))
+    cookie_lang = (request.cookies.get("lang") or "").lower().strip()
     if cookie_lang in SUPPORTED_LOCALES:
         return cookie_lang
-    return detect_header_locale(request.headers.get("accept-language"))
+
+    header = (request.headers.get("accept-language") or "").lower()
+    for chunk in header.split(","):
+        code = chunk.split(";")[0].strip().split("-")[0]
+        if code in SUPPORTED_LOCALES:
+            return code
+    return "es"
 
 
 def translate(key: str, locale: str) -> str:
-    active_locale = normalize_locale(locale) or DEFAULT_LOCALE
-    return TRANSLATIONS.get(active_locale, TRANSLATIONS[DEFAULT_LOCALE]).get(key, TRANSLATIONS[DEFAULT_LOCALE].get(key, key))
+    return TRANSLATIONS.get(locale, TRANSLATIONS["es"]).get(key, TRANSLATIONS["es"].get(key, key))

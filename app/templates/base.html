@@ -4,24 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{ title }} • {{ tr('app.name') }}</title>
-  <link rel="stylesheet" href="/static/styles.css?v={{ static_version }}">
+  <link rel="stylesheet" href="/static/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="{{ tr('app.name') }}">
-      <img class="brand-logo" src="/static/snake_mafia_trading_transparent_v2.svg" alt="{{ tr('app.name') }}" loading="eager" />
-    </a>
+    <div class="brand">{{ tr('app.name') }} <small class="brand-cutline">{{ tr('app.tagline') }}</small></div>
     <nav class="nav">
       <a href="/">{{ tr('nav.home') }}</a>
-      {% if user %}<a href="/dashboard">{{ tr('nav.dashboard') }}</a>{% endif %}
+      <a href="/dashboard">{{ tr('nav.dashboard') }}</a>
       {% if user and user.is_admin %}<a href="/admin">{{ tr('nav.admin') }}</a>{% endif %}
-      {% if user %}<a href="/auth/logout" id="nav-logout">{{ tr('nav.logout') }}</a>{% else %}<a href="/auth/login" id="nav-login">{{ tr('nav.login') }}</a>{% endif %}
-      <div class="lang-switcher" aria-label="{{ tr('lang.label') }}">
-        {% for lang_code in supported_locales %}
-        <a href="/set-language/{{ lang_code }}">{{ lang_code.upper() }}</a>
-        {% endfor %}
-      </div>
+      <a href="/auth/login">{{ tr('nav.login') }}</a>
+      <a href="/auth/logout">{{ tr('nav.logout') }}</a>
+      <form method="get" class="lang-form">
+        <label>{{ tr('lang.label') }}
+          <select onchange="window.location.href='/set-language/' + this.value">
+            {% for lang_code in supported_locales %}
+            <option value="{{ lang_code }}" {% if locale == lang_code %}selected{% endif %}>{{ lang_code|upper }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
     </nav>
   </header>
   <main class="page">
