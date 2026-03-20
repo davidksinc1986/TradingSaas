@@ -180,12 +180,73 @@ def format_failure_message(scope: str, detail: str) -> str:
     )
 
 
+def _operational_lines(
+    locale: str,
+    *,
+    connection_status: str | None = None,
+    markets_connected: str | None = None,
+    candles_reviewed: int | None = None,
+    trend_summary: str | None = None,
+) -> str:
+    labels = {
+        "en": {
+            "connection_status": "Connection",
+            "markets_connected": "Connected markets",
+            "candles_reviewed": "Candles reviewed",
+            "trend_summary": "Trend summary",
+        },
+        "pt": {
+            "connection_status": "Conexão",
+            "markets_connected": "Mercados conectados",
+            "candles_reviewed": "Velas revisadas",
+            "trend_summary": "Resumo de tendência",
+        },
+        "fr": {
+            "connection_status": "Connexion",
+            "markets_connected": "Marchés connectés",
+            "candles_reviewed": "Bougies révisées",
+            "trend_summary": "Résumé de tendance",
+        },
+        "es": {
+            "connection_status": "Conexión",
+            "markets_connected": "Mercados conectados",
+            "candles_reviewed": "Velas revisadas",
+            "trend_summary": "Resumen de tendencia",
+        },
+    }.get(locale, {
+        "connection_status": "Conexión",
+        "markets_connected": "Mercados conectados",
+        "candles_reviewed": "Velas revisadas",
+        "trend_summary": "Resumen de tendencia",
+    })
+
+    lines: list[str] = []
+    if connection_status:
+        lines.append(f"{labels['connection_status']}: {connection_status}")
+    if markets_connected:
+        lines.append(f"{labels['markets_connected']}: {markets_connected}")
+    if candles_reviewed is not None:
+        lines.append(f"{labels['candles_reviewed']}: {candles_reviewed}")
+    if trend_summary:
+        lines.append(f"{labels['trend_summary']}: {trend_summary}")
+    return "".join(f"{line}\n" for line in lines)
+
+
 def format_user_execution_message(*, locale: str, connector_label: str, platform: str, symbol: str,
                                   side: str, quantity: float, fill_price: float, status: str,
                                   strategy_slug: str, message: str, pnl: float | None = None,
-                                  close_reason: str | None = None) -> str:
+                                  close_reason: str | None = None, connection_status: str | None = None,
+                                  markets_connected: str | None = None, candles_reviewed: int | None = None,
+                                  trend_summary: str | None = None) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     locale = normalize_alert_locale(locale)
+    operational = _operational_lines(
+        locale,
+        connection_status=connection_status,
+        markets_connected=markets_connected,
+        candles_reviewed=candles_reviewed,
+        trend_summary=trend_summary,
+    )
     pnl_line_en = f"Realized PnL: {pnl:.8f}\n" if pnl is not None else ""
     pnl_line_pt = f"PnL realizado: {pnl:.8f}\n" if pnl is not None else ""
     pnl_line_fr = f"PnL réalisé: {pnl:.8f}\n" if pnl is not None else ""
@@ -205,6 +266,7 @@ def format_user_execution_message(*, locale: str, connector_label: str, platform
             f"Price: {fill_price:.8f}\n"
             f"Status: {status}\n"
             f"Strategy: {strategy_slug}\n"
+            f"{operational}"
             f"{pnl_line_en}"
             f"{close_line_en}"
             f"Details: {message}"
@@ -220,6 +282,7 @@ def format_user_execution_message(*, locale: str, connector_label: str, platform
             f"Preço: {fill_price:.8f}\n"
             f"Status: {status}\n"
             f"Estratégia: {strategy_slug}\n"
+            f"{operational}"
             f"{pnl_line_pt}"
             f"{close_line_pt}"
             f"Detalhes: {message}"
@@ -235,6 +298,7 @@ def format_user_execution_message(*, locale: str, connector_label: str, platform
             f"Prix: {fill_price:.8f}\n"
             f"Statut: {status}\n"
             f"Stratégie: {strategy_slug}\n"
+            f"{operational}"
             f"{pnl_line_fr}"
             f"{close_line_fr}"
             f"Détails: {message}"
@@ -249,6 +313,7 @@ def format_user_execution_message(*, locale: str, connector_label: str, platform
         f"Precio: {fill_price:.8f}\n"
         f"Estado: {status}\n"
         f"Estrategia: {strategy_slug}\n"
+        f"{operational}"
         f"{pnl_line_es}"
         f"{close_line_es}"
         f"Detalle: {message}"
@@ -256,11 +321,20 @@ def format_user_execution_message(*, locale: str, connector_label: str, platform
 
 
 def format_user_failure_message(*, locale: str, scope: str, detail: str, connector_label: str | None = None,
-                                platform: str | None = None, symbol: str | None = None) -> str:
+                                platform: str | None = None, symbol: str | None = None,
+                                connection_status: str | None = None, markets_connected: str | None = None,
+                                candles_reviewed: int | None = None, trend_summary: str | None = None) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     locale = normalize_alert_locale(locale)
     where = f"{connector_label} ({platform})" if connector_label and platform else "-"
     pair = symbol or "-"
+    operational = _operational_lines(
+        locale,
+        connection_status=connection_status,
+        markets_connected=markets_connected,
+        candles_reviewed=candles_reviewed,
+        trend_summary=trend_summary,
+    )
 
     if locale == "en":
         return (
@@ -269,6 +343,7 @@ def format_user_failure_message(*, locale: str, scope: str, detail: str, connect
             f"Scope: {scope}\n"
             f"Connector: {where}\n"
             f"Pair: {pair}\n"
+            f"{operational}"
             f"Details: {detail}"
         )
     if locale == "pt":
@@ -278,6 +353,7 @@ def format_user_failure_message(*, locale: str, scope: str, detail: str, connect
             f"Escopo: {scope}\n"
             f"Conector: {where}\n"
             f"Par: {pair}\n"
+            f"{operational}"
             f"Detalhes: {detail}"
         )
     if locale == "fr":
@@ -287,6 +363,7 @@ def format_user_failure_message(*, locale: str, scope: str, detail: str, connect
             f"Portée: {scope}\n"
             f"Connecteur: {where}\n"
             f"Pair: {pair}\n"
+            f"{operational}"
             f"Détails: {detail}"
         )
     return (
@@ -295,22 +372,33 @@ def format_user_failure_message(*, locale: str, scope: str, detail: str, connect
         f"Ámbito: {scope}\n"
         f"Conector: {where}\n"
         f"Par: {pair}\n"
+        f"{operational}"
         f"Detalle: {detail}"
     )
 
 
 def format_user_info_message(*, locale: str, title: str, detail: str, connector_label: str | None = None,
-                             platform: str | None = None, symbol: str | None = None) -> str:
+                             platform: str | None = None, symbol: str | None = None,
+                             connection_status: str | None = None, markets_connected: str | None = None,
+                             candles_reviewed: int | None = None, trend_summary: str | None = None) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     locale = normalize_alert_locale(locale)
     where = f"{connector_label} ({platform})" if connector_label and platform else "-"
     pair = symbol or "-"
+    operational = _operational_lines(
+        locale,
+        connection_status=connection_status,
+        markets_connected=markets_connected,
+        candles_reviewed=candles_reviewed,
+        trend_summary=trend_summary,
+    )
     if locale == "en":
         return (
             f"ℹ️ {title}\n"
             f"Time: {now}\n"
             f"Connector: {where}\n"
             f"Pair: {pair}\n"
+            f"{operational}"
             f"Details: {detail}"
         )
     if locale == "pt":
@@ -319,6 +407,7 @@ def format_user_info_message(*, locale: str, title: str, detail: str, connector_
             f"Horário: {now}\n"
             f"Conector: {where}\n"
             f"Par: {pair}\n"
+            f"{operational}"
             f"Detalhes: {detail}"
         )
     if locale == "fr":
@@ -327,6 +416,7 @@ def format_user_info_message(*, locale: str, title: str, detail: str, connector_
             f"Heure: {now}\n"
             f"Connecteur: {where}\n"
             f"Pair: {pair}\n"
+            f"{operational}"
             f"Détails: {detail}"
         )
     return (
@@ -334,6 +424,7 @@ def format_user_info_message(*, locale: str, title: str, detail: str, connector_
         f"Hora: {now}\n"
         f"Conector: {where}\n"
         f"Par: {pair}\n"
+        f"{operational}"
         f"Detalle: {detail}"
     )
 

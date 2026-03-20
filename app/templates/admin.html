@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="dashboard-header">
+<section class="dashboard-header hero-glass admin-lux-header">
   <span class="pill">Admin</span>
   <h1>Panel administrativo</h1>
   <p>Gestiona usuarios, grants, conectores, estrategias y políticas globales desde un flujo claro.</p>
 </section>
 
-<section class="grid-2 dashboard-grid-two">
-  <article class="card">
+<section class="admin-layout-v2">
+  <aside class="card admin-sidebar">
     <div class="row-between">
       <div>
         <small class="quantum-label">Usuarios</small>
@@ -23,8 +23,9 @@
       <div id="admin-feedback" class="status-msg"></div>
     </form>
     <div id="admin-users" class="stack" style="margin-top:16px;"></div>
-  </article>
+  </aside>
 
+  <section class="admin-main-stack">
   <article class="card">
     <div class="row-between">
       <div>
@@ -38,9 +39,8 @@
     </label>
     <div id="selected-user-profile" class="stack" style="margin-top:16px;"></div>
   </article>
-</section>
 
-<section class="card" style="margin-top:24px;">
+<section class="card">
   <div class="row-between">
     <div>
       <small class="quantum-label">Políticas</small>
@@ -48,6 +48,8 @@
     </div>
   </div>
   <div id="admin-policies" class="stack"></div>
+</section>
+</section>
 </section>
 
 <script src="/static/admin.js?v={{ static_version }}"></script>
