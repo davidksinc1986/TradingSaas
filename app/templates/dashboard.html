@@ -87,15 +87,20 @@
 </section>
 
 <section id="tab-connectors" class="tab-panel">
-  <div class="grid-2 dashboard-grid-two">
+  <div class="connector-layout">
     <article class="card">
       <div class="row-between">
         <div>
           <small class="quantum-label">Conectores</small>
-          <h2>Nuevo conector</h2>
+          <h2 id="connector-form-title">Nuevo conector</h2>
+        </div>
+        <div class="row-wrap">
+          <span class="pill tiny" id="connector-form-mode-label">Creación</span>
+          <button class="btn btn-sm" type="button" id="reset-connector-form-btn">Limpiar</button>
         </div>
       </div>
       <form id="connector-form" class="form-grid">
+        <input type="hidden" id="connector-edit-id" value="">
         <label>Plataforma
           <select name="platform" id="connector-platform">
             <option value="binance">Binance</option>
@@ -119,12 +124,16 @@
         </label>
         <label>Símbolos base<input name="symbols" id="symbols-input" placeholder="BTC/USDT,ETH/USDT"></label>
         <div id="connector-friendly-fields" class="form-grid"></div>
-        <button class="btn primary" type="submit">Guardar conector</button>
+        <div class="row-wrap">
+          <button class="btn primary" type="submit" id="connector-submit-btn">Guardar conector</button>
+          <button class="btn" type="button" id="cancel-connector-edit-btn">Cancelar edición</button>
+        </div>
         <div id="connector-feedback" class="status-msg"></div>
       </form>
       <small class="hint subtle-guide">Los campos con <span class="field-asterisk-inline">*</span> incluyen guía contextual.</small>
     </article>
 
+    <aside class="connector-help-stack">
     <article class="card">
       <div class="row-between">
         <div>
@@ -136,6 +145,15 @@
       <div id="connector-health-panel" class="quantum-report-list"></div>
       <div id="connector-list" class="stack" style="margin-top:16px;"></div>
     </article>
+    <article class="card term-box">
+      <h4>Qué se ve en cada conector</h4>
+      <ul>
+        <li>Modo, mercado, símbolos y estado operativo.</li>
+        <li>Configuración visible de timeouts, retries, leverage y entorno.</li>
+        <li>Acciones rápidas para editar, testear, activar/desactivar o eliminar.</li>
+      </ul>
+    </article>
+    </aside>
   </div>
 </section>
 
@@ -195,6 +213,7 @@
         </div>
         <button class="btn btn-sm" type="button" id="refresh-bot-sessions-btn">Refrescar</button>
       </div>
+      <div id="bot-session-feedback" class="status-msg"></div>
       <div id="bot-sessions-panel" class="stack"></div>
     </article>
   </div>

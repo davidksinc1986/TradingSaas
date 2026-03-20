@@ -63,6 +63,37 @@ class _FakeClient:
             "source": "test_balance",
         }
 
+    def prepare_execution_environment(self, symbol: str, *, leverage_profile: str = "none"):
+        config = self.connector.config_json or {}
+        resolved_profile = str(leverage_profile or config.get("leverage_profile") or "none").lower()
+        explicit_leverage = config.get("futures_leverage")
+        if explicit_leverage in (None, ""):
+            leverage_map = {"none": 1, "conservative": 2, "balanced": 3, "aggressive": 5}
+            explicit_leverage = leverage_map.get(resolved_profile, 1)
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "mode": self.connector.mode,
+            "market_type": self.connector.market_type,
+            "recv_window_ms": int(config.get("recv_window_ms") or 10000),
+            "request_timeout_ms": int(config.get("request_timeout_ms") or 20000),
+            "retry_attempts": int(config.get("retry_attempts") or 2),
+            "retry_delay_ms": int(config.get("retry_delay_ms") or 350),
+            "futures_margin_mode": str(config.get("futures_margin_mode") or "isolated"),
+            "futures_position_mode": str(config.get("futures_position_mode") or "oneway"),
+            "futures_leverage": int(explicit_leverage),
+            "leverage_profile": resolved_profile,
+            "applied": ["time_sync", f"margin_mode:{config.get('futures_margin_mode') or 'isolated'}"],
+            "warnings": [] if self.connector.mode == "live" else ["paper_mode_environment"],
+            "capabilities": {"internal_transfer": False, "websocket_market_data": False, "websocket_balance": False},
+            "futures_settings": {
+                "margin_mode": str(config.get("futures_margin_mode") or "isolated"),
+                "position_mode": str(config.get("futures_position_mode") or "oneway"),
+                "leverage": int(explicit_leverage),
+                "leverage_profile": resolved_profile,
+            },
+        }
+
     def resolve_execution_reference_price(self, symbol: str, **kwargs):
         analysis_price = float(kwargs.get("analysis_price") or 0.0)
         return {
@@ -124,7 +155,14 @@ def _base_setup(db, *, market_type: str):
         mode="live",
         market_type=market_type,
         is_enabled=True,
-        config_json={},
+        config_json={
+            "recv_window_ms": 8000,
+            "request_timeout_ms": 12000,
+            "futures_margin_mode": "isolated",
+            "futures_position_mode": "oneway",
+            "retry_attempts": 4,
+            "retry_delay_ms": 125,
+        },
         encrypted_secret_blob={},
     )
     db.add(connector)
@@ -221,6 +259,272 @@ def test_run_strategy_uses_last_closed_candle_and_closes_short_before_reentry(mo
     db.refresh(existing)
     assert existing.is_open is False
     assert existing.current_qty == 0.0
+
+    trade_run = db.query(TradeRun).order_by(TradeRun.id.desc()).first()
+    notes = json.loads(trade_run.notes)
+    assert notes["execution_environment"]["applied"] == ["time_sync", "margin_mode:isolated"]
+    assert notes["execution_environment"]["futures_position_mode"] == "oneway"
+    assert notes["execution_environment"]["retry_attempts"] == 4
+    assert notes["order_preview"]["reduce_only"] is True
+    assert notes["order_preview"]["reduce_only_reason"] == "close_short_before_reentry"
+    assert notes["pretrade"]["ok"] is True
+    assert notes["decision_summary"]["decision"] == "executed"
+
+
+def test_run_strategy_opens_new_futures_long_with_execution_environment_snapshot(monkeypatch):
+    db = _make_db()
+    user, connector = _base_setup(db, market_type="futures")
+    executed_orders = []
+
+    frame = pd.DataFrame([
+        {"timestamp": pd.Timestamp("2026-03-20T00:00:00"), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10.0},
+        {"timestamp": pd.Timestamp("2026-03-20T00:15:00"), "open": 100.0, "high": 111.0, "low": 99.0, "close": 110.0, "volume": 11.0},
+    ])
+    market_result = MarketFrameResult(
+        frame=frame,
+        meta={
+            "source": "exchange_ohlcv",
+            "exchange_price": 110.0,
+            "health": {"has_unconfirmed_candle": False, "issues": []},
+            "anomalies": {"severity": "ok", "issues": []},
+        },
+    )
+
+    client = _FakeClient(
+        connector,
+        position_context={"market_type": "futures", "has_position": False, "net_contracts": 0.0, "side": None, "spot_base_free": 0.0, "spot_base_total": 0.0},
+        executed_orders=executed_orders,
+    )
+    _patch_common(monkeypatch, client=client, market_result=market_result, strategy_fn=lambda data: "buy", approved_qty=1.25)
+
+    trading.run_strategy(
+        db=db,
+        user_id=user.id,
+        connector_ids=[connector.id],
+        symbols=["BTC/USDT"],
+        timeframe="15m",
+        strategy_slug="test_strategy",
+        risk_per_trade=0.01,
+        min_ml_probability=0.55,
+        use_live_if_available=True,
+        market_type="futures",
+    )
+
+    execute_call = next(item for item in executed_orders if item["stage"] == "execute")
+    assert execute_call["reduce_only"] is False
+    assert execute_call["quantity"] == 1.25
+
+    position = db.query(OpenPosition).filter(OpenPosition.connector_id == connector.id, OpenPosition.is_open.is_(True)).one()
+    assert position.position_side == "long"
+    assert position.current_qty == 1.25
+
+    trade_run = db.query(TradeRun).order_by(TradeRun.id.desc()).first()
+    notes = json.loads(trade_run.notes)
+    assert notes["execution_environment"]["recv_window_ms"] == 8000
+    assert notes["execution_environment"]["request_timeout_ms"] == 12000
+    assert notes["execution_environment"]["retry_attempts"] == 4
+    assert notes["execution_environment"]["retry_delay_ms"] == 125
+    assert notes["execution_environment"]["futures_margin_mode"] == "isolated"
+    assert notes["execution_environment"]["futures_position_mode"] == "oneway"
+    assert notes["order_preview"]["reduce_only"] is False
+    assert notes["order_preview"]["reduce_only_reason"] is None
+    assert notes["pretrade"]["normalized_quantity"] == 1.25
+    assert notes["decision_summary"]["decision"] == "executed"
+
+
+def test_run_strategy_closes_long_reduce_only_in_oneway_mode(monkeypatch):
+    db = _make_db()
+    user, connector = _base_setup(db, market_type="futures")
+    executed_orders = []
+
+    existing = OpenPosition(
+        user_id=user.id,
+        connector_id=connector.id,
+        platform=connector.platform,
+        market_type="futures",
+        symbol="BTC/USDT",
+        position_side="long",
+        entry_price=100.0,
+        current_qty=2.5,
+        is_open=True,
+        meta_json={"stop_loss_price": 95.0},
+    )
+    db.add(existing)
+    db.commit()
+
+    frame = pd.DataFrame([
+        {"timestamp": pd.Timestamp("2026-03-20T00:00:00"), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10.0},
+        {"timestamp": pd.Timestamp("2026-03-20T00:15:00"), "open": 100.0, "high": 102.0, "low": 97.0, "close": 98.0, "volume": 11.0},
+    ])
+    market_result = MarketFrameResult(
+        frame=frame,
+        meta={
+            "source": "exchange_ohlcv",
+            "exchange_price": 98.0,
+            "health": {"has_unconfirmed_candle": False, "issues": []},
+            "anomalies": {"severity": "ok", "issues": []},
+        },
+    )
+
+    client = _FakeClient(
+        connector,
+        position_context={"market_type": "futures", "has_position": True, "net_contracts": 2.5, "side": "long", "spot_base_free": 0.0, "spot_base_total": 0.0},
+        executed_orders=executed_orders,
+    )
+    _patch_common(monkeypatch, client=client, market_result=market_result, strategy_fn=lambda data: "sell", approved_qty=0.75)
+
+    trading.run_strategy(
+        db=db,
+        user_id=user.id,
+        connector_ids=[connector.id],
+        symbols=["BTC/USDT"],
+        timeframe="15m",
+        strategy_slug="test_strategy",
+        risk_per_trade=0.01,
+        min_ml_probability=0.55,
+        use_live_if_available=True,
+        market_type="futures",
+    )
+
+    execute_call = next(item for item in executed_orders if item["stage"] == "execute")
+    assert execute_call["reduce_only"] is True
+    assert execute_call["quantity"] == 2.5
+
+    db.refresh(existing)
+    assert existing.is_open is False
+    assert existing.current_qty == 0.0
+
+    trade_run = db.query(TradeRun).order_by(TradeRun.id.desc()).first()
+    notes = json.loads(trade_run.notes)
+    assert notes["execution_environment"]["futures_position_mode"] == "oneway"
+    assert notes["order_preview"]["reduce_only"] is True
+    assert notes["order_preview"]["reduce_only_reason"] == "close_long_before_reentry"
+    assert notes["pretrade"]["normalized_quantity"] == 2.5
+    assert notes["decision_summary"]["decision"] == "executed"
+
+
+def test_run_strategy_scales_into_existing_futures_long_without_reduce_only(monkeypatch):
+    db = _make_db()
+    user, connector = _base_setup(db, market_type="futures")
+    executed_orders = []
+
+    existing = OpenPosition(
+        user_id=user.id,
+        connector_id=connector.id,
+        platform=connector.platform,
+        market_type="futures",
+        symbol="BTC/USDT",
+        position_side="long",
+        entry_price=100.0,
+        current_qty=2.0,
+        is_open=True,
+        meta_json={"stop_loss_price": 95.0},
+    )
+    db.add(existing)
+    db.commit()
+
+    frame = pd.DataFrame([
+        {"timestamp": pd.Timestamp("2026-03-20T00:00:00"), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10.0},
+        {"timestamp": pd.Timestamp("2026-03-20T00:15:00"), "open": 100.0, "high": 111.0, "low": 99.0, "close": 110.0, "volume": 11.0},
+    ])
+    market_result = MarketFrameResult(
+        frame=frame,
+        meta={
+            "source": "exchange_ohlcv",
+            "exchange_price": 110.0,
+            "health": {"has_unconfirmed_candle": False, "issues": []},
+            "anomalies": {"severity": "ok", "issues": []},
+        },
+    )
+
+    client = _FakeClient(
+        connector,
+        position_context={"market_type": "futures", "has_position": True, "net_contracts": 2.0, "side": "long", "spot_base_free": 0.0, "spot_base_total": 0.0},
+        executed_orders=executed_orders,
+    )
+    _patch_common(monkeypatch, client=client, market_result=market_result, strategy_fn=lambda data: "buy", approved_qty=1.0)
+
+    trading.run_strategy(
+        db=db,
+        user_id=user.id,
+        connector_ids=[connector.id],
+        symbols=["BTC/USDT"],
+        timeframe="15m",
+        strategy_slug="test_strategy",
+        risk_per_trade=0.01,
+        min_ml_probability=0.55,
+        use_live_if_available=True,
+        market_type="futures",
+    )
+
+    db.refresh(existing)
+    assert existing.is_open is True
+    assert existing.current_qty == 3.0
+    assert round(existing.entry_price, 6) == round((100.0 * 2.0 + 110.0 * 1.0) / 3.0, 6)
+
+    trade_run = db.query(TradeRun).order_by(TradeRun.id.desc()).first()
+    notes = json.loads(trade_run.notes)
+    assert notes["order_preview"]["reduce_only"] is False
+    assert notes["order_preview"]["reduce_only_reason"] is None
+    assert notes["pretrade"]["normalized_quantity"] == 1.0
+    assert notes["decision_summary"]["decision"] == "executed"
+
+
+def test_run_strategy_paper_mode_keeps_execution_environment_snapshot(monkeypatch):
+    db = _make_db()
+    user, connector = _base_setup(db, market_type="futures")
+    connector.mode = "paper"
+    connector.config_json["futures_position_mode"] = "hedge"
+    connector.config_json["leverage_profile"] = "conservative"
+    db.add(connector)
+    db.commit()
+
+    executed_orders = []
+    frame = pd.DataFrame([
+        {"timestamp": pd.Timestamp("2026-03-20T00:00:00"), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10.0},
+        {"timestamp": pd.Timestamp("2026-03-20T00:15:00"), "open": 100.0, "high": 111.0, "low": 99.0, "close": 110.0, "volume": 11.0},
+    ])
+    market_result = MarketFrameResult(
+        frame=frame,
+        meta={
+            "source": "exchange_ohlcv",
+            "exchange_price": 110.0,
+            "health": {"has_unconfirmed_candle": False, "issues": []},
+            "anomalies": {"severity": "ok", "issues": []},
+        },
+    )
+
+    client = _FakeClient(
+        connector,
+        position_context={"market_type": "futures", "has_position": False, "net_contracts": 0.0, "side": None, "spot_base_free": 0.0, "spot_base_total": 0.0},
+        executed_orders=executed_orders,
+    )
+    _patch_common(monkeypatch, client=client, market_result=market_result, strategy_fn=lambda data: "buy", approved_qty=0.8)
+
+    result = trading.run_strategy(
+        db=db,
+        user_id=user.id,
+        connector_ids=[connector.id],
+        symbols=["BTC/USDT"],
+        timeframe="15m",
+        strategy_slug="test_strategy",
+        risk_per_trade=0.01,
+        min_ml_probability=0.55,
+        use_live_if_available=False,
+        market_type="futures",
+    )
+
+    assert result[0]["status"] == "paper-filled"
+
+    trade_run = db.query(TradeRun).order_by(TradeRun.id.desc()).first()
+    notes = json.loads(trade_run.notes)
+    assert notes["execution_environment"]["mode"] == "paper"
+    assert notes["execution_environment"]["warnings"] == ["paper_mode_environment"]
+    assert notes["execution_environment"]["futures_position_mode"] == "hedge"
+    assert notes["execution_environment"]["leverage_profile"] == "none"
+    assert notes["order_preview"]["reduce_only"] is False
+    assert notes["pretrade"]["normalized_quantity"] == 0.8
+    assert notes["decision_summary"]["decision"] == "executed"
 
 
 def test_run_strategy_scales_into_existing_spot_position_instead_of_creating_duplicate(monkeypatch):
