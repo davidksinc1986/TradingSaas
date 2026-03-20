@@ -144,6 +144,18 @@ const state = {
   editingConnectorId: null,
 };
 
+const REPORT_STATE_LABELS = {
+  operativa_normal: 'Operativa normal',
+  volatilidad_excesiva: 'Volatilidad excesiva',
+  drawdown_reciente: 'Drawdown reciente',
+  overtrading: 'Overtrading',
+  mercado_lateral_ruidoso: 'Mercado lateral / ruidoso',
+  baja_calidad_de_senal: 'Baja calidad de señal',
+  riesgo_global_alto: 'Riesgo global alto',
+  problemas_tecnicos: 'Problemas técnicos',
+  eventos_extremos_de_mercado: 'Eventos extremos de mercado',
+};
+
 async function api(url, options = {}) {
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -577,18 +589,51 @@ function renderExecutionLogs() {
     body.innerHTML = '<tr><td colspan="8"><small class="hint">Sin logs todavía.</small></td></tr>';
     return;
   }
-  body.innerHTML = state.executionLogs.map((item) => `
-    <tr>
-      <td>${formatDate(item.created_at)}</td>
-      <td>${prettyPlatform(item.platform)} · ${prettyMarketType(item.market_type, item.connector_id)}</td>
-      <td>${prettyLabel(item.connector_label, '-')}</td>
-      <td>${item.display_symbol || displaySymbol(item.symbol)}</td>
-      <td>${item.timeframe || '-'}</td>
-      <td>${item.signal || '-'}</td>
-      <td>${item.status_reason || item.status || '-'}</td>
-      <td>${Number(item.ml_probability || 0).toFixed(3)}</td>
-    </tr>
-  `).join('');
+  const groups = new Map();
+  state.executionLogs.forEach((item) => {
+    const key = [
+      prettyPlatform(item.platform),
+      prettyMarketType(item.market_type, item.connector_id),
+      prettyLabel(item.connector_label, 'Cuenta sin snapshot'),
+    ].join('||');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
+
+  body.innerHTML = Array.from(groups.entries()).map(([key, rows]) => {
+    const [platform, marketType, connectorLabel] = key.split('||');
+    const title = `${platform} · ${marketType} · ${connectorLabel}`;
+    const logRows = rows.map((item) => {
+      const states = Array.isArray(item.operational_states) && item.operational_states.length
+        ? item.operational_states
+        : ['operativa_normal'];
+      return `
+        <tr>
+          <td>${formatDate(item.created_at)}</td>
+          <td>${prettyPlatform(item.platform)} · ${prettyMarketType(item.market_type, item.connector_id)}</td>
+          <td>${prettyLabel(item.connector_label, 'Cuenta sin snapshot')}</td>
+          <td>${item.display_symbol || displaySymbol(item.symbol)}</td>
+          <td>${item.timeframe || '-'}</td>
+          <td>${item.signal || '-'}</td>
+          <td>${item.status_reason || item.status || '-'}</td>
+          <td>
+            <div class="chip-wrap">
+              ${states.map((stateCode) => `<span class="chip chip-static">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+    return `
+      <tr class="log-group-row">
+        <td colspan="8">
+          <strong>${escapeHtml(title)}</strong>
+          <small class="hint"> ${rows.length} evento(s) · agrupado por conector y mercado.</small>
+        </td>
+      </tr>
+      ${logRows}
+    `;
+  }).join('');
   const meta = document.getElementById('execution-logs-refresh-meta');
   if (meta) meta.textContent = `Mostrando ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
 }
@@ -636,7 +681,7 @@ function renderSummary() {
 }
 
 async function refreshDashboard() {
-  const [me, summary, connectors, botSessions, executionLogs, activity] = await Promise.all([
+  const settled = await Promise.allSettled([
     api('/api/me'),
     api('/api/dashboard'),
     api('/api/connectors'),
@@ -644,18 +689,29 @@ async function refreshDashboard() {
     api('/api/execution-logs?limit=25'),
     api('/api/activity/performance'),
   ]);
-  state.me = me;
-  state.summary = summary;
-  state.connectors = Array.isArray(connectors) ? connectors : [];
-  state.botSessions = Array.isArray(botSessions) ? botSessions : [];
-  state.executionLogs = Array.isArray(executionLogs) ? executionLogs : [];
-  state.activity = activity || null;
+  const labels = ['perfil', 'dashboard', 'conectores', 'bots', 'logs', 'actividad'];
+  const failures = [];
+  const values = settled.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value;
+    failures.push(`${labels[index]}: ${parseApiError(result.reason)}`);
+    return null;
+  });
+  const [me, summary, connectors, botSessions, executionLogs, activity] = values;
+  state.me = me || state.me;
+  state.summary = summary || state.summary || {};
+  state.connectors = Array.isArray(connectors) ? connectors : (state.connectors || []);
+  state.botSessions = Array.isArray(botSessions) ? botSessions : (state.botSessions || []);
+  state.executionLogs = Array.isArray(executionLogs) ? executionLogs : (state.executionLogs || []);
+  state.activity = activity || state.activity || null;
   renderProfile();
   renderConnectors();
   renderBotSessions();
   renderExecutionLogs();
   renderSummary();
   renderActivity();
+  if (failures.length) {
+    setStatus('run-feedback', `Algunas secciones no pudieron actualizarse: ${failures.join(' | ')}`, 'error');
+  }
 }
 
 function collectProfilePayload() {
@@ -744,24 +800,42 @@ function buildRunPayload(form) {
   const fd = new FormData(form);
   const connectorId = Number(fd.get('connector_id'));
   const connector = getConnectorById(connectorId);
+  const parseOptionalNumber = (value) => {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const parseRequiredNumber = (value, label) => {
+    const parsed = parseOptionalNumber(value);
+    if (parsed === null) throw new Error(`Debes completar ${label}.`);
+    return parsed;
+  };
+  if (!connector) {
+    throw new Error('Debes seleccionar un conector válido antes de continuar.');
+  }
+  const symbols = String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean);
+  if (!symbols.length) {
+    throw new Error('Debes indicar al menos un símbolo.');
+  }
   return {
     connector_ids: [connectorId],
     connector_id: connectorId,
     market_type: connector?.market_type || 'spot',
-    symbols: String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
+    symbols,
     timeframe: fd.get('timeframe'),
     strategy_slug: fd.get('strategy_slug'),
-    risk_per_trade: Number(fd.get('risk_per_trade_percent')),
-    min_ml_probability: Number(fd.get('min_ml_probability_percent')),
+    risk_per_trade: parseRequiredNumber(fd.get('risk_per_trade_percent'), 'el riesgo por trade'),
+    min_ml_probability: parseRequiredNumber(fd.get('min_ml_probability_percent'), 'la probabilidad mínima ML'),
     take_profit_mode: fd.get('take_profit_mode'),
-    take_profit_value: Number(fd.get('take_profit_value')),
+    take_profit_value: parseRequiredNumber(fd.get('take_profit_value'), 'el take profit'),
     stop_loss_mode: fd.get('stop_loss_mode'),
-    stop_loss_value: Number(fd.get('stop_loss_value')),
+    stop_loss_value: parseRequiredNumber(fd.get('stop_loss_value'), 'el stop loss'),
     trailing_stop_mode: fd.get('trailing_stop_mode'),
-    trailing_stop_value: Number(fd.get('trailing_stop_value')),
+    trailing_stop_value: parseRequiredNumber(fd.get('trailing_stop_value'), 'el trailing stop'),
     trade_amount_mode: fd.get('trade_amount_mode'),
-    amount_per_trade: fd.get('amount_per_trade') ? Number(fd.get('amount_per_trade')) : null,
-    amount_percentage: fd.get('amount_percentage') ? Number(fd.get('amount_percentage')) : null,
+    amount_per_trade: parseOptionalNumber(fd.get('amount_per_trade')),
+    amount_percentage: parseOptionalNumber(fd.get('amount_percentage')),
     use_live_if_available: fd.get('use_live_if_available') === 'on',
     indicator_exit_enabled: false,
     indicator_exit_rule: 'macd_cross',
@@ -988,7 +1062,9 @@ function bindFieldAdvisories(formSelector, formKind) {
 async function runStrategy(event) {
   event.preventDefault();
   try {
-    await api('/api/strategies/run', { method: 'POST', body: JSON.stringify(buildRunPayload(event.currentTarget)) });
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    await api('/api/strategies/run', { method: 'POST', body: JSON.stringify(buildRunPayload(form)) });
     setStatus('run-feedback', 'Estrategia ejecutada correctamente.', 'ok');
     await refreshDashboard();
   } catch (error) {
@@ -999,6 +1075,7 @@ async function runStrategy(event) {
 async function activateBotFromForm() {
   try {
     const form = document.getElementById('run-form');
+    if (!form?.reportValidity()) return;
     const payload = buildRunPayload(form);
     await api('/api/bot-sessions', { method: 'POST', body: JSON.stringify(payload) });
     setStatus('run-feedback', 'Bot 24/7 activado correctamente.', 'ok');

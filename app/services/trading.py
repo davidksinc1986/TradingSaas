@@ -1127,6 +1127,13 @@ def run_strategy(
             market_result = fetch_ohlcv_frame(connector=runtime_connector, symbol=symbol, timeframe=timeframe, limit=220)
             frame = market_result.frame
             notes = {
+                "connector": {
+                    "id": connector.id,
+                    "label": connector.label,
+                    "platform": connector.platform,
+                    "market_type": connector_market_type,
+                    "mode": connector.mode,
+                },
                 "run_source": run_source,
                 "bot_session_id": bot_session_id,
                 "scanner": scanner_meta,
