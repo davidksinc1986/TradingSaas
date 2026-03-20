@@ -137,7 +137,10 @@
         </label>
       </div>
       <small class="hint">El email solo puede editarlo el super user. Las alertas operativas ya se envían al Telegram central del admin.</small>
-      <button class="btn primary" type="submit">Guardar perfil</button>
+      <div class="profile-actions-row">
+        <button class="btn primary" type="submit">Guardar perfil</button>
+        <button class="btn" type="button" id="test-telegram-btn">Probar Telegram admin</button>
+      </div>
       </form>
       <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
     </section>
@@ -183,10 +186,13 @@
 
 <section id="tab-strategies" class="tab-panel">
   <div class="stack" style="gap:14px;">
-    <div class="strategy-top-layout">
+    <div class="strategy-primary-layout">
       <div class="card strategy-wizard-panel">
         <div class="row-between">
-          <h2>Ejecutar estrategia</h2>
+          <div>
+            <h2>Ejecutar estrategia</h2>
+            <small class="hint">Flujo recomendado: conectores activos → selección de app/mercado → estrategia → riesgo → activación del bot.</small>
+          </div>
           <button class="btn" type="button" id="heartbeat-btn">Validar conectores</button>
         </div>
         <div id="heartbeat-output" class="stack" style="margin:10px 0;"></div>
@@ -198,21 +204,47 @@
             <button class="btn btn-sm" type="button" data-wizard-step="3">3. Salida</button>
           </div>
           <div class="wizard-step active" data-wizard-content="1">
-            <label>Tipo de plataforma / mercado
-              <select name="market_type" id="run-market-type-filter">
-                <option value="">Detectar desde el conector seleccionado</option>
-                <option value="spot">Spot</option>
-                <option value="futures">Futures</option>
-                <option value="cfd">CFD</option>
-                <option value="forex">Forex</option>
-                <option value="signals">Signals</option>
-              </select>
-            </label>
-            <small class="hint">Este campo volvió al tab Base para dejar explícito si la estrategia/bot correrá en spot, futures u otro mercado. También filtra conectores compatibles.</small>
+            <div class="run-selection-grid">
+              <label>Plataforma objetivo
+                <select id="run-platform-filter" name="platform_filter">
+                  <option value="">Todas las plataformas activas</option>
+                </select>
+              </label>
+              <label>Tipo de mercado
+                <select name="market_type" id="run-market-type-filter">
+                  <option value="">Detectar desde el conector seleccionado</option>
+                  <option value="spot">Spot</option>
+                  <option value="futures">Futures</option>
+                  <option value="cfd">CFD</option>
+                  <option value="forex">Forex</option>
+                  <option value="signals">Signals</option>
+                </select>
+              </label>
+            </div>
+            <small class="hint" id="run-selection-summary">Filtra primero la app y el mercado para trabajar sobre el conector correcto.</small>
             <label>Conectores disponibles para ejecutar
               <select id="run-connector-select" multiple size="5"></select>
             </label>
-            <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple). Para activar un bot 24/7 debes dejar exactamente un conector seleccionado para evitar ejecuciones en la app/mercado equivocados.</small>
+            <div class="selection-callout-grid">
+              <article class="selection-callout">
+                <strong>Selección operativa</strong>
+                <small>Para guardar y activar un bot 24/7 debes dejar un único conector seleccionado.</small>
+              </article>
+              <article class="selection-callout muted">
+                <strong>Compatibilidad</strong>
+                <small>La estrategia, los símbolos y los límites se filtran automáticamente por plataforma y mercado.</small>
+              </article>
+            </div>
+            <label>Modo de selección de símbolos
+              <select name="symbol_source_mode" id="symbol-source-mode">
+                <option value="manual">Manual</option>
+                <option value="dynamic">Dinámico desde la app seleccionada</option>
+              </select>
+            </label>
+            <label>Cantidad de símbolos para selección dinámica
+              <input name="dynamic_symbol_limit" id="dynamic-symbol-limit" type="number" min="1" max="200" value="20">
+            </label>
+            <small class="hint" id="symbol-source-help">Manual: escribe los pares separados por coma. Dinámico: el bot usará el universo del conector o top símbolos disponibles.</small>
             <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
             <div class="symbol-picker-shell">
               <div class="row-between">
@@ -233,16 +265,6 @@
               </div>
               <small class="hint">Usa el buscador y el selector para construir tu cesta manual. La lista se filtra por conector y mercado.</small>
             </div>
-            <label>Modo de selección de símbolos
-              <select name="symbol_source_mode" id="symbol-source-mode">
-                <option value="manual">Manual</option>
-                <option value="dynamic">Dinámico desde la app seleccionada</option>
-              </select>
-            </label>
-            <label>Cantidad de símbolos para selección dinámica
-              <input name="dynamic_symbol_limit" id="dynamic-symbol-limit" type="number" min="1" max="200" value="20">
-            </label>
-            <small class="hint" id="symbol-source-help">Manual: escribe los pares separados por coma. Dinámico: el bot usará el universo del conector o top símbolos disponibles.</small>
             <label>Timeframe<input name="timeframe" value="1h"></label>
             <label>Estrategia <a class="strategy-inline-help" href="#strategy-library-panel" title="Ir a estrategias disponibles">?</a>
               <select name="strategy_slug"></select>
@@ -251,7 +273,7 @@
           <div class="wizard-step" data-wizard-content="2">
           <small class="hint" id="strategy-managed-hint"></small>
           <div class="row-wrap">
-            <button class="btn btn-sm" type="button" id="open-strategy-wizard">Wizard de configuración</button>
+            <button class="btn btn-sm" type="button" id="open-strategy-wizard">Abrir wizard lateral</button>
             <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
           </div>
           <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
@@ -295,22 +317,38 @@
           <input type="hidden" name="compound_growth_enabled" value="false">
           <input type="hidden" name="atr_volatility_filter_enabled" value="true">
           </div>
-          <div class="row-between">
+          <div class="wizard-footer-actions">
             <button class="btn" type="button" id="wizard-prev-inline">Atrás</button>
             <button class="btn" type="button" id="wizard-next-inline">Siguiente</button>
+            <button class="btn primary" type="submit" id="save-bot-btn">Guardar y activar bot</button>
           </div>
-          <div class="row-wrap"><button class="btn primary" type="submit" id="save-bot-btn">Guardar y activar bot</button></div>
           <div id="run-feedback" class="status-msg" hidden></div>
         </form>
       </div>
 
-      <div class="strategy-side-stack">
-        <div class="card strategy-guidance-card strategy-guidance-sidebar" id="strategy-dynamic-guidance">
-          <strong>Guía dinámica</strong>
-          <p class="hint">Selecciona conector, estrategia y timeframe para recibir una configuración sugerida.</p>
+      <aside class="card strategy-inline-wizard hidden" id="strategy-wizard-inline-panel">
+        <div class="row-between">
+          <div>
+            <h3 id="strategy-wizard-title">Wizard · Configuración profesional</h3>
+            <small class="hint">Ajusta el setup aquí mismo y aplícalo al formulario sin ir al final de la página.</small>
+          </div>
+          <button class="btn" type="button" id="strategy-wizard-close">Cerrar</button>
         </div>
+        <div id="strategy-wizard-content" class="stack" style="gap:10px;margin-top:10px;"></div>
+        <div class="wizard-footer-actions compact">
+          <button class="btn" type="button" id="strategy-wizard-prev">Atrás</button>
+          <button class="btn primary" type="button" id="strategy-wizard-next">Siguiente</button>
+        </div>
+      </aside>
+    </div>
 
-        <div class="card strategy-library-card compact" id="strategy-library-panel">
+    <div class="strategy-secondary-layout">
+      <div class="card strategy-guidance-card strategy-guidance-sidebar" id="strategy-dynamic-guidance">
+        <strong>Guía dinámica</strong>
+        <p class="hint">Selecciona conector, estrategia y timeframe para recibir una configuración sugerida.</p>
+      </div>
+
+      <div class="card strategy-library-card compact" id="strategy-library-panel">
           <div class="row-between">
             <h2>Estrategias disponibles</h2>
             <small class="hint">Click para ver explicación rápida</small>
@@ -554,22 +592,6 @@
   </div>
 </div>
 
-
-<div id="strategy-wizard-modal" class="modal hidden">
-  <div class="modal-card card strategy-modal-card strategy-wizard-card">
-    <div class="modal-head">
-      <h3 id="strategy-wizard-title">Wizard · Configuración profesional</h3>
-      <button class="btn" type="button" id="strategy-wizard-close">Cerrar</button>
-    </div>
-    <div id="strategy-wizard-content" class="stack" style="gap:10px;"></div>
-    <div class="row-between" style="margin-top:12px;">
-      <button class="btn" type="button" id="strategy-wizard-prev">Atrás</button>
-      <button class="btn primary" type="button" id="strategy-wizard-next">Siguiente</button>
-    </div>
-  </div>
-</div>
-
-</div>
 
 <script src="/static/dashboard.js?v={{ static_version }}"></script>
 
