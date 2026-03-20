@@ -582,6 +582,18 @@ class CCXTConnectorClient(BaseConnectorClient):
     def _resolve_position_mode(self) -> str:
         return str((self.config or {}).get("futures_position_mode") or "oneway").lower()
 
+    def _resolve_retry_attempts(self) -> int:
+        raw = (self.config or {}).get("retry_attempts")
+        if raw in (None, ""):
+            return 2
+        return max(int(raw), 1)
+
+    def _resolve_retry_delay_ms(self) -> int:
+        raw = (self.config or {}).get("retry_delay_ms")
+        if raw in (None, ""):
+            return 350
+        return max(int(raw), 0)
+
     def _sync_exchange_clock(self, exchange) -> dict[str, Any]:
         result = {"enabled": self._time_sync_enabled(), "applied": False, "source": None, "server_time": None, "time_difference_ms": None}
         if not result["enabled"]:
@@ -610,6 +622,10 @@ class CCXTConnectorClient(BaseConnectorClient):
 
     def prepare_execution_environment(self, symbol: str, *, leverage_profile: str = "none") -> dict[str, Any]:
         market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        margin_mode = self._resolve_margin_mode()
+        position_mode = self._resolve_position_mode()
+        resolved_leverage_profile = str(leverage_profile or (self.config or {}).get("leverage_profile") or "none").lower()
+        leverage = self._resolve_leverage(leverage_profile)
         result = {
             "ok": True,
             "symbol": symbol,
@@ -617,6 +633,12 @@ class CCXTConnectorClient(BaseConnectorClient):
             "mode": self.connector.mode,
             "recv_window_ms": int((self.config or {}).get("recv_window_ms") or 10000),
             "request_timeout_ms": int((self.config or {}).get("request_timeout_ms") or 20000),
+            "retry_attempts": self._resolve_retry_attempts(),
+            "retry_delay_ms": self._resolve_retry_delay_ms(),
+            "futures_margin_mode": margin_mode,
+            "futures_position_mode": position_mode,
+            "futures_leverage": leverage,
+            "leverage_profile": resolved_leverage_profile,
             "applied": [],
             "warnings": [],
             "capabilities": {
@@ -660,13 +682,11 @@ class CCXTConnectorClient(BaseConnectorClient):
         if market_type != "futures":
             return result
 
-        margin_mode = self._resolve_margin_mode()
-        position_mode = self._resolve_position_mode()
-        leverage = self._resolve_leverage(leverage_profile)
         result["futures_settings"] = {
             "margin_mode": margin_mode,
             "position_mode": position_mode,
             "leverage": leverage,
+            "leverage_profile": resolved_leverage_profile,
         }
 
         if hasattr(exchange, "set_margin_mode"):
@@ -1151,8 +1171,8 @@ class CCXTConnectorClient(BaseConnectorClient):
             validation=validation,
             extra_params=extra_params,
         )
-        retry_attempts = max(int((self.config or {}).get("retry_attempts") or 2), 1)
-        retry_delay_ms = max(int((self.config or {}).get("retry_delay_ms") or 350), 0)
+        retry_attempts = self._resolve_retry_attempts()
+        retry_delay_ms = self._resolve_retry_delay_ms()
         idempotency_key = f"{self.connector.platform}-{getattr(self.connector, 'id', 'na')}-{uuid4().hex[:20]}"
         order_params.setdefault("clientOrderId", idempotency_key)
         order_params.setdefault("newClientOrderId", idempotency_key)

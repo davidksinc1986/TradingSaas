@@ -182,10 +182,40 @@ def test_execution_message_includes_realized_pnl_and_close_reason():
         message="Take profit alcanzado",
         pnl=42.5,
         close_reason="take_profit",
+        connection_status="ok",
+        markets_connected="Binance/futures",
+        candles_reviewed=440,
+        trend_summary="sesgo alcista validado",
     )
 
     assert "PnL realizado: 42.50000000" in message
     assert "Motivo de cierre: take_profit" in message
+    assert "Conexión: ok" in message
+    assert "Mercados conectados: Binance/futures" in message
+    assert "Velas revisadas: 440" in message
+    assert "Resumen de tendencia: sesgo alcista validado" in message
+
+
+def test_info_message_can_include_connection_market_candle_and_trend_context():
+    alerts = _load_alerts_module()
+
+    message = alerts.format_user_info_message(
+        locale="es",
+        title="Prueba de conector exitosa",
+        detail="El exchange respondió correctamente.",
+        connector_label="Binance main",
+        platform="binance",
+        symbol="BTC/USDT",
+        connection_status="ok",
+        markets_connected="binance/futures",
+        candles_reviewed=220,
+        trend_summary="mercado tendencial",
+    )
+
+    assert "Conexión: ok" in message
+    assert "Mercados conectados: binance/futures" in message
+    assert "Velas revisadas: 220" in message
+    assert "Resumen de tendencia: mercado tendencial" in message
 
 
 def test_user_has_telegram_config_requires_enablement_and_credentials():

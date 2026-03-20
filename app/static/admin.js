@@ -25,32 +25,49 @@ function setFeedback(message, kind = 'ok') {
 }
 
 let usersState = [];
+let selectedUserId = null;
+
+function formatDate(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString();
+}
 
 function renderUserList() {
   const wrap = document.getElementById('admin-users');
   const select = document.getElementById('selected-user');
   document.getElementById('admin-total-users').textContent = String(usersState.length);
-  if (wrap) {
-    wrap.innerHTML = usersState.map((user) => `
-      <article class="connector-item fade-in-up">
-        <div class="row-between">
-          <div>
-            <strong>${user.name}</strong>
-            <div class="connector-meta">
-              <span>${user.email}</span>
-              <span>${user.is_admin ? 'Admin' : 'Usuario'}</span>
-              <span>${user.is_active ? 'Activo' : 'Inactivo'}</span>
-            </div>
-          </div>
-        </div>
-      </article>
-    `).join('');
-  }
+
   if (select) {
-    const previous = select.value;
-    select.innerHTML = usersState.map((user) => `<option value="${user.id}">${user.name} · ${user.email}</option>`).join('');
-    if (previous && usersState.some((user) => String(user.id) === previous)) select.value = previous;
+    const fallbackId = selectedUserId && usersState.some((user) => user.id === selectedUserId)
+      ? selectedUserId
+      : (usersState[0]?.id || null);
+    selectedUserId = fallbackId;
+    select.innerHTML = usersState.map((user) => `<option value="${user.id}" ${user.id === fallbackId ? 'selected' : ''}>${user.name} · ${user.email}</option>`).join('');
   }
+
+  if (!wrap) return;
+  wrap.innerHTML = usersState.map((user) => `
+    <button class="admin-user-item fade-in-up ${user.id === selectedUserId ? 'selected' : ''}" type="button" data-user-id="${user.id}">
+      <strong>${user.name}</strong>
+      <small>${user.email}</small>
+      <div class="connector-meta">
+        <span>${user.is_admin ? 'Admin' : 'Usuario'}</span>
+        <span>${user.is_active ? 'Activo' : 'Inactivo'}</span>
+        <span>${formatDate(user.created_at)}</span>
+      </div>
+    </button>
+  `).join('');
+
+  wrap.querySelectorAll('[data-user-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      selectedUserId = Number(button.dataset.userId);
+      renderUserList();
+      if (select) select.value = String(selectedUserId);
+      await refreshSelectedUserProfile();
+    });
+  });
 }
 
 function renderPolicies(policies) {
@@ -105,12 +122,59 @@ function renderPolicies(policies) {
   });
 }
 
+function connectorFormMarkup(connector) {
+  return `
+    <form class="connector-form form-grid admin-compact-grid" data-id="${connector.id}" style="margin-top:12px;">
+      <strong style="grid-column:1/-1;">${connector.label} · ${connector.platform}</strong>
+      <label>Label<input name="label" value="${connector.label}"></label>
+      <label>Modo
+        <select name="mode">
+          <option value="paper" ${connector.mode === 'paper' ? 'selected' : ''}>Paper</option>
+          <option value="live" ${connector.mode === 'live' ? 'selected' : ''}>Live</option>
+          <option value="signal" ${connector.mode === 'signal' ? 'selected' : ''}>Signal</option>
+        </select>
+      </label>
+      <label>Mercado
+        <select name="market_type">
+          <option value="spot" ${connector.market_type === 'spot' ? 'selected' : ''}>Spot</option>
+          <option value="futures" ${connector.market_type === 'futures' ? 'selected' : ''}>Futures</option>
+          <option value="forex" ${connector.market_type === 'forex' ? 'selected' : ''}>Forex</option>
+          <option value="cfd" ${connector.market_type === 'cfd' ? 'selected' : ''}>CFD</option>
+          <option value="signals" ${connector.market_type === 'signals' ? 'selected' : ''}>Signals</option>
+        </select>
+      </label>
+      <label>Estado
+        <select name="is_enabled">
+          <option value="true" ${connector.is_enabled ? 'selected' : ''}>Activo</option>
+          <option value="false" ${!connector.is_enabled ? 'selected' : ''}>Inactivo</option>
+        </select>
+      </label>
+      <label>Símbolos<input name="symbols" value="${(connector.symbols || []).join(', ')}"></label>
+      <label>Allocation mode<input name="allocation_mode" value="${connector.allocation_mode || 'fixed'}"></label>
+      <label>Allocation value<input name="allocation_value" type="number" step="0.01" value="${connector.allocation_value || 0}"></label>
+      <label>Recv window<input name="recv_window_ms" type="number" value="${connector.config?.recv_window_ms ?? ''}"></label>
+      <label>Request timeout<input name="request_timeout_ms" type="number" value="${connector.config?.request_timeout_ms ?? ''}"></label>
+      <label>Retries<input name="retry_attempts" type="number" value="${connector.config?.retry_attempts ?? ''}"></label>
+      <label>Retry delay<input name="retry_delay_ms" type="number" value="${connector.config?.retry_delay_ms ?? ''}"></label>
+      <label>Margin mode<input name="futures_margin_mode" value="${connector.config?.futures_margin_mode ?? ''}"></label>
+      <label>Position mode<input name="futures_position_mode" value="${connector.config?.futures_position_mode ?? ''}"></label>
+      <label>Leverage<input name="futures_leverage" type="number" value="${connector.config?.futures_leverage ?? ''}"></label>
+      <label>Leverage profile<input name="leverage_profile" value="${connector.config?.leverage_profile ?? ''}"></label>
+      <div class="row-wrap" style="grid-column:1/-1;">
+        <button class="btn btn-sm" type="submit">Guardar conector</button>
+        <button class="btn btn-sm" type="button" data-delete-connector="${connector.id}">Eliminar conector</button>
+      </div>
+    </form>
+  `;
+}
+
 async function refreshSelectedUserProfile() {
-  const selectedId = document.getElementById('selected-user')?.value;
+  const selectedId = selectedUserId || Number(document.getElementById('selected-user')?.value || 0);
   const wrap = document.getElementById('selected-user-profile');
   if (!selectedId || !wrap) return;
   try {
     const profile = await api(`/api/admin/users/${selectedId}/profile`);
+    selectedUserId = Number(selectedId);
     document.getElementById('admin-selected-user-state').textContent = `${profile.user.name} · ${profile.user.email}`;
     wrap.innerHTML = `
       <article class="connector-item fade-in-up">
@@ -119,15 +183,20 @@ async function refreshSelectedUserProfile() {
             <strong>${profile.user.name}</strong>
             <div class="connector-meta">
               <span>${profile.user.email}</span>
+              <span>${profile.user.phone || 'Sin teléfono'}</span>
               <span>${profile.user.is_admin ? 'Admin' : 'Usuario'}</span>
               <span>${profile.user.is_active ? 'Activo' : 'Inactivo'}</span>
             </div>
           </div>
+          ${!profile.user.is_root ? '<button class="btn btn-sm" type="button" id="delete-user-btn">Eliminar usuario</button>' : ''}
         </div>
       </article>
 
-      <form id="user-meta-form" class="connector-item fade-in-up form-grid">
-        <strong>Estado de usuario</strong>
+      <form id="user-meta-form" class="connector-item fade-in-up form-grid admin-compact-grid">
+        <strong style="grid-column:1/-1;">Estado de usuario</strong>
+        <label>Nombre<input name="name" value="${profile.user.name || ''}"></label>
+        <label>Email<input name="email" type="email" value="${profile.user.email || ''}"></label>
+        <label>Teléfono<input name="phone" value="${profile.user.phone || ''}"></label>
         <label>Activo
           <select name="is_active"><option value="true" ${profile.user.is_active ? 'selected' : ''}>Sí</option><option value="false" ${!profile.user.is_active ? 'selected' : ''}>No</option></select>
         </label>
@@ -139,17 +208,7 @@ async function refreshSelectedUserProfile() {
 
       <div class="connector-item fade-in-up">
         <strong>Conectores del usuario</strong>
-        ${(profile.connectors || []).map((connector) => `
-          <form class="connector-form form-grid" data-id="${connector.id}" style="margin-top:12px;">
-            <label>Label<input name="label" value="${connector.label}"></label>
-            <label>Modo<input name="mode" value="${connector.mode}"></label>
-            <label>Mercado<input name="market_type" value="${connector.market_type}"></label>
-            <label>Símbolos<input name="symbols" value="${(connector.symbols || []).join(', ')}"></label>
-            <label>Allocation mode<input name="allocation_mode" value="${connector.allocation_mode || 'fixed'}"></label>
-            <label>Allocation value<input name="allocation_value" type="number" step="0.01" value="${connector.allocation_value || 0}"></label>
-            <button class="btn btn-sm" type="submit">Guardar conector</button>
-          </form>
-        `).join('') || '<small class="hint">Este usuario no tiene conectores.</small>'}
+        ${(profile.connectors || []).map(connectorFormMarkup).join('') || '<small class="hint">Este usuario no tiene conectores.</small>'}
       </div>
 
       <div class="connector-item fade-in-up">
@@ -157,8 +216,8 @@ async function refreshSelectedUserProfile() {
         ${(profile.policies || []).map((policy) => {
           const grant = (profile.grants || []).find((g) => g.platform === policy.platform) || { is_enabled: false, max_symbols: 0, max_daily_movements: 0, notes: '' };
           return `
-            <form class="grant-form form-grid" data-platform="${policy.platform}" style="margin-top:12px;">
-              <strong>${policy.display_name}</strong>
+            <form class="grant-form form-grid admin-compact-grid" data-platform="${policy.platform}" style="margin-top:12px;">
+              <strong style="grid-column:1/-1;">${policy.display_name}</strong>
               <label>Habilitado
                 <select name="is_enabled"><option value="true" ${grant.is_enabled ? 'selected' : ''}>Sí</option><option value="false" ${!grant.is_enabled ? 'selected' : ''}>No</option></select>
               </label>
@@ -177,7 +236,7 @@ async function refreshSelectedUserProfile() {
           <select name="managed_by_admin"><option value="true" ${profile.strategy_control.managed_by_admin ? 'selected' : ''}>Sí</option><option value="false" ${!profile.strategy_control.managed_by_admin ? 'selected' : ''}>No</option></select>
         </label>
         <label>Estrategias
-          <select name="allowed_strategies" multiple size="6">
+          <select name="allowed_strategies" multiple size="8">
             ${(profile.strategy_control.all_strategies || []).map((slug) => `<option value="${slug}" ${(profile.strategy_control.allowed_strategies || []).includes(slug) ? 'selected' : ''}>${slug}</option>`).join('')}
           </select>
         </label>
@@ -192,6 +251,9 @@ async function refreshSelectedUserProfile() {
         await api(`/api/admin/users/${selectedId}`, {
           method: 'PUT',
           body: JSON.stringify({
+            name: fd.get('name'),
+            email: fd.get('email'),
+            phone: fd.get('phone'),
             is_active: fd.get('is_active') === 'true',
             is_admin: fd.get('is_admin') === 'true',
           }),
@@ -214,14 +276,35 @@ async function refreshSelectedUserProfile() {
               label: fd.get('label'),
               mode: fd.get('mode'),
               market_type: fd.get('market_type'),
+              is_enabled: fd.get('is_enabled') === 'true',
               symbols: String(fd.get('symbols') || '').split(',').map((x) => x.trim()).filter(Boolean),
               config: {
                 allocation_mode: fd.get('allocation_mode'),
                 allocation_value: Number(fd.get('allocation_value') || 0),
+                recv_window_ms: fd.get('recv_window_ms') ? Number(fd.get('recv_window_ms')) : null,
+                request_timeout_ms: fd.get('request_timeout_ms') ? Number(fd.get('request_timeout_ms')) : null,
+                retry_attempts: fd.get('retry_attempts') ? Number(fd.get('retry_attempts')) : null,
+                retry_delay_ms: fd.get('retry_delay_ms') ? Number(fd.get('retry_delay_ms')) : null,
+                futures_margin_mode: fd.get('futures_margin_mode') || null,
+                futures_position_mode: fd.get('futures_position_mode') || null,
+                futures_leverage: fd.get('futures_leverage') ? Number(fd.get('futures_leverage')) : null,
+                leverage_profile: fd.get('leverage_profile') || null,
               },
             }),
           });
           setFeedback('Conector actualizado.', 'ok');
+          await refreshSelectedUserProfile();
+        } catch (error) {
+          setFeedback(parseApiError(error), 'error');
+        }
+      });
+    });
+
+    wrap.querySelectorAll('[data-delete-connector]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        try {
+          await api(`/api/connectors/${button.dataset.deleteConnector}`, { method: 'DELETE' });
+          setFeedback('Conector eliminado.', 'ok');
           await refreshSelectedUserProfile();
         } catch (error) {
           setFeedback(parseApiError(error), 'error');
@@ -270,6 +353,17 @@ async function refreshSelectedUserProfile() {
         setFeedback(parseApiError(error), 'error');
       }
     });
+
+    wrap.querySelector('#delete-user-btn')?.addEventListener('click', async () => {
+      try {
+        await api(`/api/admin/users/${selectedId}`, { method: 'DELETE' });
+        setFeedback('Usuario eliminado.', 'ok');
+        selectedUserId = null;
+        await refreshAdmin();
+      } catch (error) {
+        setFeedback(parseApiError(error), 'error');
+      }
+    });
   } catch (error) {
     wrap.innerHTML = `<div class="status-msg status-error">${parseApiError(error)}</div>`;
   }
@@ -308,7 +402,11 @@ async function createUser(event) {
 
 async function init() {
   document.getElementById('create-user-form')?.addEventListener('submit', createUser);
-  document.getElementById('selected-user')?.addEventListener('change', refreshSelectedUserProfile);
+  document.getElementById('selected-user')?.addEventListener('change', async (event) => {
+    selectedUserId = Number(event.currentTarget.value || 0);
+    renderUserList();
+    await refreshSelectedUserProfile();
+  });
   await refreshAdmin();
 }
 

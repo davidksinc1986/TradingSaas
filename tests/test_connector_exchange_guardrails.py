@@ -248,8 +248,12 @@ def test_prepare_execution_environment_applies_time_sync_and_futures_settings():
     connector = _FakeConnector()
     connector.config_json = {
         "recv_window_ms": 8000,
+        "request_timeout_ms": 12000,
         "futures_margin_mode": "isolated",
         "futures_position_mode": "hedge",
+        "futures_leverage": 7,
+        "retry_attempts": 4,
+        "retry_delay_ms": 125,
     }
     client = connectors.CCXTConnectorClient(connector)
 
@@ -259,9 +263,50 @@ def test_prepare_execution_environment_applies_time_sync_and_futures_settings():
     assert "time_sync" in result["applied"]
     assert "margin_mode:isolated" in result["applied"]
     assert "position_mode:hedge" in result["applied"]
-    assert "leverage:3" in result["applied"]
+    assert "leverage:7" in result["applied"]
     assert result["time_sync"]["time_difference_ms"] == 321
     assert result["market_rules"]["min_cost"] == 100.0
+    assert result["recv_window_ms"] == 8000
+    assert result["request_timeout_ms"] == 12000
+    assert result["retry_attempts"] == 4
+    assert result["retry_delay_ms"] == 125
+    assert result["futures_margin_mode"] == "isolated"
+    assert result["futures_position_mode"] == "hedge"
+    assert result["futures_leverage"] == 7
+    assert result["leverage_profile"] == "balanced"
+    assert result["futures_settings"]["leverage_profile"] == "balanced"
+
+
+def test_prepare_execution_environment_surfaces_config_snapshot_in_paper_mode():
+    connectors = _load_connectors_module()
+    connectors.ccxt = types.SimpleNamespace(binance=_FakePreparedExchange)
+
+    connector = _FakeConnector()
+    connector.mode = "paper"
+    connector.config_json = {
+        "recv_window_ms": 9000,
+        "request_timeout_ms": 15000,
+        "futures_margin_mode": "cross",
+        "futures_position_mode": "oneway",
+        "retry_attempts": 2,
+        "retry_delay_ms": 0,
+    }
+    client = connectors.CCXTConnectorClient(connector)
+
+    result = client.prepare_execution_environment("ETH/USDT", leverage_profile="aggressive")
+
+    assert result["ok"] is True
+    assert result["mode"] == "paper"
+    assert result["warnings"] == ["paper_mode_environment"]
+    assert result["applied"] == []
+    assert result["recv_window_ms"] == 9000
+    assert result["request_timeout_ms"] == 15000
+    assert result["retry_attempts"] == 2
+    assert result["retry_delay_ms"] == 0
+    assert result["futures_margin_mode"] == "cross"
+    assert result["futures_position_mode"] == "oneway"
+    assert result["futures_leverage"] == 5
+    assert result["leverage_profile"] == "aggressive"
 
 
 def test_execute_market_retries_timeout_with_stable_client_order_id():

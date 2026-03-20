@@ -113,6 +113,14 @@ def _safe_float(value, fallback: float = 0.0) -> float:
     return result
 
 
+def _safe_int(value, fallback: int = 0) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return result
+
+
 def _normalize_market_type(value: str | None) -> str:
     return normalize_market_type(value)
 
@@ -158,7 +166,9 @@ def _alert_admin_failure(scope: str, detail: str) -> None:
 
 
 def _notify_user_info(user: User | None, *, title: str, detail: str, connector_label: str | None = None,
-                      platform: str | None = None, symbol: str | None = None) -> None:
+                      platform: str | None = None, symbol: str | None = None,
+                      connection_status: str | None = None, markets_connected: str | None = None,
+                      candles_reviewed: int | None = None, trend_summary: str | None = None) -> None:
     if user is None:
         return
     try:
@@ -169,6 +179,10 @@ def _notify_user_info(user: User | None, *, title: str, detail: str, connector_l
             connector_label=connector_label,
             platform=platform,
             symbol=symbol,
+            connection_status=connection_status,
+            markets_connected=markets_connected,
+            candles_reviewed=candles_reviewed,
+            trend_summary=trend_summary,
         )
         send_admin_user_alert_sync(user, message, scope="user-info")
     except Exception:
@@ -528,12 +542,22 @@ def test_connector(connector_id: int, db=Depends(get_db), user=Depends(current_u
     client = get_client(connector)
     try:
         data = client.test_connection()
+        raw_text = json.dumps(data, ensure_ascii=False) if isinstance(data, (dict, list)) else str(data or "")
         _notify_user_info(
             user,
             title="Prueba de conector exitosa",
-            detail=f"{connector.label} respondió correctamente a la prueba de conexión.",
+            detail=(
+                f"{connector.label} respondió correctamente a la prueba de conexión. "
+                f"Mercado conectado: {connector.market_type}. "
+                f"Símbolos base: {len(_safe_symbols(getattr(connector, 'symbols_json', {})))}. "
+                f"Respuesta resumida: {raw_text[:220] or 'ok'}"
+            ),
             connector_label=connector.label,
             platform=connector.platform,
+            connection_status="ok",
+            markets_connected=f"{connector.platform}/{connector.market_type}",
+            candles_reviewed=0,
+            trend_summary="Conector listo para monitoreo y ejecución",
         )
         return {"status": "ok", "message": "Connection test completed", "raw": data}
     except Exception as exc:
@@ -618,16 +642,38 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         fixed_trade_amount_usd=trade_amount_settings["amount_per_trade"],
         trade_balance_percent=trade_amount_settings["amount_percentage"],
     )
+    active_connectors = db.query(Connector).filter(
+        Connector.id.in_(payload.connector_ids),
+        Connector.user_id == user.id,
+    ).all()
     status_counts: dict[str, int] = {}
     for item in result:
         status = str(item.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
+    connected_markets = ", ".join(
+        f"{connector.label} ({connector.platform}/{ensure_connector_market_type_state(connector, persist=True, db=db)})"
+        for connector in active_connectors
+    ) or "sin conectores resueltos"
+    estimated_candles = max(len(payload.symbols), 1) * 220
+    trend_summary = (
+        f"Estrategia {payload.strategy_slug} en {payload.timeframe}. "
+        f"Sesgo monitorizado sobre {len(payload.symbols)} mercado(s) con modo {payload.symbol_source_mode}."
+    )
     _notify_user_info(
         user,
         title="Estrategia ejecutada manualmente",
-        detail=f"{payload.strategy_slug} sobre {len(payload.symbols)} símbolos. Resultado: "
-               + ", ".join(f"{status}={count}" for status, count in sorted(status_counts.items())),
+        detail=(
+            f"{payload.strategy_slug} sobre {len(payload.symbols)} símbolos. "
+            f"Mercados conectados: {connected_markets}. "
+            f"Velas revisadas estimadas: {estimated_candles}. "
+            f"Tendencias/escenario: {trend_summary}. "
+            f"Resultado: " + ", ".join(f"{status}={count}" for status, count in sorted(status_counts.items()))
+        ),
         symbol=", ".join(payload.symbols[:3]) if payload.symbols else None,
+        connection_status="ok",
+        markets_connected=connected_markets,
+        candles_reviewed=estimated_candles,
+        trend_summary=trend_summary,
     )
     return {"ok": True, "results": result}
 
@@ -1633,11 +1679,45 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
     if payload.is_admin is not None and not _is_root_admin(actor):
         raise HTTPException(status_code=403, detail=f"Only {ROOT_ADMIN_EMAIL} can assign or remove admin role")
 
+    if payload.email is not None:
+        next_email = payload.email.strip().lower()
+        if not next_email:
+            raise HTTPException(status_code=400, detail="Email cannot be empty")
+        exists = db.query(User).filter(User.email == next_email, User.id != user.id).first()
+        if exists:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        user.email = next_email
+    if payload.name is not None:
+        user.name = payload.name.strip()
+    if payload.phone is not None:
+        user.phone = (payload.phone or "").strip() or None
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.is_admin is not None:
         user.is_admin = payload.is_admin
 
+    db.commit()
+    _notify_user_info(
+        user,
+        title="Perfil actualizado por administración",
+        detail=f"Tu cuenta quedó como {'activa' if user.is_active else 'inactiva'} y rol {'admin' if user.is_admin else 'usuario'}.",
+    )
+    return {"ok": True}
+
+
+@router.delete("/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db=Depends(get_db), actor: User = Depends(admin_user)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == actor.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    if _is_root_admin(user):
+        raise HTTPException(status_code=403, detail=f"{ROOT_ADMIN_EMAIL} is hierarchical and cannot be deleted")
+
+    detail = f"Cuenta eliminada por admin. Usuario={user.name} email={user.email}"
+    send_admin_user_alert_sync(user, format_failure_message("Admin User Delete", detail), scope="admin-user-delete")
+    db.delete(user)
     db.commit()
     return {"ok": True}
 
@@ -1659,6 +1739,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "id": user.id,
             "email": user.email,
             "name": user.name,
+            "phone": user.phone,
             "is_admin": user.is_admin,
             "is_active": user.is_active,
             "is_root": _is_root_admin(user),
@@ -1680,6 +1761,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "symbols": c.symbols_json.get("symbols", []),
             "allocation_mode": (c.config_json or {}).get("allocation_mode", "fixed"),
             "allocation_value": (c.config_json or {}).get("allocation_value", (c.config_json or {}).get("default_quantity", 0)),
+            "config": c.config_json or {},
         } for c in connectors],
         "policies": [{
             "platform": p.platform,
