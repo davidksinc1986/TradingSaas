@@ -195,9 +195,6 @@ async function refreshSelectedUserProfile() {
         <label>Nombre<input name="name" value="${profile.user.name || ''}"></label>
         <label>Email<input name="email" type="email" value="${profile.user.email || ''}"></label>
         <label>Teléfono<input name="phone" value="${profile.user.phone || ''}"></label>
-        <label>Idioma alertas
-          <select name="alert_language"><option value="es" ${profile.user.alert_language === 'es' ? 'selected' : ''}>Español</option><option value="en" ${profile.user.alert_language === 'en' ? 'selected' : ''}>English</option><option value="pt" ${profile.user.alert_language === 'pt' ? 'selected' : ''}>Português</option><option value="fr" ${profile.user.alert_language === 'fr' ? 'selected' : ''}>Français</option></select>
-        </label>
         <label>Activo
           <select name="is_active"><option value="true" ${profile.user.is_active ? 'selected' : ''}>Sí</option><option value="false" ${!profile.user.is_active ? 'selected' : ''}>No</option></select>
         </label>
@@ -298,10 +295,6 @@ async function refreshSelectedUserProfile() {
             name: fd.get('name'),
             email: fd.get('email'),
             phone: fd.get('phone'),
-            alert_language: fd.get('alert_language'),
-            telegram_alerts_enabled: fd.get('telegram_alerts_enabled') === 'on',
-            telegram_bot_key: fd.get('telegram_bot_key') || '',
-            telegram_chat_id: fd.get('telegram_chat_id') || '',
             is_active: fd.get('is_active') === 'true',
             is_admin: fd.get('is_admin') === 'true',
           }),

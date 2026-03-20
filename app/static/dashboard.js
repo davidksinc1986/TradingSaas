@@ -142,8 +142,6 @@ const state = {
   botSessions: [],
   executionLogs: [],
   editingConnectorId: null,
-  editingBotSessionId: null,
-  activity: null,
 };
 
 async function api(url, options = {}) {
@@ -197,50 +195,6 @@ function prettyPlatform(value) {
   const raw = String(value || '').trim().toLowerCase();
   const labels = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', mt5: 'MT5', ctrader: 'cTrader', tradingview: 'TradingView' };
   return labels[raw] || prettyLabel(value, '-');
-}
-
-function displaySymbol(value) {
-  const raw = String(value || '').trim().toUpperCase();
-  if (!raw) return '-';
-  if (raw.endsWith('/USDT')) return raw.slice(0, -5);
-  if (raw.endsWith('USDT')) return raw.slice(0, -4);
-  return raw;
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function svgLineChart(points = [], { color = '#f0b90b', fill = 'rgba(240,185,11,.14)' } = {}) {
-  const values = points.map((item) => Number(item?.value || 0));
-  if (!values.length) return '<div class="chart-empty">Sin datos todavía.</div>';
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const width = 100;
-  const height = 40;
-  const coords = values.map((value, index) => {
-    const x = values.length === 1 ? 0 : (index / (values.length - 1)) * width;
-    const y = height - ((value - min) / range) * height;
-    return [x, y];
-  });
-  const line = coords.map(([x, y]) => `${x},${y}`).join(' ');
-  const area = `0,${height} ${line} ${width},${height}`;
-  return `
-    <svg viewBox="0 0 ${width} ${height}" class="mini-chart" preserveAspectRatio="none" aria-hidden="true">
-      <polygon points="${area}" fill="${fill}"></polygon>
-      <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
-    </svg>
-  `;
-}
-
-function activitySummaryCard(title, value, tone = 'neutral') {
-  return `<article class="activity-mini-card tone-${tone}"><small>${escapeHtml(title)}</small><strong>${escapeHtml(value)}</strong></article>`;
 }
 
 function connectorFieldDefinitions(platform, marketType = null) {
@@ -358,7 +312,6 @@ function readConnectorFriendlyFields(formEl, platform) {
   const config = {};
   const secrets = {};
   const marketType = String(fd.get('market_type') || 'spot');
-  const isEditing = Boolean(state.editingConnectorId);
   connectorFieldDefinitions(platform, marketType).forEach((field) => {
     const rawValue = field.type === 'checkbox' ? fd.get(`field_${field.target}_${field.key}`) === 'on' : fd.get(`field_${field.target}_${field.key}`);
     if (field.type === 'checkbox') {
@@ -367,10 +320,7 @@ function readConnectorFriendlyFields(formEl, platform) {
       return;
     }
     const value = String(rawValue || '').trim();
-    if (!value) {
-      if (isEditing && field.target !== 'secrets') config[field.key] = null;
-      return;
-    }
+    if (!value) return;
     const normalizedValue = field.type === 'number' ? Number(value) : value;
     if (field.target === 'secrets') secrets[field.key] = normalizedValue;
     else config[field.key] = normalizedValue;
@@ -520,77 +470,61 @@ function renderBotSessions() {
     panel.innerHTML = '<small class="hint">No hay bots activos todavía.</small>';
     return;
   }
-  panel.innerHTML = state.botSessions.map((session) => {
-    const isEditing = state.editingBotSessionId === session.id;
-    const configuredMode = session.configured_trade_amount_mode || 'inherit';
-    const effectiveMode = session.trade_amount_mode || configuredMode;
-    const amountPerTrade = configuredMode === 'fixed_usd' ? Number(session.configured_amount_per_trade || session.capital_per_operation || 0).toFixed(2) : '';
-    const amountPercentage = configuredMode === 'balance_percent' ? Number(session.configured_amount_percentage || session.capital_per_operation || 0).toFixed(2) : '';
-    return `
-      <article class="connector-item fade-in-up ${isEditing ? 'is-editing' : ''}">
-        <div class="row-between">
-          <div>
-            <strong>${prettyLabel(session.strategy_slug, 'strategy')}</strong>
-            <div class="connector-meta">
-              <span>${prettyLabel(session.connector_label, 'Cuenta')}</span>
-              <span>${prettyPlatform(session.platform)}</span>
-              <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
-            </div>
+  panel.innerHTML = state.botSessions.map((session) => `
+    <article class="connector-item fade-in-up">
+      <div class="row-between">
+        <div>
+          <strong>${prettyLabel(session.strategy_slug, 'strategy')}</strong>
+          <div class="connector-meta">
+            <span>${prettyLabel(session.connector_label, 'Cuenta')}</span>
+            <span>${prettyPlatform(session.platform)}</span>
+            <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
           </div>
           <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
         </div>
-        <div class="chip-wrap">
-          <span class="chip chip-static">${session.timeframe}</span>
-          <span class="chip chip-static">Sizing ${configuredMode === 'inherit' ? 'heredado' : configuredMode}</span>
-          <span class="chip chip-static">Efectivo ${effectiveMode}</span>
-          <span class="chip chip-static">Capital ref ${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}</span>
-        </div>
-        <small class="hint">Próxima corrida: ${formatDate(session.next_run_at)} · Último estado: ${session.last_status || '-'}${session.last_error ? ` · ${session.last_error}` : ''}</small>
-        <div class="row-wrap" style="margin-top:12px;">
-          <button class="btn btn-sm" type="button" data-bot-action="edit" data-id="${session.id}">${isEditing ? 'Cerrar edición' : 'Editar'}</button>
+        <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
+      </div>
+      <div class="chip-wrap">
+        <span class="chip chip-static">${session.timeframe}</span>
+        <span class="chip chip-static">${session.trade_amount_mode || 'inherit'}</span>
+        <span class="chip chip-static">Capital ref ${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}</span>
+      </div>
+      <small class="hint">Próxima corrida: ${formatDate(session.next_run_at)} · Último estado: ${session.last_status || '-'}${session.last_error ? ` · ${session.last_error}` : ''}</small>
+      <form class="bot-session-form form-grid" data-session-id="${session.id}" style="margin-top:12px;">
+        <label>Estrategia
+          <select name="strategy_slug">${STRATEGIES.map((slug) => `<option value="${slug}" ${slug === session.strategy_slug ? 'selected' : ''}>${slug}</option>`).join('')}</select>
+        </label>
+        <label>Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
+        <label>Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
+        <label>Riesgo por trade (%)<input name="risk_per_trade" type="number" min="0.1" max="100" step="0.1" value="${Number(session.risk_per_trade || 0) * 100}"></label>
+        <label>Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${Number(session.min_ml_probability || 0) * 100}"></label>
+        <label>Modo sizing
+          <select name="trade_amount_mode">
+            <option value="inherit" ${session.trade_amount_mode === 'inherit' ? 'selected' : ''}>Heredar</option>
+            <option value="fixed_usd" ${session.trade_amount_mode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
+            <option value="balance_percent" ${session.trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
+          </select>
+        </label>
+        <label>Use live
+          <select name="use_live_if_available">
+            <option value="true" ${session.use_live_if_available ? 'selected' : ''}>Sí</option>
+            <option value="false" ${!session.use_live_if_available ? 'selected' : ''}>No</option>
+          </select>
+        </label>
+        <label>Estado
+          <select name="is_active">
+            <option value="true" ${session.is_active ? 'selected' : ''}>Activo</option>
+            <option value="false" ${!session.is_active ? 'selected' : ''}>Pausado</option>
+          </select>
+        </label>
+        <div class="row-wrap">
+          <button class="btn btn-sm primary" type="submit">Guardar sesión</button>
           <button class="btn btn-sm" type="button" data-bot-action="copy" data-id="${session.id}">Duplicar</button>
           <button class="btn btn-sm" type="button" data-bot-action="delete" data-id="${session.id}">Eliminar</button>
         </div>
-        <form class="bot-session-form form-grid ${isEditing ? '' : 'hidden'}" data-session-id="${session.id}" style="margin-top:12px;">
-          <label>Estrategia
-            <select name="strategy_slug">${STRATEGIES.map((slug) => `<option value="${slug}" ${slug === session.strategy_slug ? 'selected' : ''}>${slug}</option>`).join('')}</select>
-          </label>
-          <label>Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
-          <label>Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
-          <label>Riesgo por trade (%)<input name="risk_per_trade" type="number" min="0.1" max="100" step="0.1" value="${Number(session.risk_per_trade || 0) * 100}"></label>
-          <label>Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${Number(session.min_ml_probability || 0) * 100}"></label>
-          <label>Modo sizing
-            <select name="trade_amount_mode">
-              <option value="inherit" ${configuredMode === 'inherit' ? 'selected' : ''}>Heredar</option>
-              <option value="fixed_usd" ${configuredMode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
-              <option value="balance_percent" ${configuredMode === 'balance_percent' ? 'selected' : ''}>% balance</option>
-            </select>
-          </label>
-          <label>Monto por trade
-            <input name="amount_per_trade" type="number" min="0.01" step="0.01" value="${amountPerTrade}">
-          </label>
-          <label>% por trade
-            <input name="amount_percentage" type="number" min="0.1" max="100" step="0.1" value="${amountPercentage}">
-          </label>
-          <label>Use live
-            <select name="use_live_if_available">
-              <option value="true" ${session.use_live_if_available ? 'selected' : ''}>Sí</option>
-              <option value="false" ${!session.use_live_if_available ? 'selected' : ''}>No</option>
-            </select>
-          </label>
-          <label>Estado
-            <select name="is_active">
-              <option value="true" ${session.is_active ? 'selected' : ''}>Activo</option>
-              <option value="false" ${!session.is_active ? 'selected' : ''}>Pausado</option>
-            </select>
-          </label>
-          <div class="row-wrap">
-            <button class="btn btn-sm primary" type="submit">Guardar sesión</button>
-          </div>
-        </form>
-      </article>
-    `;
-  }).join('');
+      </form>
+    </article>
+  `).join('');
 
   panel.querySelectorAll('.bot-session-form').forEach((form) => {
     form.addEventListener('submit', async (event) => {
@@ -607,13 +541,10 @@ function renderBotSessions() {
             risk_per_trade: Number(fd.get('risk_per_trade')),
             min_ml_probability: Number(fd.get('min_ml_probability')),
             trade_amount_mode: fd.get('trade_amount_mode'),
-            amount_per_trade: fd.get('amount_per_trade') ? Number(fd.get('amount_per_trade')) : null,
-            amount_percentage: fd.get('amount_percentage') ? Number(fd.get('amount_percentage')) : null,
             use_live_if_available: fd.get('use_live_if_available') === 'true',
             is_active: fd.get('is_active') === 'true',
           }),
         });
-        state.editingBotSessionId = null;
         setStatus('bot-session-feedback', 'Sesión automática actualizada.', 'ok');
         await refreshDashboard();
       } catch (error) {
@@ -626,11 +557,6 @@ function renderBotSessions() {
     button.addEventListener('click', async () => {
       const id = Number(button.dataset.id);
       try {
-        if (button.dataset.botAction === 'edit') {
-          state.editingBotSessionId = state.editingBotSessionId === id ? null : id;
-          renderBotSessions();
-          return;
-        }
         if (button.dataset.botAction === 'copy') {
           await api(`/api/bot-sessions/${id}/copy`, { method: 'POST', body: JSON.stringify({}) });
         } else {

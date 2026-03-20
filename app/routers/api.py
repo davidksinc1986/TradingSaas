@@ -1832,16 +1832,6 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
         user.name = payload.name.strip()
     if payload.phone is not None:
         user.phone = (payload.phone or "").strip() or None
-    if payload.alert_language is not None:
-        user.alert_language = normalize_alert_locale(payload.alert_language)
-    if payload.telegram_alerts_enabled is not None:
-        user.telegram_alerts_enabled = payload.telegram_alerts_enabled
-    if payload.telegram_bot_key is not None:
-        bot_key = str(payload.telegram_bot_key or "").strip()
-        user.telegram_bot_token_encrypted = encrypt_payload({"value": bot_key}) if bot_key else None
-    if payload.telegram_chat_id is not None:
-        chat_id = str(payload.telegram_chat_id or "").strip()
-        user.telegram_chat_id_encrypted = encrypt_payload({"value": chat_id}) if chat_id else None
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.is_admin is not None:
