@@ -76,6 +76,12 @@ ALL_STRATEGIES = list(AVAILABLE_STRATEGIES)
 
 logger = logging.getLogger("trading_saas.api")
 BOT_SESSION_INITIAL_DELAY_SECONDS = 10
+FUTURES_ONLY_CONNECTOR_CONFIG_KEYS = {
+    "futures_margin_mode",
+    "futures_position_mode",
+    "futures_leverage",
+    "leverage_profile",
+}
 
 
 def _extract_http_error_detail(exc: HTTPException) -> str:
@@ -131,6 +137,63 @@ def _resolve_connector_market_type(*, platform: str, market_type: str | None = N
 
 def _sync_connector_config_market_type(config: dict | None, market_type: str) -> dict:
     return sync_connector_config_market_type(config, market_type)
+
+
+def _merge_connector_config(current: dict | None, incoming: dict | None, *, market_type: str) -> dict:
+    merged = dict(current or {})
+    for key, value in dict(incoming or {}).items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    if market_type != "futures":
+        for key in FUTURES_ONLY_CONNECTOR_CONFIG_KEYS:
+            merged.pop(key, None)
+    return _sync_connector_config_market_type(merged, market_type)
+
+
+def _normalize_session_trade_amount_payload(
+    *,
+    mode: str | None,
+    amount_per_trade: float | None,
+    amount_percentage: float | None,
+    current_mode: str | None = None,
+    current_amount_per_trade: float | None = None,
+    current_amount_percentage: float | None = None,
+) -> dict[str, float | str | None]:
+    resolved_mode = str(mode or current_mode or "inherit").lower()
+    resolved_amount_per_trade = amount_per_trade if amount_per_trade is not None else current_amount_per_trade
+    resolved_amount_percentage = amount_percentage if amount_percentage is not None else current_amount_percentage
+
+    if resolved_mode == "inherit":
+        return {
+            "trade_amount_mode": "inherit",
+            "amount_per_trade": None,
+            "amount_percentage": None,
+        }
+    if resolved_mode == "fixed_usd":
+        if resolved_amount_per_trade is None or _safe_float(resolved_amount_per_trade) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="PRECHECK_CONFIG_NOT_PERSISTED: amount_per_trade es obligatorio cuando trade_amount_mode=fixed_usd",
+            )
+        return {
+            "trade_amount_mode": "fixed_usd",
+            "amount_per_trade": _safe_float(resolved_amount_per_trade),
+            "amount_percentage": None,
+        }
+    if resolved_mode == "balance_percent":
+        if resolved_amount_percentage is None or _safe_float(resolved_amount_percentage) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="PRECHECK_CONFIG_NOT_PERSISTED: amount_percentage es obligatorio cuando trade_amount_mode=balance_percent",
+            )
+        return {
+            "trade_amount_mode": "balance_percent",
+            "amount_per_trade": None,
+            "amount_percentage": _safe_float(resolved_amount_percentage),
+        }
+    raise HTTPException(status_code=400, detail=f"Unsupported trade_amount_mode: {resolved_mode}")
 
 
 def _normalize_timeframe(value: str | None) -> str:
@@ -451,7 +514,7 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
         mode=payload.mode,
         market_type=market_type,
         symbols_json={"symbols": payload.symbols},
-        config_json=_sync_connector_config_market_type(payload.config, market_type),
+        config_json=_merge_connector_config({}, payload.config, market_type=market_type),
         encrypted_secret_blob=encrypt_payload(payload.secrets),
     )
     ensure_connector_market_type_state(connector)
@@ -486,9 +549,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
         connector.label = payload.label
     if payload.mode is not None:
         connector.mode = payload.mode
-    next_config = dict(connector.config_json or {})
-    if payload.config is not None:
-        next_config.update(payload.config)
+    next_config = _merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type)
     connector.market_type = _resolve_connector_market_type(
         platform=connector.platform,
         market_type=payload.market_type or getattr(connector, "market_type", None),
@@ -496,12 +557,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     )
     if payload.symbols is not None:
         connector.symbols_json = {"symbols": payload.symbols}
-    if payload.config is not None:
-        current = connector.config_json or {}
-        current.update(payload.config)
-        connector.config_json = _sync_connector_config_market_type(current, connector.market_type)
-    else:
-        connector.config_json = _sync_connector_config_market_type(next_config, connector.market_type)
+    connector.config_json = _merge_connector_config(connector.config_json, payload.config, market_type=connector.market_type)
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -585,9 +641,11 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
 
     if payload.config is not None:
-        current = connector.config_json or {}
-        current.update(payload.config)
-        connector.config_json = current
+        connector.config_json = _merge_connector_config(
+            connector.config_json,
+            payload.config,
+            market_type=normalize_market_type(getattr(connector, "market_type", None) or "spot"),
+        )
     ensure_connector_market_type_state(connector, persist=True, db=db)
 
     db.commit()
@@ -841,6 +899,11 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     trade_amount_settings = _resolve_trade_amount_settings(user, payload)
+    normalized_amounts = _normalize_session_trade_amount_payload(
+        mode=str(trade_amount_settings["trade_amount_mode"]),
+        amount_per_trade=_safe_float(trade_amount_settings["amount_per_trade"], 0.0) or None,
+        amount_percentage=_safe_float(trade_amount_settings["amount_percentage"], 0.0) or None,
+    )
     resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
 
     normalized_timeframe = _normalize_timeframe(payload.timeframe)
@@ -857,9 +920,9 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         },
         interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
         risk_per_trade=risk_value,
-        trade_amount_mode=trade_amount_settings["trade_amount_mode"],
-        amount_per_trade=trade_amount_settings["amount_per_trade"],
-        amount_percentage=trade_amount_settings["amount_percentage"],
+        trade_amount_mode=str(normalized_amounts["trade_amount_mode"]),
+        amount_per_trade=normalized_amounts["amount_per_trade"],
+        amount_percentage=normalized_amounts["amount_percentage"],
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
         take_profit_mode=payload.take_profit_mode,
@@ -936,12 +999,18 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     if payload.risk_per_trade is not None:
         session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
-    if payload.trade_amount_mode is not None:
-        session.trade_amount_mode = payload.trade_amount_mode
-    if payload.amount_per_trade is not None:
-        session.amount_per_trade = payload.amount_per_trade
-    if payload.amount_percentage is not None:
-        session.amount_percentage = payload.amount_percentage
+    if payload.trade_amount_mode is not None or payload.amount_per_trade is not None or payload.amount_percentage is not None:
+        normalized_amounts = _normalize_session_trade_amount_payload(
+            mode=payload.trade_amount_mode,
+            amount_per_trade=payload.amount_per_trade,
+            amount_percentage=payload.amount_percentage,
+            current_mode=getattr(session, "trade_amount_mode", "inherit"),
+            current_amount_per_trade=getattr(session, "amount_per_trade", None),
+            current_amount_percentage=getattr(session, "amount_percentage", None),
+        )
+        session.trade_amount_mode = str(normalized_amounts["trade_amount_mode"])
+        session.amount_per_trade = normalized_amounts["amount_per_trade"]
+        session.amount_percentage = normalized_amounts["amount_percentage"]
     if payload.min_ml_probability is not None:
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:

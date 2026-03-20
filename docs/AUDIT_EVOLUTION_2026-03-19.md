@@ -57,3 +57,22 @@ El dashboard incorpora un **Risk Radar** con:
 3. Persistir métricas/telemetría estructurada por run en tablas dedicadas.
 4. Añadir backtesting/forward testing formal con datasets persistidos.
 5. Crear control global de riesgo para admin multiusuario (límites por tenant, exchange y market type).
+
+## Ciclo incremental 2026-03-20 — persistencia real y eliminación de contradicciones
+
+### Hallazgos de causa raíz
+- `update_connector(...)` fusionaba `config_json` sin limpiar claves incompatibles, por lo que un conector podía pasar de futures a spot conservando `futures_margin_mode`, `futures_position_mode` y `futures_leverage`. Ese residuo dejaba contradicciones silenciosas entre UI, runtime y execution guardrails.
+- El frontend de conectores no enviaba valores nulos al limpiar campos opcionales durante edición, así que “borrar” parámetros era cosmético: el backend nunca recibía la intención de eliminación.
+- `update_bot_session(...)` permitía cambiar `trade_amount_mode` sin normalizar los overrides excluyentes (`amount_per_trade` vs `amount_percentage`), dejando sesiones con sizing ambiguo o inválido.
+- La UI de edición de sesiones automáticas no exponía los inputs de override de sizing, dificultando corregir la configuración persistida desde el dashboard.
+
+### Correcciones aterrizadas
+- Se añadió una normalización backend explícita para `config_json` de conectores: los `null` borran claves y los campos exclusivos de futures se purgan automáticamente cuando el mercado resuelto ya no es `futures`.
+- Se incorporó validación determinística para overrides de sizing de `BotSession`; si el usuario elige `fixed_usd` o `balance_percent` sin el valor requerido, el backend responde con `PRECHECK_CONFIG_NOT_PERSISTED`.
+- La edición de conectores ahora puede limpiar parámetros opcionales desde el frontend enviando `null` en campos vacíos durante modo edición.
+- La edición de sesiones automáticas muestra y persiste `amount_per_trade` y `amount_percentage`, limpiando el campo opuesto al cambiar de modo.
+
+### Riesgo mitigado
+- Menos probabilidad de regressions donde “guardar” no guarda realmente o deja residuos invisibles.
+- Menos contradicciones entre market type configurado y parámetros runtime aplicados en execution/pretrade.
+- Menos sesiones automáticas con sizing ambiguo que luego bloquean ejecución o provocan rechazos difíciles de diagnosticar.

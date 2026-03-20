@@ -309,6 +309,7 @@ function readConnectorFriendlyFields(formEl, platform) {
   const config = {};
   const secrets = {};
   const marketType = String(fd.get('market_type') || 'spot');
+  const isEditing = Boolean(state.editingConnectorId);
   connectorFieldDefinitions(platform, marketType).forEach((field) => {
     const rawValue = field.type === 'checkbox' ? fd.get(`field_${field.target}_${field.key}`) === 'on' : fd.get(`field_${field.target}_${field.key}`);
     if (field.type === 'checkbox') {
@@ -317,7 +318,10 @@ function readConnectorFriendlyFields(formEl, platform) {
       return;
     }
     const value = String(rawValue || '').trim();
-    if (!value) return;
+    if (!value) {
+      if (isEditing && field.target !== 'secrets') config[field.key] = null;
+      return;
+    }
     const normalizedValue = field.type === 'number' ? Number(value) : value;
     if (field.target === 'secrets') secrets[field.key] = normalizedValue;
     else config[field.key] = normalizedValue;
@@ -501,6 +505,12 @@ function renderBotSessions() {
             <option value="balance_percent" ${session.trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
           </select>
         </label>
+        <label>Monto por trade
+          <input name="amount_per_trade" type="number" min="0.01" step="0.01" value="${session.trade_amount_mode === 'fixed_usd' ? Number(session.capital_per_operation || 0).toFixed(2) : ''}">
+        </label>
+        <label>% por trade
+          <input name="amount_percentage" type="number" min="0.1" max="100" step="0.1" value="${session.trade_amount_mode === 'balance_percent' ? Number(session.capital_per_operation || 0).toFixed(2) : ''}">
+        </label>
         <label>Use live
           <select name="use_live_if_available">
             <option value="true" ${session.use_live_if_available ? 'selected' : ''}>Sí</option>
@@ -537,6 +547,8 @@ function renderBotSessions() {
             risk_per_trade: Number(fd.get('risk_per_trade')),
             min_ml_probability: Number(fd.get('min_ml_probability')),
             trade_amount_mode: fd.get('trade_amount_mode'),
+            amount_per_trade: fd.get('amount_per_trade') ? Number(fd.get('amount_per_trade')) : null,
+            amount_percentage: fd.get('amount_percentage') ? Number(fd.get('amount_percentage')) : null,
             use_live_if_available: fd.get('use_live_if_available') === 'true',
             is_active: fd.get('is_active') === 'true',
           }),
