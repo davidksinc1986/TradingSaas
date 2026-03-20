@@ -9,9 +9,9 @@ const PLATFORM_MARKET_TYPES = {
 
 const PLATFORM_FIELD_MAP = {
   mt5: [
-    { key: 'login', label: 'Login MT5', target: 'secrets', required: true },
-    { key: 'password', label: 'Password MT5', target: 'secrets', required: true },
-    { key: 'server', label: 'Server', target: 'secrets', required: true },
+    { key: 'login', label: 'Usuario MT5', target: 'secrets', required: true },
+    { key: 'password', label: 'Contraseña MT5', target: 'secrets', required: true },
+    { key: 'server', label: 'Servidor', target: 'secrets', required: true },
   ],
   ctrader: [
     { key: 'client_id', label: 'Client ID', target: 'secrets', required: true },
@@ -46,9 +46,6 @@ const COMMON_CONNECTOR_CONFIG_FIELDS = [
   { key: 'leverage_profile', label: 'Leverage profile', target: 'config', type: 'select', options: ['none', 'conservative', 'balanced', 'aggressive'], platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'Perfil de apalancamiento usado por la lógica runtime.' },
   { key: 'retry_attempts', label: 'Retry attempts', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Número de reintentos para timeouts/rechazos recuperables.' },
   { key: 'retry_delay_ms', label: 'Retry delay (ms)', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Espera entre reintentos; 0 = inmediato.' },
-  { key: 'trade_amount_mode', label: 'Sizing por conector', target: 'config', type: 'select', options: ['fixed_usd', 'balance_percent'], hint: 'Cada conector guarda su sizing de forma independiente.' },
-  { key: 'fixed_trade_amount_usd', label: 'Monto fijo USD', target: 'config', type: 'number', hint: 'Monto fijo que usará este conector cuando opere en sizing fijo.' },
-  { key: 'trade_balance_percent', label: '% balance', target: 'config', type: 'number', hint: 'Porcentaje de balance que usará este conector cuando opere en %.' },
 ];
 
 const STRATEGIES = [
@@ -119,11 +116,11 @@ const FIELD_ADVISORY_CONFIG = {
     },
     trade_amount_mode: {
       title: 'Modo de sizing',
-      recommend: 'Usa el sizing del conector para aislar riesgo por cuenta/mercado. También puedes sobreescribirlo solo para esta automatización.',
+      recommend: 'Define aquí el sizing real de la estrategia. Ya no se hereda desde el conector para evitar configuraciones cruzadas.',
     },
     amount_per_trade: {
       title: 'Monto por trade',
-      recommend: 'Debe ser suficiente para superar mínimos del exchange y no quedar rechazado por notional o qty mínima.',
+      recommend: 'Debe ser suficiente para superar los mínimos del exchange. Si una estrategia antigua no tiene valor, se aplicará el mínimo notional del símbolo.',
     },
     amount_percentage: {
       title: '% por trade',
@@ -279,35 +276,28 @@ function activitySummaryCard(title, value, tone = 'neutral') {
 }
 
 function formatTradeAmountMode(mode) {
-  const normalized = String(mode || 'inherit').toLowerCase();
+  const normalized = String(mode || 'fixed_usd').toLowerCase();
   const labels = {
-    inherit: 'Conector',
+    inherit: 'Monto fijo automático',
     fixed_usd: 'Monto fijo',
     balance_percent: '% balance',
   };
-  return labels[normalized] || prettyLabel(mode, 'Conector');
+  return labels[normalized] || prettyLabel(mode, 'Monto fijo');
 }
 
 function formatSessionCapital(session) {
-  const configuredMode = String(session.configured_trade_amount_mode || session.trade_amount_mode || 'inherit').toLowerCase();
+  const configuredMode = String(session.configured_trade_amount_mode || session.trade_amount_mode || 'fixed_usd').toLowerCase();
   if (configuredMode === 'fixed_usd') {
     return `${Number(session.configured_amount_per_trade || session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}`;
   }
   if (configuredMode === 'balance_percent') {
     return `${Number(session.configured_amount_percentage || session.capital_per_operation || 0).toFixed(2)}%`;
   }
-  const effectiveLabel = formatTradeAmountMode(session.trade_amount_mode || 'fixed_usd');
-  const effectiveValue = session.trade_amount_mode === 'balance_percent'
-    ? `${Number(session.capital_per_operation || 0).toFixed(2)}%`
-    : `${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}`;
-  return `Conector (${effectiveLabel}: ${effectiveValue})`;
+  return `${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}`;
 }
 
 function connectorSizingSummary(connector = {}) {
-  const config = connector.config || {};
-  const mode = String(config.trade_amount_mode || 'fixed_usd').toLowerCase();
-  if (mode === 'balance_percent') return `${Number(config.trade_balance_percent || 0).toFixed(2)}% balance`;
-  return `${Number(config.fixed_trade_amount_usd || 0).toFixed(2)} USD fijo`;
+  return 'Se define dentro de la estrategia';
 }
 
 function statusPillClass(kind) {
@@ -326,12 +316,20 @@ function formatDecisionReason(reason) {
 function buildLogDetails(item) {
   const notes = item.notes || {};
   const decision = notes.decision_summary || {};
-  const reasonDetails = Array.isArray(decision.reason_details) ? decision.reason_details : [];
+  const strategyConfig = notes.strategy_config || {};
+  const scanner = notes.scanner || {};
+  const reasonDetails = Array.isArray(decision.reason_details) && decision.reason_details.length
+    ? decision.reason_details
+    : [formatDecisionReason(item.status_reason || item.status_reason_code || item.status)];
   const highlights = [];
-  if (decision.decision) highlights.push(`Decisión: ${decision.decision}`);
-  if (notes.error) highlights.push(`Error: ${notes.error}`);
-  if ((notes.execution_raw || {}).message) highlights.push(`Exchange: ${notes.execution_raw.message}`);
-  return { reasonDetails, highlights, raw: notes };
+  if (strategyConfig.configured_symbol_count) highlights.push(`La estrategia tiene ${strategyConfig.configured_symbol_count} símbolo(s) configurados.`);
+  if (scanner.selected_count) highlights.push(`En esta corrida se evaluaron ${scanner.selected_count} símbolo(s).`);
+  if (strategyConfig.symbol_min_notional) highlights.push(`Monto mínimo detectado para ${item.display_symbol || item.symbol}: ${Number(strategyConfig.symbol_min_notional).toFixed(2)} USDT.`);
+  if (decision.decision) highlights.push(`Decisión del motor: ${decision.decision}.`);
+  if (notes.execution_error) highlights.push(`Error reportado por el exchange: ${notes.execution_error}`);
+  if ((notes.execution_raw || {}).message) highlights.push(`Respuesta del exchange: ${notes.execution_raw.message}`);
+  if (!highlights.length) highlights.push('Sin explicación adicional reportada.');
+  return { summary: reasonDetails[0], reasonDetails, highlights, raw: notes };
 }
 
 function percentFromStoredValue(value) {
@@ -370,9 +368,6 @@ function configEntriesForDisplay(config = {}) {
     'leverage_profile',
     'retry_attempts',
     'retry_delay_ms',
-    'trade_amount_mode',
-    'fixed_trade_amount_usd',
-    'trade_balance_percent',
   ];
   return orderedKeys
     .filter((key) => config[key] !== undefined && config[key] !== null && config[key] !== '')
@@ -554,7 +549,7 @@ function renderProfile() {
   document.getElementById('user-config-state').textContent = `Perfil · ${user.name || user.email}`;
   document.getElementById('user-config-report').innerHTML = reportMarkup([
     { title: 'Alertas', body: user.telegram_alerts_enabled ? `Telegram activo · idioma ${String(user.alert_language || 'es').toUpperCase()}` : 'Telegram inactivo' },
-    { title: 'Sizing', body: 'La asignación de capital ya no vive en Perfil. Cada conector administra su sizing y el bot puede sobreescribirlo solo para esa sesión.' },
+    { title: 'Sizing', body: 'La asignación de capital se define por estrategia o por sesión automática. El conector ya no guarda sizing propio.' },
     { title: 'Canal admin', body: user.admin_alerts_enabled ? 'Canal administrativo de contingencias disponible' : 'Canal administrativo no configurado' },
     { title: 'Cobertura Telegram', body: 'Conexión, errores, mercado conectado, velas revisadas y tendencia de la corrida manual se notifican en el canal configurado.' },
   ]);
@@ -593,7 +588,7 @@ function renderConnectors() {
         <span class="pill tiny ${connector.is_enabled ? 'pill-on' : 'pill-off'}">${connector.is_enabled ? 'Activo' : 'Inactivo'}</span>
       </div>
       <small class="hint">Símbolos: ${(connector.symbols || []).join(', ') || 'Sin símbolos configurados'}.</small>
-      <small class="hint">Sizing independiente: ${connectorSizingSummary(connector)}.</small>
+      <small class="hint">Sizing: ${connectorSizingSummary(connector)}.</small>
       <small class="hint">Balance: ${formatBalanceSnapshot(connector.id)}.</small>
       <div class="chip-wrap">
         ${configEntriesForDisplay(connector.config || {}).map((entry) => `<span class="chip chip-static"><strong>${entry.label}:</strong> ${entry.value}</span>`).join('') || '<span class="chip chip-static">Sin parámetros visibles adicionales</span>'}
@@ -667,7 +662,7 @@ function renderBotSessions() {
         </div>
         <div class="bot-session-stat">
           <small>Modo sizing</small>
-          <strong>${formatTradeAmountMode(session.configured_trade_amount_mode || 'inherit')}</strong>
+          <strong>${formatTradeAmountMode(session.configured_trade_amount_mode || 'fixed_usd')}</strong>
         </div>
         <div class="bot-session-stat">
           <small>Auto scan</small>
@@ -710,12 +705,11 @@ function renderBotSessions() {
         <label class="compact-field">Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${percentFromStoredValue(session.min_ml_probability)}"></label>
         <label class="compact-field">Modo sizing
           <select name="trade_amount_mode">
-            <option value="inherit" ${session.configured_trade_amount_mode === 'inherit' ? 'selected' : ''}>Usar conector</option>
-            <option value="fixed_usd" ${session.configured_trade_amount_mode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
+            <option value="fixed_usd" ${(session.configured_trade_amount_mode || 'fixed_usd') === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
             <option value="balance_percent" ${session.configured_trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
           </select>
         </label>
-        <label class="compact-field sizing-value-field ${session.configured_trade_amount_mode === 'fixed_usd' ? '' : 'hidden'}" data-mode-field="fixed_usd">Monto por trade
+        <label class="compact-field sizing-value-field ${(session.configured_trade_amount_mode || 'fixed_usd') === 'fixed_usd' ? '' : 'hidden'}" data-mode-field="fixed_usd">Monto por trade
           <input name="amount_per_trade" type="number" min="0.01" step="0.01" value="${session.configured_amount_per_trade ?? ''}">
         </label>
         <label class="compact-field sizing-value-field ${session.configured_trade_amount_mode === 'balance_percent' ? '' : 'hidden'}" data-mode-field="balance_percent">% por trade
@@ -742,7 +736,7 @@ function renderBotSessions() {
     const modeSelect = form.querySelector('[name="trade_amount_mode"]');
     const sourceModeSelect = form.querySelector('[name="symbol_source_mode"]');
     const syncSizingFields = () => {
-      const currentMode = String(modeSelect?.value || 'inherit');
+      const currentMode = String(modeSelect?.value || 'fixed_usd');
       form.querySelectorAll('.sizing-value-field').forEach((field) => {
         const active = field.dataset.modeField === currentMode;
         field.classList.toggle('hidden', !active);
@@ -842,54 +836,56 @@ function renderExecutionLogs() {
   }
   const groups = new Map();
   state.executionLogs.forEach((item) => {
+    const strategyName = prettyLabel(item.bot_session_display_name || item.bot_session_name, item.strategy_slug || 'Sesión');
     const connectorLabel = prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`);
-    const key = [prettyMarketType(item.market_type, item.connector_id), prettyPlatform(item.platform), connectorLabel].join('||');
+    const key = [strategyName, connectorLabel, prettyPlatform(item.platform), prettyMarketType(item.market_type, item.connector_id)].join('||');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   });
 
   board.innerHTML = Array.from(groups.entries()).map(([key, rows]) => {
-    const [marketType, platform, connectorLabel] = key.split('||');
+    const [strategyName, connectorLabel, platform, marketType] = key.split('||');
+    const lead = rows[0] || {};
+    const leadDetail = buildLogDetails(lead);
+    const detailId = `log-group-${lead.id}`;
     const itemsMarkup = rows.map((item) => {
       const states = Array.isArray(item.operational_states) && item.operational_states.length ? item.operational_states : ['operativa_normal'];
       const detail = buildLogDetails(item);
-      const detailId = `log-detail-${item.id}`;
       return `
-        <article class="log-entry-card" data-log-toggle="${detailId}">
+        <article class="log-entry-card">
           <div class="row-between log-entry-card-head">
             <div>
               <strong>${escapeHtml(item.display_symbol || displaySymbol(item.symbol))}</strong>
               <div class="connector-meta">
                 <span>${formatDate(item.created_at)}</span>
-                <span>${escapeHtml(prettyLabel(item.bot_session_display_name || item.bot_session_name, item.strategy_slug || 'Sesión'))}</span>
                 <span>${escapeHtml(item.timeframe || '-')}</span>
                 <span>${escapeHtml(item.signal || '-')}</span>
               </div>
             </div>
             <div class="log-entry-status-stack">
               <span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span>
-              <small>${escapeHtml(formatDecisionReason(item.status_reason || item.status_reason_code || item.status || '-'))}</small>
+              <small>${escapeHtml(detail.summary)}</small>
             </div>
           </div>
           <div class="chip-wrap">
             ${states.map((stateCode) => `<span class="chip chip-static">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
           </div>
-          <section class="log-detail-card hidden" id="${detailId}">
+          <section class="log-detail-card">
             <div class="log-detail-grid">
               <div>
-                <strong>Razones relevantes</strong>
+                <strong>Razones claras</strong>
                 <ul class="log-reason-list">
-                  ${(detail.reasonDetails.length ? detail.reasonDetails : [formatDecisionReason(item.status_reason)]).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
+                  ${detail.reasonDetails.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
                 </ul>
               </div>
               <div>
-                <strong>Highlights</strong>
+                <strong>Contexto de la estrategia</strong>
                 <ul class="log-reason-list">
-                  ${(detail.highlights.length ? detail.highlights : ['Sin explicación adicional reportada.']).map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
+                  ${detail.highlights.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
                 </ul>
               </div>
             </div>
-            <div>
+            <div class="log-technical-block">
               <strong>Detalle técnico</strong>
               <pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>
             </div>
@@ -898,17 +894,22 @@ function renderExecutionLogs() {
       `;
     }).join('');
     return `
-      <section class="log-market-card">
-        <div class="row-between">
+      <section class="log-market-card" data-log-toggle="${detailId}">
+        <div class="row-between log-market-card-head">
           <div>
-            <strong>${escapeHtml(marketType)} · ${escapeHtml(platform)}</strong>
+            <strong>${escapeHtml(strategyName)}</strong>
             <div class="connector-meta">
               <span>${escapeHtml(connectorLabel)}</span>
+              <span>${escapeHtml(platform)} · ${escapeHtml(marketType)}</span>
               <span>${rows.length} evento(s)</span>
             </div>
           </div>
+          <div class="log-entry-status-stack">
+            <span class="pill tiny ${statusPillClass(lead.status)}">${escapeHtml(lead.status || '-')}</span>
+            <small>${escapeHtml(leadDetail.summary)}</small>
+          </div>
         </div>
-        <div class="log-entry-stack">
+        <div class="log-entry-stack hidden" id="${detailId}">
           ${itemsMarkup}
         </div>
       </section>
@@ -917,7 +918,7 @@ function renderExecutionLogs() {
   board.querySelectorAll('[data-log-toggle]').forEach((card) => {
     card.addEventListener('click', (event) => {
       const detail = card.querySelector(`#${card.dataset.logToggle}`);
-      if (event.target.closest('pre')) return;
+      if (event.target.closest('pre') || event.target.closest('.log-entry-card')) return;
       detail?.classList.toggle('hidden');
     });
   });
@@ -1089,12 +1090,30 @@ async function saveConnector(event) {
   const form = event.currentTarget;
   const fd = new FormData(form);
   const platform = String(fd.get('platform'));
+  const label = String(fd.get('label') || '').trim();
+  if (!label) {
+    setStatus('connector-feedback', 'Debes indicar un nombre para el conector.', 'error');
+    return;
+  }
   const { config, secrets } = readConnectorFriendlyFields(form, platform);
+  const marketType = String(fd.get('market_type') || 'spot');
+  const isEditing = Boolean(state.editingConnectorId);
+  const missingRequiredField = connectorFieldDefinitions(platform, marketType).find((field) => {
+    if (!field.required) return false;
+    const input = form.querySelector(`[name="field_${field.target}_${field.key}"]`);
+    if (!input) return false;
+    if (field.target === 'secrets' && isEditing) return false;
+    if (input.type === 'checkbox') return !input.checked;
+    return !String(input.value || '').trim();
+  });
+  if (missingRequiredField) {
+    setStatus('connector-feedback', `Completa el campo obligatorio "${missingRequiredField.label}".`, 'error');
+    return;
+  }
   const submitButton = document.getElementById('connector-submit-btn');
   try {
     state.pendingActions.saveConnector = true;
     setButtonsBusy(submitButton, true, 'Guardando...');
-    const isEditing = Boolean(state.editingConnectorId);
     await api(isEditing ? `/api/connectors/${state.editingConnectorId}` : '/api/connectors', {
       method: isEditing ? 'PUT' : 'POST',
       body: JSON.stringify({
@@ -1140,6 +1159,15 @@ function buildRunPayload(form) {
   if (!symbols.length) {
     throw new Error('Debes indicar al menos un símbolo.');
   }
+  const tradeAmountMode = String(fd.get('trade_amount_mode') || 'fixed_usd');
+  const amountPerTrade = parseOptionalNumber(fd.get('amount_per_trade'));
+  const amountPercentage = parseOptionalNumber(fd.get('amount_percentage'));
+  if (tradeAmountMode === 'fixed_usd' && (!amountPerTrade || amountPerTrade <= 0)) {
+    throw new Error('Debes indicar un monto por trade válido.');
+  }
+  if (tradeAmountMode === 'balance_percent' && (!amountPercentage || amountPercentage <= 0)) {
+    throw new Error('Debes indicar un porcentaje por trade válido.');
+  }
   return {
     connector_ids: [connectorId],
     connector_id: connectorId,
@@ -1158,9 +1186,9 @@ function buildRunPayload(form) {
     stop_loss_value: parseRequiredNumber(fd.get('stop_loss_value'), 'el stop loss'),
     trailing_stop_mode: fd.get('trailing_stop_mode'),
     trailing_stop_value: parseRequiredNumber(fd.get('trailing_stop_value'), 'el trailing stop'),
-    trade_amount_mode: fd.get('trade_amount_mode'),
-    amount_per_trade: parseOptionalNumber(fd.get('amount_per_trade')),
-    amount_percentage: parseOptionalNumber(fd.get('amount_percentage')),
+    trade_amount_mode: tradeAmountMode,
+    amount_per_trade: amountPerTrade,
+    amount_percentage: amountPercentage,
     use_live_if_available: true,
     indicator_exit_enabled: false,
     indicator_exit_rule: 'macd_cross',
@@ -1235,7 +1263,7 @@ function advisoryForField(formKind, input) {
     const tpValue = Number(fd.get('take_profit_value') || 0);
     const slValue = Number(fd.get('stop_loss_value') || 0);
     const trailingValue = Number(fd.get('trailing_stop_value') || 0);
-    const mode = String(fd.get('trade_amount_mode') || 'inherit');
+    const mode = String(fd.get('trade_amount_mode') || 'fixed_usd');
     const connector = getConnectorById(fd.get('connector_id'));
 
     if (input.name === 'connector_id') {
@@ -1306,7 +1334,6 @@ function advisoryForField(formKind, input) {
     }
 
     if (input.name === 'trade_amount_mode') {
-      if (raw === 'inherit') return { severity: 'ok', message: 'Usará el sizing configurado dentro del conector seleccionado.' };
       return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
     }
 
@@ -1346,6 +1373,11 @@ function syncFieldHintState(formKind, input, { reveal = false } = {}) {
 
 function appendAsteriskToLabel(label) {
   if (!label || label.querySelector('.field-asterisk')) return;
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'field-advisory-trigger';
+  trigger.textContent = '?';
+  label.insertBefore(trigger, label.firstElementChild || null);
   const marker = document.createElement('span');
   marker.className = 'field-asterisk';
   marker.textContent = ' *';
@@ -1362,10 +1394,11 @@ function bindFieldAdvisories(formSelector, formKind) {
     if (!meta) return;
     const label = input.closest('label');
     appendAsteriskToLabel(label);
-    ['focus', 'mouseenter'].forEach((eventName) => {
-      input.addEventListener(eventName, () => {
+    const trigger = label?.querySelector('.field-advisory-trigger');
+    ['mouseenter', 'focus'].forEach((eventName) => {
+      trigger?.addEventListener(eventName, () => {
         const advisory = advisoryForField(formKind, input);
-        if (advisory?.message) showFieldPopover(input, meta.title, advisory.message);
+        if (advisory?.message) showFieldPopover(trigger, meta.title, advisory.message);
       });
     });
     ['input', 'change'].forEach((eventName) => {
@@ -1382,7 +1415,6 @@ async function runStrategy(event) {
   if (state.pendingActions.runStrategy) return;
   try {
     const form = event.currentTarget;
-    if (!form.reportValidity()) return;
     const submitButton = document.getElementById('run-strategy-btn');
     state.pendingActions.runStrategy = true;
     setStatus('run-feedback', 'Ejecutando estrategia...', 'ok');
@@ -1402,7 +1434,7 @@ async function activateBotFromForm() {
   if (state.pendingActions.activateBot) return;
   try {
     const form = document.getElementById('run-form');
-    if (!form?.reportValidity()) return;
+    if (!form) return;
     state.pendingActions.activateBot = true;
     setStatus('run-feedback', 'Creando estrategia automática...', 'ok');
     setButtonsBusy([document.getElementById('activate-bot-btn'), document.getElementById('run-strategy-btn')], true, 'Procesando...');
@@ -1486,6 +1518,8 @@ async function init() {
   window.addEventListener('resize', hideFieldPopover);
   bindFieldAdvisories('#connector-form', 'connector');
   bindFieldAdvisories('#run-form', 'run');
+  document.getElementById('connector-form')?.setAttribute('novalidate', 'novalidate');
+  document.getElementById('run-form')?.setAttribute('novalidate', 'novalidate');
   await refreshDashboard();
   startAutoRefresh();
 }

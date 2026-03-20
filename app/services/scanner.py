@@ -103,7 +103,7 @@ def select_symbols_for_run(
     scanner_interval_minutes = int(cfg.get("scanner_interval_minutes", 60) or 60)
 
     if not auto_scan_enabled:
-        selected = list(fallback_symbols)[:max_symbols]
+        selected = list(fallback_symbols)
         return selected, {
             "mode": "manual",
             "reason": "auto_scan_disabled",
@@ -115,11 +115,12 @@ def select_symbols_for_run(
 
     universe = _normalize_universe(cfg, fallback_symbols)
     if not universe:
-        return list(fallback_symbols), {
+        fallback_list = list(fallback_symbols)
+        return fallback_list, {
             "mode": "manual",
             "reason": "empty_universe_fallback",
-            "selected_symbols": list(fallback_symbols),
-            "selected_count": len(list(fallback_symbols)),
+            "selected_symbols": fallback_list,
+            "selected_count": len(fallback_list),
             "max_symbols": max_symbols,
             "timeframe": timeframe,
         }

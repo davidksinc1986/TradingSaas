@@ -78,7 +78,7 @@ function renderAdminOverview() {
     const connectorCards = (overview.connectors || []).map((item) => `
       <article class="quantum-report-item">
         <strong>${item.label}</strong>
-        <small>${item.platform} · ${item.market_type} · runs ${item.runs || 0} · trades ${item.trades || 0}</small>
+        <small>${item.platform} · ${item.market_type} · corridas ${item.runs || 0} · trades ${item.trades || 0}</small>
       </article>
     `).join('');
     platformWrap.innerHTML = [platformCards, marketCards, connectorCards].filter(Boolean).join('') || '<small class="hint">Sin plataformas registradas.</small>';
@@ -242,14 +242,6 @@ function connectorFormMarkup(connector) {
         </select>
       </label>
       <label>Símbolos<input name="symbols" value="${(connector.symbols || []).join(', ')}"></label>
-      <label>Modo sizing
-        <select name="trade_amount_mode">
-          <option value="fixed_usd" ${(connector.config?.trade_amount_mode || 'fixed_usd') === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
-          <option value="balance_percent" ${connector.config?.trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
-        </select>
-      </label>
-      <label>Monto fijo USD<input name="fixed_trade_amount_usd" type="number" step="0.01" value="${connector.config?.fixed_trade_amount_usd ?? connector.allocation_value ?? ''}"></label>
-      <label>% balance<input name="trade_balance_percent" type="number" step="0.1" value="${connector.config?.trade_balance_percent ?? ''}"></label>
       <label>Recv window<input name="recv_window_ms" type="number" value="${connector.config?.recv_window_ms ?? ''}"></label>
       <label>Request timeout<input name="request_timeout_ms" type="number" value="${connector.config?.request_timeout_ms ?? ''}"></label>
       <label>Retries<input name="retry_attempts" type="number" value="${connector.config?.retry_attempts ?? ''}"></label>
@@ -420,9 +412,6 @@ async function refreshSelectedUserProfile() {
               is_enabled: fd.get('is_enabled') === 'true',
               symbols: String(fd.get('symbols') || '').split(',').map((x) => x.trim()).filter(Boolean),
               config: {
-                trade_amount_mode: fd.get('trade_amount_mode') || 'fixed_usd',
-                fixed_trade_amount_usd: fd.get('fixed_trade_amount_usd') ? Number(fd.get('fixed_trade_amount_usd')) : null,
-                trade_balance_percent: fd.get('trade_balance_percent') ? Number(fd.get('trade_balance_percent')) : null,
                 recv_window_ms: fd.get('recv_window_ms') ? Number(fd.get('recv_window_ms')) : null,
                 request_timeout_ms: fd.get('request_timeout_ms') ? Number(fd.get('request_timeout_ms')) : null,
                 retry_attempts: fd.get('retry_attempts') ? Number(fd.get('retry_attempts')) : null,
@@ -511,11 +500,21 @@ async function refreshSelectedUserProfile() {
   }
 }
 
+async function loadAdminOverview() {
+  try {
+    return await api('/api/admin/overview');
+  } catch (error) {
+    const detail = parseApiError(error);
+    if (!/not found/i.test(detail)) throw error;
+    return api('/api/admin/overview/');
+  }
+}
+
 async function refreshAdmin() {
   const settled = await Promise.allSettled([
     api('/api/admin/users'),
     api('/api/admin/policies'),
-    api('/api/admin/overview'),
+    loadAdminOverview(),
   ]);
   const labels = ['usuarios', 'políticas', 'overview'];
   const failures = [];

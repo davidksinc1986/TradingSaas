@@ -84,6 +84,13 @@ FUTURES_ONLY_CONNECTOR_CONFIG_KEYS = {
     "futures_leverage",
     "leverage_profile",
 }
+CONNECTOR_SIZING_CONFIG_KEYS = {
+    "trade_amount_mode",
+    "fixed_trade_amount_usd",
+    "trade_balance_percent",
+    "allocation_mode",
+    "allocation_value",
+}
 LIVE_ONLY_CONNECTOR_MODE = "live"
 DEFAULT_SESSION_BALANCE_PERCENT = 10.0
 SYMBOL_MIN_NOTIONAL_HINTS = {
@@ -188,26 +195,8 @@ def _sanitize_connector_config(
     symbols: list[str] | None = None,
 ) -> dict:
     cleaned = _safe_json_object(config)
-    inferred_mode = _normalize_trade_amount_mode(
-        cleaned.get("trade_amount_mode") or cleaned.get("allocation_mode"),
-        amount_per_trade=cleaned.get("fixed_trade_amount_usd", cleaned.get("allocation_value")),
-        amount_percentage=cleaned.get("trade_balance_percent"),
-        fallback="fixed_usd",
-    )
-    recommended_fixed = _recommended_fixed_trade_amount_usd(
-        platform=platform,
-        symbols=symbols,
-        market_type=market_type,
-    )
-    fixed_amount = _safe_float(cleaned.get("fixed_trade_amount_usd", cleaned.get("allocation_value")), 0.0)
-    balance_percent = _safe_float(cleaned.get("trade_balance_percent"), 0.0)
-    if inferred_mode == "balance_percent" and balance_percent <= 0:
-        balance_percent = DEFAULT_SESSION_BALANCE_PERCENT
-    if fixed_amount <= 0:
-        fixed_amount = recommended_fixed
-    cleaned["trade_amount_mode"] = inferred_mode
-    cleaned["fixed_trade_amount_usd"] = fixed_amount
-    cleaned["trade_balance_percent"] = balance_percent if balance_percent > 0 else DEFAULT_SESSION_BALANCE_PERCENT
+    for key in CONNECTOR_SIZING_CONFIG_KEYS:
+        cleaned.pop(key, None)
     cleaned["sandbox"] = False
     cleaned.pop("paper_balance", None)
     return _merge_connector_config(cleaned, {}, market_type=market_type)
@@ -227,16 +216,14 @@ def _sanitize_session_runtime_state(session: BotSession, connector: Connector | 
     connector_symbols = _safe_symbols(getattr(connector, "symbols_json", {})) if connector is not None else []
     session_symbols = _safe_symbols(getattr(session, "symbols_json", {}))
     effective_symbols = session_symbols or connector_symbols
-    connector_defaults = _connector_trade_amount_defaults(connector)
     next_mode = _normalize_trade_amount_mode(
         getattr(session, "trade_amount_mode", None),
         amount_per_trade=getattr(session, "amount_per_trade", None),
         amount_percentage=getattr(session, "amount_percentage", None),
-        fallback=str(connector_defaults.get("trade_amount_mode") or "fixed_usd"),
+        fallback="fixed_usd",
     )
     next_fixed = _safe_float(
         getattr(session, "amount_per_trade", None)
-        or connector_defaults.get("amount_per_trade")
         or _recommended_fixed_trade_amount_usd(
             platform=getattr(connector, "platform", None),
             symbols=effective_symbols,
@@ -246,7 +233,6 @@ def _sanitize_session_runtime_state(session: BotSession, connector: Connector | 
     )
     next_percent = _safe_float(
         getattr(session, "amount_percentage", None)
-        or connector_defaults.get("amount_percentage")
         or DEFAULT_SESSION_BALANCE_PERCENT,
         0.0,
     )
@@ -489,29 +475,14 @@ def _merge_connector_config(current: dict | None, incoming: dict | None, *, mark
 
 
 def _connector_trade_amount_defaults(connector: Connector | None) -> dict[str, float | str | None]:
-    config = _safe_json_object(getattr(connector, "config_json", {})) if connector is not None else {}
-    mode = _normalize_trade_amount_mode(
-        config.get("trade_amount_mode") or config.get("allocation_mode"),
-        amount_per_trade=config.get("fixed_trade_amount_usd", config.get("allocation_value")),
-        amount_percentage=config.get("trade_balance_percent"),
-        fallback="fixed_usd",
-    )
     recommended_fixed = _recommended_fixed_trade_amount_usd(
         platform=getattr(connector, "platform", None) if connector is not None else None,
         symbols=_safe_symbols(getattr(connector, "symbols_json", {})) if connector is not None else [],
         market_type=getattr(connector, "market_type", None) if connector is not None else None,
     )
-    raw_fixed_value = _safe_float(config.get("fixed_trade_amount_usd", config.get("allocation_value")), 0.0)
-    raw_balance_percent = _safe_float(config.get("trade_balance_percent"), 0.0)
-    if mode == "balance_percent":
-        return {
-            "trade_amount_mode": "balance_percent",
-            "amount_per_trade": None,
-            "amount_percentage": raw_balance_percent if raw_balance_percent > 0 else DEFAULT_SESSION_BALANCE_PERCENT,
-        }
     return {
         "trade_amount_mode": "fixed_usd",
-        "amount_per_trade": raw_fixed_value if raw_fixed_value > 0 else recommended_fixed,
+        "amount_per_trade": recommended_fixed,
         "amount_percentage": None,
     }
 
@@ -529,26 +500,15 @@ def _normalize_session_trade_amount_payload(
         mode or current_mode,
         amount_per_trade=amount_per_trade if amount_per_trade is not None else current_amount_per_trade,
         amount_percentage=amount_percentage if amount_percentage is not None else current_amount_percentage,
-        fallback="inherit",
+        fallback="fixed_usd",
     )
     resolved_amount_per_trade = amount_per_trade if amount_per_trade is not None else current_amount_per_trade
     resolved_amount_percentage = amount_percentage if amount_percentage is not None else current_amount_percentage
 
-    if resolved_mode == "inherit":
-        return {
-            "trade_amount_mode": "inherit",
-            "amount_per_trade": None,
-            "amount_percentage": None,
-        }
     if resolved_mode == "fixed_usd":
-        if resolved_amount_per_trade is None or _safe_float(resolved_amount_per_trade) <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="PRECHECK_CONFIG_NOT_PERSISTED: amount_per_trade es obligatorio cuando trade_amount_mode=fixed_usd",
-            )
         return {
             "trade_amount_mode": "fixed_usd",
-            "amount_per_trade": _safe_float(resolved_amount_per_trade),
+            "amount_per_trade": _safe_float(resolved_amount_per_trade, 0.0) or None,
             "amount_percentage": None,
         }
     if resolved_mode == "balance_percent":
@@ -654,9 +614,22 @@ def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int],
 
 
 def _resolve_trade_amount_settings(user: User, payload, connector: Connector | None = None) -> dict[str, float | str | None]:
-    mode = str(getattr(payload, "trade_amount_mode", None) or "inherit").lower()
+    mode = str(getattr(payload, "trade_amount_mode", None) or "fixed_usd").lower()
     if mode == "inherit":
-        return _connector_trade_amount_defaults(connector)
+        mode = "fixed_usd"
+    symbols = _safe_symbols(getattr(payload, "symbols", None))
+    market_type = getattr(payload, "market_type", None) or getattr(connector, "market_type", None)
+    if mode == "fixed_usd":
+        recommended = _recommended_fixed_trade_amount_usd(
+            platform=getattr(connector, "platform", None),
+            symbols=symbols or _safe_symbols(getattr(connector, "symbols_json", {})) if connector is not None else [],
+            market_type=market_type,
+        )
+        return {
+            "trade_amount_mode": "fixed_usd",
+            "amount_per_trade": _safe_float(getattr(payload, "amount_per_trade", None), 0.0) or recommended,
+            "amount_percentage": None,
+        }
     return {
         "trade_amount_mode": mode,
         "amount_per_trade": _safe_float(getattr(payload, "amount_per_trade", None), 0.0) or None,
@@ -1242,9 +1215,9 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 changed = True
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
-            session_mode = str(getattr(session, "trade_amount_mode", None) or "inherit").lower()
+            session_mode = str(getattr(session, "trade_amount_mode", None) or "fixed_usd").lower()
             connector_defaults = _connector_trade_amount_defaults(connector)
-            effective_mode = str(connector_defaults["trade_amount_mode"] or "fixed_usd") if session_mode == "inherit" else session_mode
+            effective_mode = "fixed_usd" if session_mode == "inherit" else session_mode
             if effective_mode == "balance_percent":
                 capital = _safe_float(
                     getattr(session, "amount_percentage", None)
@@ -1297,7 +1270,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "capital_display_unit": "%" if effective_mode == "balance_percent" else "USDT",
                 "capital_currency": "USDT",
                 "trade_amount_mode": effective_mode,
-                "configured_trade_amount_mode": session_mode,
+                "configured_trade_amount_mode": "fixed_usd" if session_mode == "inherit" else session_mode,
                 "configured_amount_per_trade": _safe_float(getattr(session, "amount_per_trade", None), 0.0) or None,
                 "configured_amount_percentage": _safe_float(getattr(session, "amount_percentage", None), 0.0) or None,
                 "created_at": _safe_iso(session.created_at),
@@ -1383,6 +1356,12 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
             amount_per_trade=_safe_float(trade_amount_settings["amount_per_trade"], 0.0) or None,
             amount_percentage=_safe_float(trade_amount_settings["amount_percentage"], 0.0) or None,
         )
+        if normalized_amounts["trade_amount_mode"] == "fixed_usd" and normalized_amounts["amount_per_trade"] is None:
+            normalized_amounts["amount_per_trade"] = _recommended_fixed_trade_amount_usd(
+                platform=connector.platform,
+                symbols=payload.symbols,
+                market_type=payload.market_type or connector.market_type,
+            )
         resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
 
         normalized_timeframe = _normalize_timeframe(payload.timeframe)
@@ -1496,10 +1475,17 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
                 mode=payload.trade_amount_mode,
                 amount_per_trade=payload.amount_per_trade,
                 amount_percentage=payload.amount_percentage,
-                current_mode=getattr(session, "trade_amount_mode", "inherit"),
+                current_mode=getattr(session, "trade_amount_mode", "fixed_usd"),
                 current_amount_per_trade=getattr(session, "amount_per_trade", None),
                 current_amount_percentage=getattr(session, "amount_percentage", None),
             )
+            if normalized_amounts["trade_amount_mode"] == "fixed_usd" and normalized_amounts["amount_per_trade"] is None:
+                effective_symbols = payload.symbols if payload.symbols is not None else _safe_symbols(getattr(session, "symbols_json", {}))
+                normalized_amounts["amount_per_trade"] = _recommended_fixed_trade_amount_usd(
+                    platform=getattr(connector, "platform", None),
+                    symbols=effective_symbols,
+                    market_type=getattr(session, "market_type", None) or getattr(connector, "market_type", None),
+                )
             session.trade_amount_mode = str(normalized_amounts["trade_amount_mode"])
             session.amount_per_trade = normalized_amounts["amount_per_trade"]
             session.amount_percentage = normalized_amounts["amount_percentage"]
