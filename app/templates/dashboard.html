@@ -235,7 +235,7 @@
       <div class="row-between">
         <div>
           <small class="quantum-label">Configuración</small>
-          <h2>Indicadores rápidos</h2>
+          <h2>Indicadores rápidos y health</h2>
         </div>
       </div>
       <div class="quantum-metrics-grid">
@@ -247,6 +247,37 @@
       <div id="quant-status-strip" class="quantum-report-list"></div>
     </article>
   </div>
+
+  <div class="grid-2 dashboard-grid-two" style="margin-top:24px;">
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Actividad</small>
+          <h2>Curva de equity</h2>
+        </div>
+      </div>
+      <div id="activity-equity-chart" class="activity-chart-shell"></div>
+    </article>
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Actividad</small>
+          <h2>Retorno mensual</h2>
+        </div>
+      </div>
+      <div id="activity-monthly-chart" class="activity-chart-shell"></div>
+    </article>
+  </div>
+
+  <article class="card" style="margin-top:24px;">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Performance</small>
+        <h2>Métricas de actividad</h2>
+      </div>
+    </div>
+    <div id="activity-performance-cards" class="activity-mini-grid"></div>
+  </article>
 
   <article class="card" style="margin-top:24px;">
     <div class="row-between">
@@ -265,11 +296,13 @@
         <thead>
           <tr>
             <th>Fecha</th>
+            <th>Mercado</th>
+            <th>Cuenta</th>
             <th>Símbolo</th>
             <th>Timeframe</th>
             <th>Señal</th>
-            <th>Estado</th>
-            <th>ML</th>
+            <th>Razón de estado</th>
+            <th>Score</th>
           </tr>
         </thead>
         <tbody></tbody>
