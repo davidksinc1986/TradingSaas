@@ -38,7 +38,27 @@
 
   function setField(name, value) {
     const el = document.querySelector(`[name="${name}"]`);
-    if (el) el.value = String(value);
+    if (!el) return;
+    if (el.type === 'checkbox') {
+      el.checked = Boolean(value);
+      return;
+    }
+    el.value = String(value);
+  }
+
+  function getPanel() {
+    return document.getElementById('strategy-wizard-inline-panel');
+  }
+
+  function closeWizard() {
+    getPanel()?.classList.add('hidden');
+  }
+
+  function openWizardPanel() {
+    const panel = getPanel();
+    if (!panel) return;
+    panel.classList.remove('hidden');
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
   }
 
   function getStepHtml(step) {
@@ -84,7 +104,7 @@
           <li>Backtest histórico (BTC desde 2018, ETH desde 2019).</li>
           <li>Walk forward: entrena en año N, prueba en N+1.</li>
           <li>Paper trading para medir slippage, fees y latencia real.</li>
-          <li>Métricas objetivo: win rate 45-60%, profit factor > 1.5, sharpe > 1, drawdown < 20%.</li>
+          <li>Métricas objetivo: win rate 45-60%, profit factor &gt; 1.5, sharpe &gt; 1, drawdown &lt; 20%.</li>
         </ul>
       </div>
       <small class="hint">${T.noPromise || ''}</small>`;
@@ -101,13 +121,15 @@
   }
 
   function openWizard() {
-    const modal = document.getElementById('strategy-wizard-modal');
-    if (!modal) return;
+    const panel = getPanel();
+    if (!panel) return;
+    openWizardPanel();
     let step = 0;
     const title = document.getElementById('strategy-wizard-title');
     const body = document.getElementById('strategy-wizard-content');
     const prev = document.getElementById('strategy-wizard-prev');
     const next = document.getElementById('strategy-wizard-next');
+    if (!body || !prev || !next) return;
     if (title) title.textContent = T.title || title.textContent;
 
     function render() {
@@ -115,8 +137,13 @@
       prev.style.visibility = step === 0 ? 'hidden' : 'visible';
       next.textContent = step === 2 ? (T.done || 'Aplicar al formulario') : (T.next || 'Siguiente');
       if (step === 0) {
-        fillStrategyOptions('spot');
-        document.getElementById('wiz-market-type')?.addEventListener('change', (e) => fillStrategyOptions(e.target.value));
+        const currentMarket = document.getElementById('run-market-type-filter')?.value || 'spot';
+        fillStrategyOptions(currentMarket || 'spot');
+        const market = document.getElementById('wiz-market-type');
+        if (market) {
+          market.value = currentMarket || 'spot';
+          market.addEventListener('change', (e) => fillStrategyOptions(e.target.value));
+        }
       }
       if (step === 1) {
         document.getElementById('wiz-timeframe-profile')?.addEventListener('change', (e) => {
@@ -151,24 +178,19 @@
       setField('stop_loss_value', sl);
       setField('leverage_profile', leverage);
       setField('max_open_positions', maxPos);
-      setField('atr_volatility_filter_enabled', atrFilter);
-      setField('compound_growth_enabled', compound);
+      setField('atr_volatility_filter_enabled', atrFilter ? 'true' : 'false');
+      setField('compound_growth_enabled', compound ? 'true' : 'false');
 
       const strategySelect = document.querySelector('select[name="strategy_slug"]');
       if (strategySelect) strategySelect.value = strategy;
       document.getElementById('run-market-type-filter')?.dispatchEvent(new Event('change'));
-
-      modal.classList.add('hidden');
+      closeWizard();
     };
 
-    modal.classList.remove('hidden');
     render();
   }
 
   extendLibrary();
   document.getElementById('open-strategy-wizard')?.addEventListener('click', openWizard);
-  document.getElementById('strategy-wizard-close')?.addEventListener('click', () => document.getElementById('strategy-wizard-modal')?.classList.add('hidden'));
-  document.getElementById('strategy-wizard-modal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'strategy-wizard-modal') document.getElementById('strategy-wizard-modal')?.classList.add('hidden');
-  });
+  document.getElementById('strategy-wizard-close')?.addEventListener('click', closeWizard);
 })();
