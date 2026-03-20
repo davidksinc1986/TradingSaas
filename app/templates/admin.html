@@ -26,6 +26,32 @@
   </aside>
 
   <section class="admin-main-stack">
+  <article class="card admin-command-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Operaciones</small>
+        <h2>Command center</h2>
+      </div>
+      <div class="row-wrap">
+        <button class="btn btn-sm" type="button" id="admin-refresh-overview-btn">Refrescar</button>
+        <button class="btn btn-sm" type="button" id="admin-heartbeat-btn">Heartbeat usuario</button>
+        <button class="btn btn-sm" type="button" id="admin-kill-switch-btn">Kill switch usuario</button>
+      </div>
+    </div>
+    <div id="admin-command-feedback" class="status-msg"></div>
+    <div id="admin-overview-metrics" class="activity-mini-grid" style="margin-top:14px;"></div>
+    <div class="admin-section-grid" style="margin-top:16px;">
+      <article class="admin-mini-card">
+        <strong>Salud por plataforma</strong>
+        <div id="admin-platform-health" class="quantum-report-list" style="margin-top:10px;"></div>
+      </article>
+      <article class="admin-mini-card">
+        <strong>Eventos recientes</strong>
+        <div id="admin-recent-events" class="quantum-report-list" style="margin-top:10px;"></div>
+      </article>
+    </div>
+  </article>
+
   <article class="card">
     <div class="row-between">
       <div>
@@ -47,7 +73,7 @@
       <h2>Políticas globales por plataforma</h2>
     </div>
   </div>
-  <div id="admin-policies" class="stack"></div>
+  <div id="admin-policies" class="admin-policy-grid"></div>
 </section>
 </section>
 </section>

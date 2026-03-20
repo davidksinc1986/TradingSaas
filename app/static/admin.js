@@ -26,12 +26,89 @@ function setFeedback(message, kind = 'ok') {
 
 let usersState = [];
 let selectedUserId = null;
+let adminOverviewState = null;
 
 function formatDate(value) {
   if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
   return d.toLocaleString();
+}
+
+
+function activitySummaryCard(title, value, tone = 'neutral') {
+  return `
+    <article class="activity-mini-card tone-${tone}">
+      <small>${title}</small>
+      <strong>${value}</strong>
+    </article>
+  `;
+}
+
+function renderAdminOverview() {
+  const metricsWrap = document.getElementById('admin-overview-metrics');
+  const platformWrap = document.getElementById('admin-platform-health');
+  const eventsWrap = document.getElementById('admin-recent-events');
+  const overview = adminOverviewState || {};
+  const metrics = overview.metrics || {};
+  if (metricsWrap) {
+    metricsWrap.innerHTML = [
+      activitySummaryCard('Usuarios activos', `${Number(metrics.users_active || 0)}/${Number(metrics.users_total || 0)}`, 'ok'),
+      activitySummaryCard('Conectores live', Number(metrics.connectors_live || 0), 'accent'),
+      activitySummaryCard('Bots activos', `${Number(metrics.sessions_active || 0)}/${Number(metrics.sessions_total || 0)}`, 'accent'),
+      activitySummaryCard('Sesiones con error', Number(metrics.sessions_with_errors || 0), metrics.sessions_with_errors ? 'danger' : 'ok'),
+      activitySummaryCard('Errores recientes', Number(metrics.recent_run_errors || 0), metrics.recent_run_errors ? 'danger' : 'ok'),
+      activitySummaryCard('Conectores habilitados', `${Number(metrics.connectors_enabled || 0)}/${Number(metrics.connectors_total || 0)}`, 'neutral'),
+    ].join('');
+  }
+  if (platformWrap) {
+    platformWrap.innerHTML = (overview.platforms || []).map((item) => `
+      <article class="quantum-report-item">
+        <strong>${item.platform.toUpperCase()}</strong>
+        <small>Total ${item.total} · habilitados ${item.enabled} · live ${item.live}</small>
+      </article>
+    `).join('') || '<small class="hint">Sin plataformas registradas.</small>';
+  }
+  if (eventsWrap) {
+    eventsWrap.innerHTML = (overview.events || []).map((item) => `
+      <article class="quantum-report-item">
+        <strong>${item.symbol} · ${item.status}</strong>
+        <small>${item.reason} · ${formatDate(item.created_at)}</small>
+      </article>
+    `).join('') || '<small class="hint">Sin eventos recientes.</small>';
+  }
+}
+
+async function adminUserHeartbeat() {
+  const userId = selectedUserId || Number(document.getElementById('selected-user')?.value || 0);
+  if (!userId) return;
+  try {
+    const result = await api(`/api/admin/users/${userId}/heartbeat`);
+    const checks = Array.isArray(result.checks) ? result.checks : [];
+    document.getElementById('admin-command-feedback').textContent = checks.length
+      ? checks.map((item) => `${item.label}: ${item.ok ? 'ok' : item.message}`).join(' | ')
+      : 'Sin conectores activos para heartbeat.';
+    document.getElementById('admin-command-feedback').className = `status-msg ${result.ok ? 'status-ok' : 'status-error'}`;
+  } catch (error) {
+    const node = document.getElementById('admin-command-feedback');
+    node.textContent = parseApiError(error);
+    node.className = 'status-msg status-error';
+  }
+}
+
+async function adminKillSwitch() {
+  const userId = selectedUserId || Number(document.getElementById('selected-user')?.value || 0);
+  if (!userId) return;
+  try {
+    const result = await api(`/api/admin/users/${userId}/kill-switch`, { method: 'POST' });
+    const node = document.getElementById('admin-command-feedback');
+    node.textContent = `Kill switch ejecutado. Cerradas: ${(result.closed || []).length} · Fallidas: ${(result.failed || []).length}`;
+    node.className = 'status-msg status-ok';
+  } catch (error) {
+    const node = document.getElementById('admin-command-feedback');
+    node.textContent = parseApiError(error);
+    node.className = 'status-msg status-error';
+  }
 }
 
 function renderUserList() {
@@ -92,7 +169,6 @@ function renderPolicies(policies) {
             <option value="false" ${!policy.allow_manual_symbols ? 'selected' : ''}>No</option>
           </select>
         </label>
-        <label>Top symbols<input name="top_symbols" value="${(policy.top_symbols || []).join(', ')}"></label>
         <button class="btn btn-sm primary" type="submit">Guardar política</button>
       </div>
     </form>
@@ -109,7 +185,6 @@ function renderPolicies(policies) {
             platform: form.dataset.platform,
             is_enabled_global: fd.get('is_enabled_global') === 'true',
             allow_manual_symbols: fd.get('allow_manual_symbols') === 'true',
-            top_symbols: String(fd.get('top_symbols') || '').split(',').map((x) => x.trim()).filter(Boolean),
           }),
         });
         setFeedback(`Política ${form.dataset.platform} actualizada.`, 'ok');
@@ -148,8 +223,14 @@ function connectorFormMarkup(connector) {
         </select>
       </label>
       <label>Símbolos<input name="symbols" value="${(connector.symbols || []).join(', ')}"></label>
-      <label>Allocation mode<input name="allocation_mode" value="${connector.allocation_mode || 'fixed'}"></label>
-      <label>Allocation value<input name="allocation_value" type="number" step="0.01" value="${connector.allocation_value || 0}"></label>
+      <label>Modo sizing
+        <select name="trade_amount_mode">
+          <option value="fixed_usd" ${(connector.config?.trade_amount_mode || 'fixed_usd') === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
+          <option value="balance_percent" ${connector.config?.trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
+        </select>
+      </label>
+      <label>Monto fijo USD<input name="fixed_trade_amount_usd" type="number" step="0.01" value="${connector.config?.fixed_trade_amount_usd ?? connector.allocation_value ?? ''}"></label>
+      <label>% balance<input name="trade_balance_percent" type="number" step="0.1" value="${connector.config?.trade_balance_percent ?? ''}"></label>
       <label>Recv window<input name="recv_window_ms" type="number" value="${connector.config?.recv_window_ms ?? ''}"></label>
       <label>Request timeout<input name="request_timeout_ms" type="number" value="${connector.config?.request_timeout_ms ?? ''}"></label>
       <label>Retries<input name="retry_attempts" type="number" value="${connector.config?.retry_attempts ?? ''}"></label>
@@ -320,8 +401,9 @@ async function refreshSelectedUserProfile() {
               is_enabled: fd.get('is_enabled') === 'true',
               symbols: String(fd.get('symbols') || '').split(',').map((x) => x.trim()).filter(Boolean),
               config: {
-                allocation_mode: fd.get('allocation_mode'),
-                allocation_value: Number(fd.get('allocation_value') || 0),
+                trade_amount_mode: fd.get('trade_amount_mode') || 'fixed_usd',
+                fixed_trade_amount_usd: fd.get('fixed_trade_amount_usd') ? Number(fd.get('fixed_trade_amount_usd')) : null,
+                trade_balance_percent: fd.get('trade_balance_percent') ? Number(fd.get('trade_balance_percent')) : null,
                 recv_window_ms: fd.get('recv_window_ms') ? Number(fd.get('recv_window_ms')) : null,
                 request_timeout_ms: fd.get('request_timeout_ms') ? Number(fd.get('request_timeout_ms')) : null,
                 retry_attempts: fd.get('retry_attempts') ? Number(fd.get('retry_attempts')) : null,
@@ -411,13 +493,16 @@ async function refreshSelectedUserProfile() {
 }
 
 async function refreshAdmin() {
-  const [users, policies] = await Promise.all([
+  const [users, policies, overview] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/policies'),
+    api('/api/admin/overview'),
   ]);
   usersState = Array.isArray(users) ? users : [];
+  adminOverviewState = overview || null;
   renderUserList();
   renderPolicies(Array.isArray(policies) ? policies : []);
+  renderAdminOverview();
   await refreshSelectedUserProfile();
 }
 
@@ -443,6 +528,9 @@ async function createUser(event) {
 
 async function init() {
   document.getElementById('create-user-form')?.addEventListener('submit', createUser);
+  document.getElementById('admin-refresh-overview-btn')?.addEventListener('click', refreshAdmin);
+  document.getElementById('admin-heartbeat-btn')?.addEventListener('click', adminUserHeartbeat);
+  document.getElementById('admin-kill-switch-btn')?.addEventListener('click', adminKillSwitch);
   document.getElementById('selected-user')?.addEventListener('change', async (event) => {
     selectedUserId = Number(event.currentTarget.value || 0);
     renderUserList();

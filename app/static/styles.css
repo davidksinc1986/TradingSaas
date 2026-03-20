@@ -326,7 +326,7 @@ select[multiple]{min-height:120px}
   .strategy-card strong{font-size:19px}
   .strategy-card .hint{font-size:14px}
   .table-wrap{font-size:13px}
-  #bot-sessions-table td,#bot-sessions-table th,#execution-logs-table td,#execution-logs-table th{white-space:nowrap}
+  #bot-sessions-table td,#bot-sessions-table th{white-space:nowrap}
   .profile-main-flow .btn.primary,.profile-side-stack .btn.primary{width:100%}
 }
 
@@ -552,9 +552,12 @@ tr:hover td{background:rgba(255,255,255,.02)}
   border-radius:16px;
   background:rgba(7,9,14,.62);
   min-width:0;
+  min-height:146px;
+  display:flex;
+  flex-direction:column;
 }
 .quantum-metric small{display:block;color:#a7adb8}
-.quantum-metric strong{display:block;margin-top:6px;font-size:clamp(18px,2vw,24px);color:#f5f7fa;line-height:1.15;overflow-wrap:anywhere;word-break:break-word}
+.quantum-metric strong{display:-webkit-box;margin-top:6px;font-size:clamp(18px,2vw,24px);color:#f5f7fa;line-height:1.15;overflow-wrap:anywhere;word-break:break-word;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .quantum-status-strip,
 .quantum-report-list{
   display:grid;
@@ -684,4 +687,17 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .admin-section-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .admin-mini-card{padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(10,10,12,.72)}
 .admin-mini-card strong{display:block;margin-bottom:4px}
-@media (max-width:980px){.activity-mini-grid,.admin-section-grid{grid-template-columns:1fr}}
+.admin-policy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.policy-form{height:100%}
+#execution-logs-table td,#execution-logs-table th{white-space:normal;vertical-align:top}
+.log-entry-row{cursor:pointer}
+.log-entry-row:hover td{background:rgba(240,185,11,.04)}
+.log-detail-row td{padding-top:0}
+.log-detail-card{padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(10,10,12,.72);display:grid;gap:8px}
+.log-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.log-detail-card pre{margin:0;white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+.log-reason-list{margin:0;padding-left:18px;color:#cbd5e1}
+.pill-danger{background:rgba(239,68,68,.14);color:#fecaca;border:1px solid rgba(239,68,68,.3)}
+.pill-warning{background:rgba(245,158,11,.14);color:#fde68a;border:1px solid rgba(245,158,11,.3)}
+.pill-ok{background:rgba(34,197,94,.14);color:#bbf7d0;border:1px solid rgba(34,197,94,.3)}
+@media (max-width:980px){.activity-mini-grid,.admin-section-grid,.admin-policy-grid,.log-detail-grid{grid-template-columns:1fr}}

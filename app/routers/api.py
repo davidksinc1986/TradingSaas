@@ -253,7 +253,8 @@ def _trade_run_connector_snapshot(connector: Connector | None, parsed_note: dict
     parsed = parsed_note if isinstance(parsed_note, dict) else {}
     snapshot = parsed.get("connector") or {}
     platform = connector.platform if connector else str(snapshot.get("platform") or "-")
-    label = connector.label if connector and connector.label else str(snapshot.get("label") or "-")
+    fallback_connector_id = getattr(connector, "id", None) if connector else snapshot.get("id")
+    label = connector.label if connector and connector.label else str(snapshot.get("label") or f"Conector #{fallback_connector_id or '-'}")
     market_type = (
         ensure_connector_market_type_state(connector, persist=False) if connector
         else _normalize_market_type(
@@ -312,6 +313,25 @@ def _merge_connector_config(current: dict | None, incoming: dict | None, *, mark
         for key in FUTURES_ONLY_CONNECTOR_CONFIG_KEYS:
             merged.pop(key, None)
     return _sync_connector_config_market_type(merged, market_type)
+
+
+def _connector_trade_amount_defaults(connector: Connector | None) -> dict[str, float | str | None]:
+    config = _safe_json_object(getattr(connector, "config_json", {})) if connector is not None else {}
+    mode = str(config.get("trade_amount_mode") or config.get("allocation_mode") or "fixed_usd").strip().lower()
+    if mode in {"fixed", "fixed_amount"}:
+        mode = "fixed_usd"
+    if mode == "balance_percent":
+        return {
+            "trade_amount_mode": "balance_percent",
+            "amount_per_trade": None,
+            "amount_percentage": _safe_float(config.get("trade_balance_percent"), 10.0),
+        }
+    fixed_value = config.get("fixed_trade_amount_usd", config.get("allocation_value"))
+    return {
+        "trade_amount_mode": "fixed_usd",
+        "amount_per_trade": _safe_float(fixed_value, 10.0),
+        "amount_percentage": None,
+    }
 
 
 def _normalize_session_trade_amount_payload(
@@ -446,14 +466,10 @@ def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int],
     return connectors
 
 
-def _resolve_trade_amount_settings(user: User, payload) -> dict[str, float | str | None]:
+def _resolve_trade_amount_settings(user: User, payload, connector: Connector | None = None) -> dict[str, float | str | None]:
     mode = str(getattr(payload, "trade_amount_mode", None) or "inherit").lower()
     if mode == "inherit":
-        return {
-            "trade_amount_mode": getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd",
-            "amount_per_trade": _safe_float(getattr(user, "fixed_trade_amount_usd", 10), 10.0),
-            "amount_percentage": _safe_float(getattr(user, "trade_balance_percent", 10), 10.0),
-        }
+        return _connector_trade_amount_defaults(connector)
     return {
         "trade_amount_mode": mode,
         "amount_per_trade": _safe_float(getattr(payload, "amount_per_trade", None), 0.0) or None,
@@ -642,6 +658,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
                 "is_enabled": bool(connector.is_enabled),
                 "symbols": _safe_symbols(getattr(connector, "symbols_json", {})),
                 "config": _safe_json_object(getattr(connector, "config_json", {})),
+                "has_saved_credentials": bool((decrypt_payload(getattr(connector, "encrypted_secret_blob", None)) or {}).keys()),
                 "created_at": _safe_iso(getattr(connector, "created_at", None)),
             })
         except Exception as exc:
@@ -657,6 +674,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
                 "is_enabled": bool(getattr(connector, "is_enabled", False)),
                 "symbols": [],
                 "config": {},
+                "has_saved_credentials": False,
                 "created_at": _safe_iso(getattr(connector, "created_at", None)),
             })
 
@@ -839,10 +857,10 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
     if control.managed_by_admin and payload.strategy_slug not in allowed:
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
-    _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
-    trade_amount_settings = _resolve_trade_amount_settings(user, payload)
+    connectors = _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
+    trade_amount_settings = _resolve_trade_amount_settings(user, payload, connectors[0] if connectors else None)
 
     result = run_strategy(
         db=db,
@@ -951,19 +969,18 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
             session_mode = str(getattr(session, "trade_amount_mode", None) or "inherit").lower()
-            owner_mode = str(getattr(session.user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower() if getattr(session, "user", None) else "fixed_usd"
-            effective_mode = owner_mode if session_mode == "inherit" else session_mode
+            connector_defaults = _connector_trade_amount_defaults(connector)
+            effective_mode = str(connector_defaults["trade_amount_mode"] or "fixed_usd") if session_mode == "inherit" else session_mode
             if effective_mode == "balance_percent":
                 capital = _safe_float(
                     getattr(session, "amount_percentage", None)
-                    or getattr(getattr(session, "user", None), "trade_balance_percent", 0)
+                    or connector_defaults.get("amount_percentage")
                     or 0
                 )
             else:
                 capital = _safe_float(
                     getattr(session, "amount_per_trade", None)
-                    or getattr(getattr(session, "user", None), "fixed_trade_amount_usd", 0)
-                    or config.get("allocation_value", config.get("default_quantity", 0))
+                    or connector_defaults.get("amount_per_trade")
                     or 0
                 )
             session_market_type = normalize_market_type(getattr(session, "market_type", None))
@@ -1000,6 +1017,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "last_status": session.last_status,
                 "last_error": session.last_error,
                 "capital_per_operation": capital,
+                "capital_display_unit": "%" if effective_mode == "balance_percent" else "USDT",
                 "capital_currency": "USDT",
                 "trade_amount_mode": effective_mode,
                 "configured_trade_amount_mode": session_mode,
@@ -1044,6 +1062,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "last_status": "error",
                 "last_error": "No se pudo serializar esta sesión. Revisa configuración y logs.",
                 "capital_per_operation": 0.0,
+                "capital_display_unit": "USDT",
                 "capital_currency": "USDT",
                 "created_at": _safe_iso(getattr(session, "created_at", None)),
             })
@@ -1076,7 +1095,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
 
         risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
         ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
-        trade_amount_settings = _resolve_trade_amount_settings(user, payload)
+        trade_amount_settings = _resolve_trade_amount_settings(user, payload, connector)
         normalized_amounts = _normalize_session_trade_amount_payload(
             mode=str(trade_amount_settings["trade_amount_mode"]),
             amount_per_trade=_safe_float(trade_amount_settings["amount_per_trade"], 0.0) or None,
@@ -1895,6 +1914,7 @@ def tradingview_webhook(payload: TradingViewWebhook, db=Depends(get_db)):
 def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
     connectors = db.query(Connector).filter(Connector.user_id == user.id, Connector.is_enabled.is_(True)).all()
     checks = []
+    checked_at = datetime.utcnow().isoformat()
     for connector in connectors:
         try:
             client = get_client(connector)
@@ -1903,6 +1923,7 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
                 "id": connector.id,
                 "label": connector.label,
                 "platform": connector.platform,
+                "market_type": ensure_connector_market_type_state(connector, persist=True, db=db),
                 "ok": True,
                 "message": "Conector validado",
                 "raw": raw,
@@ -1912,6 +1933,7 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
                 "id": connector.id,
                 "label": connector.label,
                 "platform": connector.platform,
+                "market_type": ensure_connector_market_type_state(connector, persist=True, db=db),
                 "ok": False,
                 "message": str(exc),
                 "raw": None,
@@ -1930,6 +1952,7 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
     return {
         "ok": all(item["ok"] for item in checks) if checks else True,
         "total": len(checks),
+        "checked_at": checked_at,
         "checks": checks,
     }
 
@@ -2090,6 +2113,7 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "symbols": c.symbols_json.get("symbols", []),
             "allocation_mode": (c.config_json or {}).get("allocation_mode", "fixed"),
             "allocation_value": (c.config_json or {}).get("allocation_value", (c.config_json or {}).get("default_quantity", 0)),
+            "has_saved_credentials": bool((decrypt_payload(c.encrypted_secret_blob) or {}).keys()),
             "config": c.config_json or {},
         } for c in connectors],
         "policies": [{
@@ -2129,6 +2153,104 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
             "updated_at": _safe_iso(session.updated_at),
         } for session in recent_sessions],
     }
+
+
+@router.get("/admin/overview")
+def admin_overview(db=Depends(get_db), _: User = Depends(admin_user)):
+    users = db.query(User).all()
+    connectors = db.query(Connector).all()
+    sessions = db.query(BotSession).all()
+    recent_runs = db.query(TradeRun).order_by(TradeRun.created_at.desc()).limit(20).all()
+
+    platform_summary: dict[str, dict[str, int]] = {}
+    for connector in connectors:
+        platform = str(connector.platform or "-")
+        bucket = platform_summary.setdefault(platform, {"total": 0, "enabled": 0, "live": 0})
+        bucket["total"] += 1
+        if connector.is_enabled:
+            bucket["enabled"] += 1
+        if str(connector.mode or "").lower() == "live" and connector.is_enabled:
+            bucket["live"] += 1
+
+    events = []
+    for run in recent_runs:
+        primary_reason = _trade_run_primary_reason(run)
+        events.append({
+            "id": run.id,
+            "created_at": _safe_iso(run.created_at),
+            "symbol": _display_symbol(run.symbol),
+            "status": run.status,
+            "reason": _translate_status_reason(primary_reason),
+            "connector_id": run.connector_id,
+        })
+
+    errored_sessions = [
+        session for session in sessions
+        if str(getattr(session, "last_status", "") or "").lower() in {"error", "failed"}
+        or str(getattr(session, "last_error", "") or "").strip()
+    ]
+
+    return {
+        "metrics": {
+            "users_total": len(users),
+            "users_active": sum(1 for item in users if item.is_active),
+            "connectors_total": len(connectors),
+            "connectors_enabled": sum(1 for item in connectors if item.is_enabled),
+            "connectors_live": sum(1 for item in connectors if item.is_enabled and str(item.mode or "").lower() == "live"),
+            "sessions_total": len(sessions),
+            "sessions_active": sum(1 for item in sessions if item.is_active),
+            "sessions_with_errors": len(errored_sessions),
+            "recent_run_errors": sum(1 for item in recent_runs if str(item.status or "").lower().startswith(("error", "failed", "skipped"))),
+        },
+        "platforms": [
+            {"platform": platform, **values}
+            for platform, values in sorted(platform_summary.items(), key=lambda entry: entry[0])
+        ],
+        "events": events,
+    }
+
+
+@router.get("/admin/users/{user_id}/heartbeat")
+def admin_user_heartbeat(user_id: int, db=Depends(get_db), _: User = Depends(admin_user)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    connectors = db.query(Connector).filter(Connector.user_id == user_id, Connector.is_enabled.is_(True)).all()
+    checks = []
+    checked_at = datetime.utcnow().isoformat()
+    for connector in connectors:
+        try:
+            client = get_client(connector)
+            raw = client.test_connection()
+            checks.append({
+                "id": connector.id,
+                "label": connector.label,
+                "platform": connector.platform,
+                "market_type": ensure_connector_market_type_state(connector, persist=True, db=db),
+                "ok": True,
+                "message": "Conector validado",
+                "raw": raw,
+            })
+        except Exception as exc:
+            checks.append({
+                "id": connector.id,
+                "label": connector.label,
+                "platform": connector.platform,
+                "market_type": ensure_connector_market_type_state(connector, persist=True, db=db),
+                "ok": False,
+                "message": str(exc),
+                "raw": None,
+            })
+    return {"ok": all(item["ok"] for item in checks) if checks else True, "total": len(checks), "checked_at": checked_at, "checks": checks}
+
+
+@router.post("/admin/users/{user_id}/kill-switch")
+def admin_user_kill_switch(user_id: int, db=Depends(get_db), _: User = Depends(admin_user)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    connector_ids = [item.id for item in db.query(Connector).filter(Connector.user_id == user_id, Connector.is_enabled.is_(True)).all()]
+    return trigger_kill_switch(db, connector_ids=connector_ids or None, reason="admin_manual")
 
 
 @router.post("/admin/users")
