@@ -583,3 +583,26 @@ tr:hover td{background:rgba(255,255,255,.02)}
   opacity:1;
   transform:translateY(0);
 }
+
+.dashboard-grid-two{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:18px;
+}
+.fade-in-up{
+  animation:fadeInUp .35s ease both;
+}
+.connector-item,
+.quantum-report-item,
+.card{
+  transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+.connector-item:hover,
+.quantum-report-item:hover,
+.card:hover{
+  transform:translateY(-2px);
+  box-shadow:0 14px 36px rgba(0,0,0,.18);
+}
+@media (max-width: 980px){
+  .dashboard-grid-two{grid-template-columns:1fr;}
+}

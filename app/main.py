@@ -9,7 +9,7 @@ from app.core import settings
 from sqlalchemy import inspect, text
 
 from app.db import Base, SessionLocal, engine
-from app.models import StrategyProfile, User, UserStrategyControl
+from app.models import BotSession, StrategyProfile, StrategyTemplate, User, UserStrategyControl
 from app.routers import api, auth, views
 from app.security import hash_password
 from app.services.alerts import format_failure_message, send_telegram_alert
