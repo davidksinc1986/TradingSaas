@@ -4,7 +4,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-from app.db import SessionLocal
+from app.db import SessionLocal, commit_with_retry, rollback_safely
 from app.models import BotSession, Connector
 from app.services.connector_state import ensure_connector_market_type_state, normalize_market_type, resolve_runtime_market_type
 from app.services.position_lifecycle import run_position_lifecycle
@@ -78,7 +78,7 @@ def _process_due_bot_session(*, session_id: int, now: datetime) -> int:
             session.last_error = "Connector disabled or missing"
             session.last_run_at = now
             session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
-            db.commit()
+            commit_with_retry(db)
             return 1
 
         ensure_connector_market_type_state(connector, persist=True, db=db) if connector else "spot"
@@ -96,7 +96,7 @@ def _process_due_bot_session(*, session_id: int, now: datetime) -> int:
             session.last_error = "No symbols configured"
             session.last_run_at = now
             session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
-            db.commit()
+            commit_with_retry(db)
             return 1
 
         try:
@@ -134,7 +134,7 @@ def _process_due_bot_session(*, session_id: int, now: datetime) -> int:
             session.last_status = "ok"
             session.last_error = None
         except Exception as exc:
-            db.rollback()
+            rollback_safely(db)
             logger.exception("Bot session %s failed", session_id)
             session = db.query(BotSession).filter(BotSession.id == session_id).first()
             if not session:
@@ -144,10 +144,10 @@ def _process_due_bot_session(*, session_id: int, now: datetime) -> int:
 
         session.last_run_at = now
         session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
-        db.commit()
+        commit_with_retry(db)
         return 1
     except Exception:
-        db.rollback()
+        rollback_safely(db)
         raise
     finally:
         db.close()
@@ -160,7 +160,7 @@ def _worker_loop() -> None:
             execute_due_bot_sessions(db)
         except Exception:
             logger.exception("Background bot runner tick failed")
-            db.rollback()
+            rollback_safely(db)
         finally:
             db.close()
         _STOP_EVENT.wait(30)
