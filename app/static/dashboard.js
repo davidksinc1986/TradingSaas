@@ -1,21 +1,38 @@
 const PLATFORM_MARKET_TYPES={mt5:['forex','cfd'],ctrader:['forex','cfd','spot','futures'],tradingview:['signals'],binance:['spot','futures'],bybit:['spot','futures'],okx:['spot','futures']};
-const CATEGORY_TITLES={broker:'Mercado de valores / Brokers',crypto:'Cryptos',signals:'Señales'};
-const STRATEGY_LIBRARY={
-  ema_rsi:{name:'EMA + RSI',summary:'Combina tendencia y momentum para filtrar entradas.',useCase:'Mercados con tendencia definida y retrocesos moderados.',timeframes:'15m, 1h, 4h',marketTypes:['spot'],tips:['Evita usarla en rangos muy laterales.','Combínala con niveles de soporte/resistencia.']},
-  mean_reversion_zscore:{name:'Mean Reversion Z-Score',summary:'Busca retorno al promedio cuando el precio se aleja demasiado.',useCase:'Mercados en rango o sobre-extensiones puntuales.',timeframes:'5m, 15m, 1h',marketTypes:['spot'],tips:['Reduce riesgo en tendencias muy fuertes.','Úsala mejor con activos líquidos.']},
-  momentum_breakout:{name:'Momentum Breakout',summary:'Opera rupturas de máximos y mínimos recientes.',useCase:'Fases de expansión de volatilidad y rompimientos.',timeframes:'15m, 1h, 4h',marketTypes:['futures'],tips:['Confirma volumen o fuerza antes de entrar.','Evita operar justo antes de noticias de alto impacto.']},
-  macd_trend_pullback:{name:'MACD Trend Pullback',summary:'Sigue la tendencia con confirmación MACD y pullback.',useCase:'Tendencias limpias con correcciones controladas.',timeframes:'15m, 1h, 4h',marketTypes:['futures'],tips:['Mejor cuando el mercado no está en rango.','Gestiona stop por debajo/encima del último swing.']},
-  bollinger_rsi_reversal:{name:'Bollinger + RSI Reversal',summary:'Detecta posible rebote en extremos de bandas.',useCase:'Sobrecompra/sobreventa en mercados con reversión.',timeframes:'5m, 15m, 1h',marketTypes:['spot'],tips:['No sobreapalancar: puede haber continuaciones.','Confirma con vela de rechazo.']},
-  adx_trend_follow:{name:'ADX Trend Follow',summary:'Filtra entradas cuando la fuerza de tendencia es real.',useCase:'Mercados con direccionalidad clara.',timeframes:'1h, 4h, 1D',marketTypes:['futures'],tips:['Evita periodos de ADX bajo.','Funciona mejor con stops dinámicos.']},
-  stochastic_rebound:{name:'Stochastic Rebound',summary:'Busca rebotes desde extremos del oscilador estocástico.',useCase:'Pullbacks cortos en tendencia o rangos definidos.',timeframes:'5m, 15m, 1h',marketTypes:['spot'],tips:['Esperar confirmación evita señales falsas.','No usar aislada en rupturas violentas.']},
-  supertrend_volatility:{name:'Supertrend Volatility',summary:'Captura impulsos fuertes con filtro de volatilidad.',useCase:'Escenarios de continuación con expansión de rango.',timeframes:'5m, 15m, 1h',marketTypes:['futures'],tips:['Evitar anuncios macro de alto impacto.','Ideal en activos con buen volumen.']},
-  kalman_trend_filter:{name:'Kalman Trend Filter',summary:'Suaviza ruido para seguir tendencia dominante.',useCase:'Mercados direccionales con retrocesos pequeños.',timeframes:'15m, 1h, 4h',marketTypes:['futures'],tips:['Mejor en marcos de tiempo medios.','Combinar con gestión de riesgo estricta.']},
-  atr_channel_breakout:{name:'ATR Channel Breakout',summary:'Rupturas de canal ajustadas a volatilidad ATR.',useCase:'Sesiones con breakout y alta energía.',timeframes:'15m, 1h, 4h',marketTypes:['futures'],tips:['Usar trailing stop para proteger ganancia.','Reducir exposición en baja volatilidad.']},
-  volatility_breakout:{name:'Volatility Breakout',summary:'Rompe el rango previo con filtro ATR para evitar ruido.',useCase:'Futures intradía cuando el precio acelera tras compresión.',timeframes:'5m, 15m, 1h',marketTypes:['futures'],tips:['Mejor con volumen creciente.','Evita operar una vela aislada sin confirmación.']},
-  ema_rsi_adx_stack:{name:'EMA20/50 + RSI14 + ADX',summary:'Combina tendencia, momentum y fuerza direccional para filtrar entradas.',useCase:'Spot y futures con sesgo claro y continuidad.',timeframes:'3m, 5m, 15m, 1h',marketTypes:['spot','futures'],tips:['Si ADX está plano, reduce tamaño o espera.','Funciona mejor cuando el activo ya salió de rango.']},
-  volatility_compression_breakout:{name:'Volatility Compression Breakout',summary:'Detecta squeeze (BB/Keltner + ATR contraction) y opera la expansión posterior.',useCase:'Spot y futures con compresión previa y liberación de volatilidad.',timeframes:'15m, 1h',marketTypes:['spot','futures'],tips:['Busca confirmación de expansión real y no solo un wick.','Muy útil cuando el mercado viene de varias velas estrechas.']},
-  volatility_parity_rebalance:{name:'Volatility Parity Rebalance',summary:'Ajusta entradas según régimen de volatilidad.',useCase:'Spot con variaciones de riesgo entre ciclos.',timeframes:'1h, 4h, 1D',marketTypes:['spot'],tips:['Buena para carteras diversificadas.','No perseguir velas extendidas.']},
-  pairs_spread_proxy:{name:'Pairs Spread Proxy',summary:'Aproxima spread estadístico para reversión.',useCase:'Spot lateral con desviaciones extremas.',timeframes:'15m, 1h, 4h',marketTypes:['spot'],tips:['Priorizar activos altamente correlacionados.','Usar TP conservador.']},
+const CATEGORY_TITLES = { broker: 'Mercado de valores / Brokers', crypto: 'Cryptos', signals: 'Señales' };
+const PLATFORM_FIELD_MAP = {
+  mt5: [
+    { key: 'login', label: 'Usuario / Login MT5', target: 'secrets', required: true, placeholder: 'Ej: 12345678' },
+    { key: 'password', label: 'Contraseña MT5', target: 'secrets', required: true, placeholder: 'Tu contraseña de trading' },
+    { key: 'server', label: 'Servidor del broker', target: 'secrets', required: true, placeholder: 'Ej: Broker-Server' },
+    { key: 'default_quantity', label: 'Tamaño por operación (lotes)', target: 'config', type: 'number', step: '0.01', placeholder: '0.10' },
+  ],
+  ctrader: [
+    { key: 'client_id', label: 'Client ID', target: 'secrets', required: true, placeholder: 'Pega aquí tu Client ID' },
+    { key: 'client_secret', label: 'Client Secret', target: 'secrets', required: true, placeholder: 'Pega aquí tu Client Secret' },
+    { key: 'access_token', label: 'Access Token', target: 'secrets', required: true, placeholder: 'Pega aquí tu token' },
+    { key: 'account_id', label: 'Account ID', target: 'secrets', required: true, placeholder: 'Ej: 123456' },
+    { key: 'default_quantity', label: 'Tamaño por operación', target: 'config', type: 'number', step: '0.01', placeholder: '1000' },
+  ],
+  tradingview: [
+    { key: 'passphrase', label: 'Clave secreta del webhook', target: 'config', required: true, placeholder: 'Crea una clave fácil de recordar' },
+  ],
+  binance: [
+    { key: 'api_key', label: 'Inserta aquí tu API Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu API Key' },
+    { key: 'secret_key', label: 'Inserta aquí tu Secret Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu Secret Key' },
+    { key: 'default_quantity', label: 'Cantidad fija por operación', target: 'config', type: 'number', step: '0.0001', placeholder: '0.001' },
+  ],
+  bybit: [
+    { key: 'api_key', label: 'Inserta aquí tu API Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu API Key' },
+    { key: 'secret_key', label: 'Inserta aquí tu Secret Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu Secret Key' },
+    { key: 'default_quantity', label: 'Cantidad fija por operación', target: 'config', type: 'number', step: '0.0001', placeholder: '0.001' },
+  ],
+  okx: [
+    { key: 'api_key', label: 'Inserta aquí tu API Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu API Key' },
+    { key: 'secret_key', label: 'Inserta aquí tu Secret Key', target: 'secrets', required: true, placeholder: 'Pega aquí tu Secret Key' },
+    { key: 'passphrase', label: 'Passphrase', target: 'secrets', required: true, placeholder: 'Pega aquí tu passphrase' },
+    { key: 'default_quantity', label: 'Cantidad fija por operación', target: 'config', type: 'number', step: '0.0001', placeholder: '0.001' },
+  ],
 };
 const STRATEGY_NUMERIC_GUIDES={
   default:{risk:['Bajo 0.5%','Medio 1.0%','Alto 1.5%'],ml:['Regular 55%','Bueno 62%','Excelente 70%'],tp:['Conservador 0.8%','Balanceado 1.5%','Agresivo 2.5%'],sl:['Bajo riesgo 0.4%','Medio 0.8%','Amplio 1.2%'],trailing:['Ceñido 0.3%','Normal 0.6%','Amplio 1.0%'],positions:['1 muy conservador','2 balanceado','3 agresivo']},
@@ -215,16 +232,60 @@ async function downloadExecutionLogs(){
   try{window.open('/api/execution-logs/download?limit=1000','_blank');}
   catch(err){showToast(parseApiError(err),'error');}
 }
+function readFriendlyFields(formEl, platform){
+  const fields = PLATFORM_FIELD_MAP[platform] || [];
+  const config = {};
+  const secrets = {};
+  fields.forEach((field) => {
+    const raw = String(new FormData(formEl).get(`field_${field.target}_${field.key}`) || '').trim();
+    if (!raw) return;
+    const parsed = field.type === 'number' ? Number(raw) : raw;
+    if (field.target === 'secrets') secrets[field.key] = parsed;
+    else config[field.key] = parsed;
+  });
+  config.market_type = new FormData(formEl).get('market_type');
+  return { config, secrets };
+}
+function renderPlatformCatalog(){
+  const container = document.getElementById('platform-catalog');
+  if (!container) return;
+  const grouped = METADATA.platforms.reduce((acc, platform) => {
+    const key = platform.category || 'others';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(platform);
+    return acc;
+  }, {});
 
-async function copySelectedBotSession(){
-  const sourceId=SELECTED_BOT_SESSION_ID||Number(prompt('ID de bot session a copiar:',''));
-  if(!sourceId)return;
-  const targetConnector=Number(prompt('ID de conector destino (opcional):','')||0)||null;
-  try{
-    await api(`/api/bot-sessions/${sourceId}/copy`,{method:'POST',body:JSON.stringify({connector_id:targetConnector})});
-    showToast('Bot copiado correctamente.');
-    refreshBotSessions();
-  }catch(err){showToast(parseApiError(err),'error');}
+  container.innerHTML = Object.entries(grouped).map(([category, platforms]) => `
+    <div class="catalog-card">
+      <h3>${CATEGORY_TITLES[category] || category}</h3>
+      <div class="stack">
+        ${platforms.map(platform => `
+          <div class="connector-item compact">
+            <div class="row-between">
+              <strong>${platform.display_name}</strong>
+              <span class="pill tiny ${platform.is_enabled_global && platform.grant?.is_enabled ? 'pill-on' : 'pill-off'}">
+                ${platform.is_enabled_global && platform.grant?.is_enabled ? 'Disponible' : 'No disponible'}
+              </span>
+            </div>
+            <small class="hint">${platform.guide?.summary || 'Conector configurable para operar.'}</small>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+function setPlatformExample(platform){const meta=getPlatformMeta(platform);renderMarketTypeSelect(platform);renderFriendlyFields(platform);if(meta){document.getElementById('symbol-limit-hint').textContent=`Máx. símbolos permitidos: ${meta.grant.max_symbols}. Manual: ${meta.allow_manual_symbols?'sí':'no'}.`;}renderSymbolPresets(platform);}
+function renderPlatformSelect(){const select=document.getElementById('platform-select');if(!select) return;const enabled=METADATA.platforms.filter(p=>p.is_enabled_global&&p.grant?.is_enabled);select.innerHTML=enabled.map(p=>`<option value="${p.platform}">${p.display_name}</option>`).join('');if (!enabled.length) {select.innerHTML='';document.getElementById('connector-friendly-fields').innerHTML='<p class="hint">No tienes conectores habilitados por el administrador.</p>';return;}setPlatformExample(enabled[0].platform);}
+function renderSymbolPresets(platform){const wrap=document.getElementById('symbol-preset-list');const card=document.getElementById('suggested-symbol-card');if(!wrap||!card) return;const meta=getPlatformMeta(platform);const symbols=meta?.top_symbols||[];card.style.display=symbols.length?'block':'none';wrap.innerHTML=symbols.map(s=>`<button type="button" class="chip" data-symbol="${s}">${s}</button>`).join('');wrap.querySelectorAll('.chip').forEach(btn=>btn.addEventListener('click',()=>addSymbol(btn.dataset.symbol)));}
+function addSymbol(symbol){const input=document.getElementById('symbols-input');const current=new Set(parseCsv(input.value||''));const platform=document.getElementById('platform-select').value;const meta=getPlatformMeta(platform);const limit=meta?.grant?.max_symbols||0;if(limit&&current.size>=limit&&!current.has(symbol)){alert(`Tu límite en ${platform} es de ${limit} símbolos.`);return;}current.add(symbol);input.value=Array.from(current).join(',');}
+function openGuideModal(platform){const meta=getPlatformMeta(platform);if(!meta) return;const guide=meta.guide||{};document.getElementById('guide-title').textContent=guide.title||meta.display_name;document.getElementById('guide-summary').textContent=guide.summary||'';document.getElementById('guide-fields').innerHTML=(guide.fields_needed||[]).map(x=>`<li>${x}</li>`).join('');document.getElementById('guide-steps').innerHTML=(guide.steps||[]).map(x=>`<li>${x}</li>`).join('');document.getElementById('guide-modal').classList.remove('hidden');}
+window.closeGuideModal=function(){document.getElementById('guide-modal').classList.add('hidden');};
+
+function renderRunConnectorSelect(connectors) {
+  const select = document.getElementById('run-connector-select');
+  if (!select) return;
+  select.innerHTML = connectors.map(c => `<option value="${c.id}">#${c.id} · ${c.label} (${c.platform} / ${c.mode})</option>`).join('');
 }
 
 async function publishCurrentStrategyTemplate(){
@@ -232,9 +293,13 @@ async function publishCurrentStrategyTemplate(){
   const name=prompt('Nombre de la estrategia pública:','Mi estrategia');
   if(!name)return;
   const config={
+    market_type:String(fd.get('market_type')||resolveEffectiveRunMarketType()||'spot'),
     strategy_slug:fd.get('strategy_slug'),
     timeframe:fd.get('timeframe'),
     risk_per_trade:Number(fd.get('risk_per_trade_percent')||3)/100,
+    trade_amount_mode:String(fd.get('trade_amount_mode')||'inherit'),
+    amount_per_trade:String(fd.get('trade_amount_mode')||'inherit')==='fixed_usd'?Number(fd.get('amount_per_trade')):null,
+    amount_percentage:String(fd.get('trade_amount_mode')||'inherit')==='balance_percent'?Number(fd.get('amount_percentage')):null,
     min_ml_probability:Number(fd.get('min_ml_probability_percent')||58)/100,
     take_profit_mode:fd.get('take_profit_mode')||'percent',
     take_profit_value:Number(fd.get('take_profit_value')||1.8),
@@ -307,17 +372,56 @@ async function refreshActivityPerformance(){
   if(yCanvas){if(window.yearlyReturnsChart)window.yearlyReturnsChart.destroy();window.yearlyReturnsChart=new Chart(yCanvas,{type:'bar',data:{labels:yearly.map(i=>i.period||pointX(i)||'-'),datasets:[{label:'Yearly Returns',data:yearly.map(pointY),backgroundColor:'#a78bfa'}]},options:{plugins:{legend:{labels:{color:'#f4f7fb'}}},scales:{x:{ticks:{color:'#f4f7fb'}},y:{ticks:{color:'#f4f7fb'}}}}});}
 }
 
-if(typeof refreshDashboard==='function'){
-  const _refreshDashboardOriginal=refreshDashboard;
-  refreshDashboard=async function(){await _refreshDashboardOriginal();await refreshActivityPerformance();};
+function applyStrategyControlUI() {
+  const select = document.querySelector('select[name="strategy_slug"]');
+  const hint = document.getElementById('strategy-managed-hint');
+  if (!select) return;
+
+  const allowed = STRATEGY_CONTROL.allowed_strategies?.length ? STRATEGY_CONTROL.allowed_strategies : Array.from(select.options).map((o) => o.value);
+  Array.from(select.options).forEach((option) => {
+    option.hidden = !allowed.includes(option.value);
+    option.disabled = !allowed.includes(option.value);
+  });
+  if (!allowed.includes(select.value) && allowed.length) select.value = allowed[0];
+
+  if (STRATEGY_CONTROL.managed_by_admin) {
+    select.disabled = true;
+    if (hint) hint.textContent = 'Estrategia gestionada por administrador para esta cuenta.';
+  } else {
+    select.disabled = false;
+    if (hint) hint.textContent = 'Puedes elegir entre las estrategias habilitadas para tu cuenta.';
+  }
 }
-
-
-function setRunWizardStep(step){const safe=Math.max(1,Math.min(3,Number(step)||1));document.querySelectorAll('[data-wizard-step]').forEach((btn)=>btn.classList.toggle('active',Number(btn.dataset.wizardStep)===safe));document.querySelectorAll('[data-wizard-content]').forEach((pane)=>pane.classList.toggle('active',Number(pane.dataset.wizardContent)===safe));const prev=document.getElementById('wizard-prev-inline');const next=document.getElementById('wizard-next-inline');if(prev)prev.disabled=safe===1;if(next)next.textContent=safe===3?'Finalizar':'Siguiente';document.getElementById('run-form')?.setAttribute('data-step',String(safe));}
-function initInlineRunWizard(){setRunWizardStep(1);document.querySelectorAll('[data-wizard-step]').forEach((btn)=>btn.addEventListener('click',()=>setRunWizardStep(Number(btn.dataset.wizardStep))));document.getElementById('wizard-prev-inline')?.addEventListener('click',()=>setRunWizardStep(Number(document.getElementById('run-form')?.dataset.step||1)-1));document.getElementById('wizard-next-inline')?.addEventListener('click',()=>setRunWizardStep(Number(document.getElementById('run-form')?.dataset.step||1)+1));}
-
-document.querySelectorAll('.term-help').forEach(btn=>btn.addEventListener('click',()=>openTermHelp(btn.dataset.term)));
-document.addEventListener('click',(e)=>{
-  if(e.target?.id==='term-help-close')closeTermHelp();
-  if(e.target?.id==='term-help-modal')closeTermHelp();
+async function testConnector(id){const out=await api(`/api/connectors/${id}/test`,{method:'POST'});alert(`${out.status}: ${out.message}\n\n${JSON.stringify(out.raw,null,2)}`);}async function deleteConnector(id){await api(`/api/connectors/${id}`,{method:'DELETE'});refreshDashboard();}
+document.getElementById('platform-select')?.addEventListener('change',e=>{setPlatformExample(e.target.value);});
+document.getElementById('market-type-select')?.addEventListener('change',()=>{setPlatformExample(document.getElementById('platform-select').value);});
+document.getElementById('open-guide-btn')?.addEventListener('click',()=>{const platform=document.getElementById('platform-select').value;openGuideModal(platform);});
+document.getElementById('connector-form')?.addEventListener('submit',async e=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const platform=String(fd.get('platform')||'');
+  const friendly = readFriendlyFields(e.target, platform);
+  await api('/api/connectors',{method:'POST',body:JSON.stringify({platform,label:fd.get('label'),mode:fd.get('mode'),market_type:fd.get('market_type'),symbols:parseCsv(fd.get('symbols')),config:friendly.config,secrets:friendly.secrets})});
+  e.target.reset();
+  renderPlatformSelect();
+  refreshDashboard();
 });
+document.getElementById('run-form')?.addEventListener('submit',async e=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const connectorIds = selectedRunConnectorIds();
+  if (!connectorIds.length) {
+    document.getElementById('run-output').textContent = 'Selecciona al menos un conector para ejecutar la estrategia.';
+    return;
+  }
+  const result=await api('/api/strategies/run',{method:'POST',body:JSON.stringify({connector_ids:connectorIds,symbols:parseCsv(fd.get('symbols')),timeframe:fd.get('timeframe'),strategy_slug:fd.get('strategy_slug'),risk_per_trade:Number(fd.get('risk_per_trade')),min_ml_probability:Number(fd.get('min_ml_probability')),use_live_if_available:fd.get('use_live_if_available')==='on'})});document.getElementById('run-output').textContent=JSON.stringify(result,null,2);refreshDashboard();
+});
+async function init(){
+  METADATA=await api('/api/platform-metadata');
+  STRATEGY_CONTROL = await api('/api/strategy-control');
+  renderPlatformCatalog();
+  renderPlatformSelect();
+  applyStrategyControlUI();
+  await refreshDashboard();
+}
+init().catch(err=>{console.error(err);const out=document.getElementById('run-output');if(out) out.textContent='Error cargando dashboard: '+err.message;});

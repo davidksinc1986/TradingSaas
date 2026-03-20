@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.security import decrypt_payload
+from app.services.connector_state import build_runtime_connector, ensure_connector_market_type_state, resolve_runtime_market_type
 
 try:
     import ccxt
@@ -799,12 +800,53 @@ def _candle_payload(df) -> dict[str, Any]:
     }
 
 
-def _trade_amount_cap(user, available_balance: float, price: float) -> float:
-    mode = str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
+def _resolve_trade_amount_config(
+    user,
+    *,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
+) -> dict[str, float | str]:
+    mode = str(trade_amount_mode or getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower()
     if mode == "balance_percent":
-        budget = available_balance * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)
+        return {
+            "mode": "balance_percent",
+            "fixed_trade_amount_usd": 0.0,
+            "trade_balance_percent": _safe_float(
+                trade_balance_percent if trade_balance_percent is not None else getattr(user, "trade_balance_percent", 10.0),
+                10.0,
+            ),
+        }
+    return {
+        "mode": "fixed_usd",
+        "fixed_trade_amount_usd": _safe_float(
+            fixed_trade_amount_usd if fixed_trade_amount_usd is not None else getattr(user, "fixed_trade_amount_usd", 10.0),
+            10.0,
+        ),
+        "trade_balance_percent": 0.0,
+    }
+
+
+def _trade_amount_cap(
+    user,
+    available_balance: float,
+    price: float,
+    *,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
+) -> float:
+    sizing = _resolve_trade_amount_config(
+        user,
+        trade_amount_mode=trade_amount_mode,
+        fixed_trade_amount_usd=fixed_trade_amount_usd,
+        trade_balance_percent=trade_balance_percent,
+    )
+    mode = str(sizing["mode"]).lower()
+    if mode == "balance_percent":
+        budget = available_balance * (_safe_float(sizing["trade_balance_percent"], 10.0) / 100.0)
     else:
-        budget = _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
+        budget = _safe_float(sizing["fixed_trade_amount_usd"], 10.0)
     if available_balance > 0:
         budget = min(max(budget, 10.0), available_balance)
     return max(budget / max(price, 0.0000001), 0.0)
@@ -884,11 +926,19 @@ def run_strategy(
     dynamic_symbol_limit: int | None = None,
     run_source: str = "manual",
     bot_session_id: int | None = None,
+    market_type: str | None = None,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
 ):
     import json
 
     from app.models import Connector, OpenPosition, TradeLog, TradeRun, User
-    from app.services.alerts import format_user_execution_message, format_user_failure_message, send_user_telegram_alert
+    from app.services.alerts import (
+        format_user_execution_message,
+        format_user_failure_message,
+        send_admin_user_alert_sync,
+    )
     from app.services.connectors import BaseConnectorClient, get_client as get_connector_client
     from app.services.market import fetch_ohlcv_frame
     from app.services.position_lifecycle import initialize_position_lifecycle, run_position_lifecycle, validate_exit_policy
@@ -901,6 +951,12 @@ def run_strategy(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise RuntimeError(f"user {user_id} not found")
+    trade_amount_config = _resolve_trade_amount_config(
+        user,
+        trade_amount_mode=trade_amount_mode,
+        fixed_trade_amount_usd=fixed_trade_amount_usd,
+        trade_balance_percent=trade_balance_percent,
+    )
 
     results: list[dict[str, Any]] = []
 
@@ -909,8 +965,11 @@ def run_strategy(
         if not connector or not connector.is_enabled:
             results.append({"connector_id": connector_id, "status": "skipped", "reason": "connector_disabled_or_missing"})
             continue
+        ensure_connector_market_type_state(connector, persist=True, db=db)
+        connector_market_type = resolve_runtime_market_type(connector, requested_market_type=market_type)
+        runtime_connector = build_runtime_connector(connector, market_type=connector_market_type)
 
-        client = get_connector_client(connector)
+        client = get_connector_client(runtime_connector)
         lifecycle_meta = run_position_lifecycle(db, connector_ids=[connector.id])
         selected_symbols, scanner_meta = select_symbols_for_run(
             connector_id=connector.id,
@@ -921,11 +980,11 @@ def run_strategy(
             force_dynamic=str(symbol_source_mode or "manual").lower() == "dynamic",
             max_symbols_override=dynamic_symbol_limit,
         )
-        sync_meta = sync_positions_with_exchange(db, connector, selected_symbols)
+        sync_meta = sync_positions_with_exchange(db, runtime_connector, selected_symbols)
 
         for symbol in selected_symbols:
             decision_reasons: list[str] = []
-            market_result = fetch_ohlcv_frame(connector=connector, symbol=symbol, timeframe=timeframe, limit=220)
+            market_result = fetch_ohlcv_frame(connector=runtime_connector, symbol=symbol, timeframe=timeframe, limit=220)
             frame = market_result.frame
             notes = {
                 "run_source": run_source,
@@ -962,7 +1021,6 @@ def run_strategy(
                 raise RuntimeError(f"strategy {strategy_slug} not found")
 
             rule = get_strategy_rule(strategy_slug)
-            connector_market_type = (getattr(connector, "market_type", "spot") or "spot").lower()
             if connector_market_type not in rule.get("market_types", ["spot", "futures"]):
                 decision_reasons.append("strategy_market_mismatch")
 
@@ -1090,7 +1148,14 @@ def run_strategy(
             )
 
             risk_qty = position_size(_safe_float(balance.get("available_balance"), 0.0), risk_per_trade, price, stop_pct)
-            budget_cap_qty = _trade_amount_cap(user, _safe_float(balance.get("available_balance"), 0.0), price)
+            budget_cap_qty = _trade_amount_cap(
+                user,
+                _safe_float(balance.get("available_balance"), 0.0),
+                price,
+                trade_amount_mode=str(trade_amount_config["mode"]),
+                fixed_trade_amount_usd=_safe_float(trade_amount_config["fixed_trade_amount_usd"], 0.0),
+                trade_balance_percent=_safe_float(trade_amount_config["trade_balance_percent"], 0.0),
+            )
             quantity = min(risk_qty, budget_cap_qty) if budget_cap_qty > 0 else risk_qty
 
             guardrails = RiskGuardrails.from_config(
@@ -1182,14 +1247,18 @@ def run_strategy(
                 )
                 db.add(run)
                 db.commit()
-                send_user_telegram_alert(user, format_user_failure_message(
-                    locale=user.alert_language,
+                send_admin_user_alert_sync(
+                    user,
+                    format_user_failure_message(
+                        locale=user.alert_language,
+                        scope="pretrade",
+                        detail=pretrade.get("reason_message") or pretrade.get("reason_code") or "pretrade_rejected",
+                        connector_label=connector.label,
+                        platform=connector.platform,
+                        symbol=normalized_symbol,
+                    ),
                     scope="pretrade",
-                    detail=pretrade.get("reason_message") or pretrade.get("reason_code") or "pretrade_rejected",
-                    connector_label=connector.label,
-                    platform=connector.platform,
-                    symbol=normalized_symbol,
-                ))
+                )
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1232,14 +1301,18 @@ def run_strategy(
                 )
                 db.add(run)
                 db.commit()
-                send_user_telegram_alert(user, format_user_failure_message(
-                    locale=user.alert_language,
-                    scope="execution",
-                    detail=str(exc),
-                    connector_label=connector.label,
-                    platform=connector.platform,
-                    symbol=normalized_symbol,
-                ))
+                send_admin_user_alert_sync(
+                    user,
+                    format_user_failure_message(
+                        locale=user.alert_language,
+                        scope="execution",
+                        detail=str(exc),
+                        connector_label=connector.label,
+                        platform=connector.platform,
+                        symbol=normalized_symbol,
+                    ),
+                    scope="execution-error",
+                )
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "rejected_exchange", "error": str(exc)})
                 continue
 
@@ -1340,12 +1413,15 @@ def run_strategy(
                     "capital_allocated": round(
                         min(
                             _safe_float(balance.get("available_balance"), 0.0),
-                            _safe_float(getattr(user, "fixed_trade_amount_usd", 10.0), 10.0)
-                            if str(getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower() == "fixed_usd"
-                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(getattr(user, "trade_balance_percent", 10.0), 10.0) / 100.0)),
+                            _safe_float(trade_amount_config["fixed_trade_amount_usd"], 10.0)
+                            if str(trade_amount_config["mode"]).lower() == "fixed_usd"
+                            else (_safe_float(balance.get("available_balance"), 0.0) * (_safe_float(trade_amount_config["trade_balance_percent"], 10.0) / 100.0)),
                         ),
                         8,
                     ),
+                    "trade_amount_mode": trade_amount_config["mode"],
+                    "trade_amount_fixed_usd": trade_amount_config["fixed_trade_amount_usd"],
+                    "trade_amount_percent": trade_amount_config["trade_balance_percent"],
                     "market_data": market_result.meta,
                     "pretrade": pretrade,
                     "balance": balance,
@@ -1355,20 +1431,24 @@ def run_strategy(
             ))
             db.commit()
 
-            send_user_telegram_alert(user, format_user_execution_message(
-                locale=user.alert_language,
-                connector_label=connector.label,
-                platform=connector.platform,
-                symbol=normalized_symbol,
-                side=signal,
-                quantity=result.quantity,
-                fill_price=result.fill_price,
-                status=result.status,
-                strategy_slug=strategy_slug,
-                message=result.message,
-                pnl=pnl,
-                close_reason=close_reason,
-            ))
+            send_admin_user_alert_sync(
+                user,
+                format_user_execution_message(
+                    locale=user.alert_language,
+                    connector_label=connector.label,
+                    platform=connector.platform,
+                    symbol=normalized_symbol,
+                    side=signal,
+                    quantity=result.quantity,
+                    fill_price=result.fill_price,
+                    status=result.status,
+                    strategy_slug=strategy_slug,
+                    message=result.message,
+                    pnl=pnl,
+                    close_reason=close_reason,
+                ),
+                scope="execution-ok",
+            )
             results.append({
                 "connector_id": connector.id,
                 "symbol": normalized_symbol,

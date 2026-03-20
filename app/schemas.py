@@ -59,8 +59,27 @@ class StrategyRiskMixin(BaseModel):
         return self
 
 
-class StrategyRequest(StrategyRiskMixin):
+class TradeAmountMixin(BaseModel):
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] = "inherit"
+    amount_per_trade: float | None = Field(default=None, gt=0)
+    amount_percentage: float | None = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_trade_amount_rules(self):
+        mode = str(getattr(self, "trade_amount_mode", "inherit") or "inherit").lower()
+        amount = getattr(self, "amount_per_trade", None)
+        percent = getattr(self, "amount_percentage", None)
+
+        if mode == "fixed_usd" and (amount is None or float(amount) <= 0):
+            raise ValueError("Debes indicar una cantidad por trade mayor a 0")
+        if mode == "balance_percent" and (percent is None or float(percent) <= 0):
+            raise ValueError("Debes indicar un porcentaje por trade mayor a 0")
+        return self
+
+
+class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
     connector_ids: list[int]
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
     dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
@@ -83,8 +102,9 @@ class StrategyRequest(StrategyRiskMixin):
     atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionCreate(StrategyRiskMixin):
+class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     connector_id: int
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
     dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
@@ -108,8 +128,12 @@ class BotSessionCreate(StrategyRiskMixin):
     atr_volatility_filter_enabled: bool = True
 
 
-class BotSessionUpdate(StrategyRiskMixin):
+class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
     is_active: bool | None = None
+    trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] | None = None
+    amount_per_trade: float | None = Field(default=None, gt=0)
+    amount_percentage: float | None = Field(default=None, gt=0, le=100)
+    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None
     symbol_source_mode: Literal["manual", "dynamic"] | None = None
@@ -177,50 +201,4 @@ class AdminPolicyUpdate(BaseModel):
 
 class AdminStrategyControlUpdate(BaseModel):
     managed_by_admin: bool
-    allowed_strategies: list[STRATEGY_LITERAL] = Field(default_factory=list)
-
-
-class StrategyControlUpdate(BaseModel):
-    allowed_strategies: list[STRATEGY_LITERAL] = Field(default_factory=list)
-
-
-class AdminPricingConfigUpdate(BaseModel):
-    base_commission_usd: float = Field(ge=0)
-    cost_per_app_usd: float = Field(ge=0)
-    cost_per_symbol_usd: float = Field(ge=0)
-    cost_per_movement_usd: float = Field(ge=0)
-    cost_per_gb_ram_usd: float = Field(ge=0)
-    cost_per_gb_disk_usd: float = Field(ge=0)
-    suggested_ram_per_app_gb: float = Field(gt=0)
-    suggested_disk_per_app_gb: float = Field(gt=0)
-
-
-class AdminPlanConfigPayload(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
-    description: str = ""
-    apps: int = Field(ge=0)
-    symbols: int = Field(ge=0)
-    daily_movements: int = Field(ge=0)
-    monthly_price_usd: float = Field(ge=0)
-    is_custom: bool = False
-    is_active: bool = True
-    sort_order: int = 0
-
-
-class BotSessionCopyPayload(BaseModel):
-    connector_id: int | None = None
-    symbols: list[str] | None = None
-
-
-class StrategyTemplateCreate(BaseModel):
-    name: str = Field(min_length=2, max_length=255)
-    description: str = ""
-    is_public: bool = False
-    source_bot_session_id: int | None = None
-    config: dict[str, Any] = Field(default_factory=dict)
-
-
-class StrategyTemplateApplyPayload(BaseModel):
-    connector_id: int
-    symbols: list[str]
-    is_active: bool = True
+    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]] = Field(default_factory=list)

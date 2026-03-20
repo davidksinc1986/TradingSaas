@@ -2,60 +2,17 @@
 {% block content %}
 <section class="hero hero-home">
   <div class="hero-copy">
-    <div class="brand-hero">
-      <img class="snake-logo" src="/static/logo1.png" alt="Gráfica alcista dorada con serpiente" loading="eager" />
-      <div>
-        <h2 class="hero-brand-title">Snake Mafia Trading Bot<br/>Quantum Computing Mathematics</h2>
-        <p class="hero-brand-slogan">Ejecución algorítmica con identidad premium</p>
-      </div>
-    </div>
-    <span class="pill">Estrategias multi-mercado, ejecución inteligente</span>
-    <h1>Construye tu ecosistema de trading premium con visión de crecimiento patrimonial.</h1>
-    <p>
-      Conecta brokers, exchanges y señales desde un solo lugar. Diseñado para operar con disciplina,
-      automatizar decisiones y convertir análisis en resultados consistentes de largo plazo.
-    </p>
+    <span class="pill">{{ tr('home.pill') }}</span>
+    <h1>{{ tr('home.title') }}</h1>
+    <p>{{ tr('home.body') }}</p>
     <div class="actions">
-      {% if user %}
-      <a class="btn primary" href="/dashboard">Ir al dashboard</a>
-      {% else %}
-      <a class="btn primary" href="/auth/login">Entrar al ecosistema</a>
-      {% endif %}
+      <a class="btn primary" href="/auth/login">{{ tr('home.cta_enter') }}</a>
+      <a class="btn" href="/dashboard">{{ tr('home.cta_dashboard') }}</a>
     </div>
-    <div class="hero-slider" id="hero-slider">
-      <div class="hero-slide active" style="background-image:url('https://images.pexels.com/photos/6802042/pexels-photo-6802042.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Pantallas con gráficos financieros"></div>
-      <div class="hero-slide" style="background-image:url('https://images.pexels.com/photos/730547/pexels-photo-730547.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Bitcoin y criptomonedas"></div>
-      <div class="hero-slide" style="background-image:url('https://images.pexels.com/photos/6770775/pexels-photo-6770775.jpeg?auto=compress&cs=tinysrgb&w=1600');" aria-label="Mesa con laptop y análisis financiero"></div>
-    </div>
-  </div>
-
-  <div class="stack">
-    {% if user %}
-    <div class="card auth-card hero-login">
-      <h2>Bienvenido, {{ user.name }}</h2>
-      <p class="muted">Tu sesión está activa. Puedes continuar a tu panel para gestionar conectores y estrategias.</p>
-      <a class="btn primary" href="/dashboard">Abrir dashboard</a>
-    </div>
-    {% else %}
-    <form class="card auth-card hero-login" method="post" action="/auth/login">
-      <h2>Inicia sesión</h2>
-      <p class="muted">Empieza hoy y toma decisiones de trading con más claridad, control y confianza.</p>
-      <label>Usuario o email<input type="text" name="email" required></label>
-      <label>Contraseña<input type="password" name="password" required></label>
-      <button class="btn primary" type="submit">Entrar ahora</button>
-    </form>
-    {% endif %}
-  </div>
-</section>
-
-{% if not user %}
-<section class="grid-2 public-blocks">
-  <article class="card">
-    <h3>Contáctame</h3>
-    <p class="muted">Si aún no tienes usuario, escríbeme y te ayudo a definir el plan ideal.</p>
-    <p><strong>davidksinc@gmail.com</strong><br><a href="mailto:davidksinc@gmail.com">davidksinc@gmail.com</a></p>
-    <div class="contact-actions">
-      <a class="btn whatsapp-btn" href="https://wa.me/50670104017?text=Hola%2C%20quiero%20informaci%C3%B3n%20sobre%20Trading%20Bot" target="_blank" rel="noopener noreferrer">WhatsApp +506 7010 4017</a>
+    <div class="hero-gallery">
+      <img src="https://images.unsplash.com/photo-1640161704729-cbe966a08476?auto=format&fit=crop&w=1400&q=80" alt="Pantallas con gráficos financieros" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1642543492481-44e81e3914a7?auto=format&fit=crop&w=1400&q=80" alt="Gráfico financiero al alza" loading="lazy">
+      <img src="https://images.unsplash.com/photo-1596720426673-e4e14290f0cc?auto=format&fit=crop&w=1400&q=80" alt="Petróleo y monedas internacionales" loading="lazy">
     </div>
   </article>
   <article class="card">
@@ -97,19 +54,25 @@
   <div id="public-estimate-result" class="status-msg" style="margin-top:10px;">
     Completa valores y presiona calcular.
   </div>
-</section>
-{% endif %}
 
-<section class="card">
-  <h3>Calculadora de ganancia promedio</h3>
-  <form id="public-profit-calculator" class="form-grid admin-form-grid">
-    <label>Monto de inversión (USDT)<input type="number" name="investment" min="1" value="1000"></label>
-    <label>Cantidad de apps<input type="number" name="apps" min="1" value="3"></label>
-    <label>Estrategias funcionando<input type="number" name="strategies" min="1" value="4"></label>
-    <button class="btn primary btn-sm public-calc-btn" type="submit">Calcular promedio</button>
-  </form>
-  <div id="public-profit-result" class="status-msg" style="margin-top:10px;">
-    Inserta tus valores para estimar una ganancia promedio mensual.
+  <div class="stack">
+    <form class="card auth-card hero-login" method="post" action="/auth/login">
+      <h2>{{ tr('home.login_title') }}</h2>
+      <p class="muted">{{ tr('home.login_hint') }}</p>
+      <label>Usuario o email<input type="text" name="email" required></label>
+      <label>Contraseña<input type="password" name="password" required></label>
+      <button class="btn primary" type="submit">{{ tr('home.cta_enter') }}</button>
+    </form>
+
+    <div class="card panel faq-panel">
+      <h3>{{ tr('home.faq_title') }}</h3>
+      <ul>
+        <li><strong>¿Qué hace?</strong> Unifica conectores, símbolos y ejecución de estrategias en una sola plataforma.</li>
+        <li><strong>¿Sirve para ingresos pasivos?</strong> Te ayuda a sistematizar tu operación para buscar constancia; no promete ganancias garantizadas.</li>
+        <li><strong>¿Mis datos están protegidos?</strong> Cada usuario ve solo sus conectores, movimientos y configuración; el control global queda solo en admin.</li>
+        <li><strong>¿Puedo crecer con esto?</strong> Sí, escalando reglas, riesgo y conectores por cuenta según tu perfil.</li>
+      </ul>
+    </div>
   </div>
 </section>
 

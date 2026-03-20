@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 SUPPORTED_ALERT_LOCALES = {"es", "en", "pt", "fr"}
 
 
+class TelegramDeliveryError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None, description: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.description = description or message
+
+
 def normalize_alert_locale(value: str | None) -> str:
     locale = (value or "es").strip().lower()
     if locale not in SUPPORTED_ALERT_LOCALES:
@@ -28,6 +35,41 @@ def _compose_telegram_url(token: str) -> str:
     return f"https://api.telegram.org/bot{token}/sendMessage"
 
 
+def _build_telegram_error(status_code: int | None, description: str) -> TelegramDeliveryError:
+    detail = (description or "").strip()
+    lowered = detail.lower()
+    if status_code == 404:
+        message = "Telegram respondió 404 Not Found. Revisa que el bot token sea correcto, esté completo y no tenga espacios."
+    elif "chat not found" in lowered:
+        message = "Telegram respondió 'chat not found'. Abre el chat con tu bot, envía /start y usa el chat id correcto."
+    elif "bot was blocked" in lowered:
+        message = "Telegram indica que el bot fue bloqueado por el usuario. Desbloquéalo e intenta nuevamente."
+    elif "user not found" in lowered:
+        message = "Telegram no encontró ese usuario/chat. Verifica el chat id o usa un grupo/canal donde el bot ya esté agregado."
+    elif "unauthorized" in lowered or "invalid token" in lowered:
+        message = "Telegram rechazó el token del bot. Genera uno nuevo con BotFather o copia el token correcto."
+    else:
+        message = f"Telegram no aceptó el mensaje: {detail or 'error no especificado'}"
+    return TelegramDeliveryError(message, status_code=status_code, description=detail or message)
+
+
+def _raise_for_telegram_response(response) -> None:
+    status_code = getattr(response, "status_code", None)
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    ok = bool((payload or {}).get("ok")) if isinstance(payload, dict) else False
+    if status_code and 200 <= int(status_code) < 300 and (ok or payload is None):
+        return
+    description = ""
+    if isinstance(payload, dict):
+        description = str(payload.get("description") or payload.get("error_code") or "")
+    if not description:
+        description = getattr(response, "text", "") or ""
+    raise _build_telegram_error(status_code, description[:500])
+
+
 def _post_telegram_message(*, token: str, chat_id: str, message: str, timeout: float = 6.0) -> bool:
     if not token or not chat_id:
         return False
@@ -38,7 +80,7 @@ def _post_telegram_message(*, token: str, chat_id: str, message: str, timeout: f
     }
     with httpx.Client(timeout=timeout) as client:
         response = client.post(_compose_telegram_url(token), json=payload)
-        response.raise_for_status()
+        _raise_for_telegram_response(response)
     return True
 
 
@@ -64,7 +106,7 @@ async def send_telegram_alert(message: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
             response = await client.post(_compose_telegram_url(token), json=payload)
-            response.raise_for_status()
+            _raise_for_telegram_response(response)
         return True
     except Exception:
         logger.exception("Failed sending Telegram alert")
@@ -85,14 +127,27 @@ def send_telegram_alert_sync(message: str) -> bool:
     try:
         with httpx.Client(timeout=6.0) as client:
             response = client.post(_compose_telegram_url(token), json=payload)
-            response.raise_for_status()
+            _raise_for_telegram_response(response)
         return True
     except Exception:
         logger.exception("Failed sending sync Telegram alert")
         return False
 
 
-def send_user_telegram_alert(user: User, message: str) -> bool:
+def send_admin_user_alert_sync(user: User | None, message: str, *, scope: str = "user-event") -> bool:
+    identity = "-"
+    if user is not None:
+        identity = (
+            getattr(user, "name", "")
+            or getattr(user, "email", "")
+            or f"user_id={getattr(user, 'id', '?')}"
+        )
+        identity = identity.strip()
+    header = f"👤 Usuario: {identity}\n🧭 Scope: {scope}\n"
+    return send_telegram_alert_sync(f"{header}{message}")
+
+
+def send_user_telegram_alert(user: User, message: str, *, raise_on_error: bool = False) -> bool:
     if not user.telegram_alerts_enabled:
         return False
 
@@ -103,8 +158,15 @@ def send_user_telegram_alert(user: User, message: str) -> bool:
 
     try:
         return _post_telegram_message(token=token, chat_id=chat_id, message=message)
+    except TelegramDeliveryError:
+        logger.exception("Telegram rejected message for user_id=%s", user.id)
+        if raise_on_error:
+            raise
+        return False
     except Exception:
         logger.exception("Failed sending user Telegram alert for user_id=%s", user.id)
+        if raise_on_error:
+            raise
         return False
 
 
@@ -276,7 +338,7 @@ def format_user_info_message(*, locale: str, title: str, detail: str, connector_
     )
 
 
-def send_user_telegram_test_alert(user: User) -> bool:
+def send_user_telegram_test_alert(user: User, *, raise_on_error: bool = False) -> bool:
     locale = normalize_alert_locale(user.alert_language)
     display_name = user.name or user.email or f"user_id={user.id}"
     title = {
@@ -289,4 +351,4 @@ def send_user_telegram_test_alert(user: User) -> bool:
         "pt": f"Olá {display_name}. Sua conta está pronta para receber execuções, erros, saldos e atualizações operacionais.",
         "fr": f"Bonjour {display_name}. Votre compte est prêt à recevoir exécutions, erreurs, soldes et mises à jour opérationnelles.",
     }.get(locale, f"Hola {display_name}. Tu cuenta quedó lista para recibir ejecuciones, errores, saldos y actualizaciones operativas.")
-    return send_user_telegram_alert(user, format_user_info_message(locale=locale, title=title, detail=detail))
+    return send_user_telegram_alert(user, format_user_info_message(locale=locale, title=title, detail=detail), raise_on_error=raise_on_error)

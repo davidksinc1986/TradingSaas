@@ -9,7 +9,7 @@ from app.core import settings
 from sqlalchemy import inspect, text
 
 from app.db import Base, SessionLocal, engine
-from app.models import BotSession, StrategyProfile, StrategyTemplate, User, UserStrategyControl
+from app.models import StrategyProfile, User, UserStrategyControl
 from app.routers import api, auth, views
 from app.security import hash_password
 from app.services.alerts import format_failure_message, send_telegram_alert
@@ -73,6 +73,10 @@ def ensure_schema_updates(db):
     })
 
     add_missing_columns("bot_sessions", {
+        "market_type": "ALTER TABLE bot_sessions ADD COLUMN market_type VARCHAR(20) DEFAULT 'spot'",
+        "trade_amount_mode": "ALTER TABLE bot_sessions ADD COLUMN trade_amount_mode VARCHAR(20)",
+        "amount_per_trade": "ALTER TABLE bot_sessions ADD COLUMN amount_per_trade FLOAT",
+        "amount_percentage": "ALTER TABLE bot_sessions ADD COLUMN amount_percentage FLOAT",
         "stop_loss_mode": "ALTER TABLE bot_sessions ADD COLUMN stop_loss_mode VARCHAR(20) DEFAULT 'percent'",
         "stop_loss_value": "ALTER TABLE bot_sessions ADD COLUMN stop_loss_value FLOAT DEFAULT 1.0",
         "take_profit_mode": "ALTER TABLE bot_sessions ADD COLUMN take_profit_mode VARCHAR(20) DEFAULT 'percent'",

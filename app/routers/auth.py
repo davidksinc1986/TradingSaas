@@ -18,7 +18,6 @@ def base_context(request: Request, **kwargs):
     locale = detect_locale(request)
     ctx = {
         "request": request,
-        "static_version": settings.static_version,
         "locale": locale,
         "supported_locales": SUPPORTED_LOCALES,
         "tr": lambda key: translate(key, locale),
@@ -29,8 +28,7 @@ def base_context(request: Request, **kwargs):
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    error = request.query_params.get("error")
-    return templates.TemplateResponse("login.html", base_context(request, title="Login", error=error))
+    return templates.TemplateResponse("login.html", base_context(request, title="Login"))
 
 
 @router.get("/register", response_class=HTMLResponse)

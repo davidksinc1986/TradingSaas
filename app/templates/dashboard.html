@@ -152,67 +152,39 @@
           <small class="hint">Envía un mensaje de prueba para validar bot key + chat id.</small>
         </div>
       </div>
-      <small class="hint">El email solo puede editarlo el super user. Si dejas bot key/chat id vacíos, se conservarán los valores actuales.</small>
-      <button class="btn primary" type="submit">Guardar perfil</button>
-      </form>
-      <div id="profile-feedback" class="hint" style="margin-top:8px;"></div>
-      <div id="telegram-test-feedback" class="hint" style="margin-top:8px;"></div>
-    </section>
-
-    <aside class="profile-side-stack">
-      <section class="card soft-card" id="profile-trade-amount-settings">
+      <small class="hint">Mission control, configuración, decisiones y riesgo ahora viven dentro de Perfil.</small>
+    </div>
+    <section class="quantum-command-grid profile-command-grid">
+      <article class="card quantum-command-card">
         <div class="row-between">
-          <h3>Monto por operación (Binance)</h3>
-          <small class="hint">Mínimo 10 USDT</small>
+          <div>
+            <small class="quantum-label">Quantum Mission Control</small>
+            <h2>Estado táctico del sistema</h2>
+          </div>
+          <div class="row-wrap">
+            <button class="btn btn-sm" type="button" id="refresh-quantum-btn">Refresh</button>
+            <span class="pill" id="quant-health-pill">Inicializando</span>
+          </div>
         </div>
-        <p class="hint" style="margin-top:8px;">Configura aquí cómo calcular cada orden para evitar el error de saldo insuficiente.</p>
-        <form id="profile-trade-amount-form" class="form-grid" style="margin-top:10px;">
-          <label>Modo de monto
-            <select name="trade_amount_mode" id="trade-amount-mode">
-              <option value="fixed_usd">Monto fijo en USD/USDT</option>
-              <option value="balance_percent">Porcentaje de balance USDT</option>
-            </select>
-          </label>
-          <label>Monto fijo por orden (USD/USDT)
-            <input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10">
-          </label>
-          <label>Porcentaje del balance USDT (%)
-            <input name="trade_balance_percent" id="trade-balance-percent" type="number" min="1" max="100" step="0.1" value="10">
-          </label>
-          <button class="btn btn-sm term-help" type="button" data-term="trade_amount_examples">?
-            Ver ejemplos de cálculo
-          </button>
-          <button class="btn primary compact-save-btn" type="submit">Guardar monto</button>
-        </form>
-        <div id="profile-trade-amount-feedback" class="hint" style="margin-top:8px;"></div>
-      </section>
+        <div class="quantum-metrics-grid">
+          <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
+          <div class="quantum-metric"><small>Sync engine</small><strong id="quant-sync-status">Pendiente</strong></div>
+          <div class="quantum-metric"><small>Conectores live</small><strong id="quant-live-connectors">0</strong></div>
+          <div class="quantum-metric"><small>Último heartbeat</small><strong id="quant-last-heartbeat">--:--</strong></div>
+        </div>
+        <div class="quantum-status-strip" id="quant-status-strip"></div>
+      </article>
 
-      <section class="card soft-card profile-active-strategies">
+      <article class="card quantum-side-card">
         <div class="row-between">
-          <h3>Estrategias creadas y funcionando</h3>
-          <small class="hint" id="strategies-live-count">0 activas</small>
+          <div>
+            <small class="quantum-label">User configuration</small>
+            <h2>Configuración operativa</h2>
+          </div>
+          <span class="pill tiny" id="user-config-state">Profile loaded</span>
         </div>
-        <p class="hint">Resumen agrupado por app y tipo de mercado (spot/futures) para revisar rápidamente tu estado productivo.</p>
-        <div id="strategies-live-panel" class="strategy-live-grid"></div>
-      </section>
-    </aside>
-  </div>
-</section>
-
-<section id="tab-connectors" class="tab-panel">
-  <section class="tabs" id="platform-tabs"></section>
-  <div id="platform-panels"></div>
-</section>
-
-<section id="tab-strategies" class="tab-panel">
-  <div class="stack" style="gap:14px;">
-    <div class="strategy-top-layout">
-      <div class="card strategy-wizard-panel">
-        <div class="row-between">
-          <h2>Ejecutar estrategia</h2>
-          <button class="btn" type="button" id="heartbeat-btn">Validar conectores</button>
-        </div>
-        <div id="heartbeat-output" class="stack" style="margin:10px 0;"></div>
+        <div id="user-config-report" class="quantum-report-list"></div>
+      </article>
 
         <form id="run-form" class="form-grid wizard-form">
           <div class="wizard-step-nav">
@@ -303,76 +275,15 @@
           <div id="run-feedback" class="status-msg" hidden></div>
         </form>
       </div>
+      <label>Símbolos elegidos (separados por coma)<input id="symbols-input" name="symbols" placeholder="BTC/USDT,ETH/USDT"></label>
 
-      <div class="card strategy-library-card compact" id="strategy-library-panel">
-        <div class="row-between">
-          <h2>Estrategias disponibles</h2>
-          <small class="hint">Click para ver explicación rápida</small>
-        </div>
-        <div id="strategy-library" class="stack"></div>
-        <div class="row-wrap" style="margin-top:8px;">
-          <button class="btn" type="button" id="publish-template-btn">Publicar estrategia actual</button>
-          <button class="btn" type="button" id="refresh-template-pool-btn">Ver pool público</button>
-        </div>
-        <div id="template-pool" class="stack" style="margin-top:8px;"></div>
+      <div class="card soft-card">
+        <strong>Credenciales del conector</strong>
+        <p class="hint">Completa estos campos. Nosotros guardamos la configuración técnica por detrás.</p>
+        <div id="connector-friendly-fields" class="form-grid"></div>
       </div>
-    </div>
-
-    <section class="card" id="market-movers-board">
-        <div class="row-between">
-          <h2>Monedas con mayor movimiento / ganancia</h2>
-          <button class="btn" id="refresh-market-btn" type="button">Actualizar ahora</button>
-        </div>
-        <div class="row-between" style="margin-top:8px;gap:12px;flex-wrap:wrap;">
-          <small class="hint" id="market-board-context">Top movimientos del día en pares USDT.</small>
-          <label>Histórico
-            <select id="market-history-range">
-              <option value="day" selected>Día</option>
-              <option value="week">Semana</option>
-              <option value="month">Mes</option>
-            </select>
-          </label>
-        </div>
-        <div class="table-wrap" style="margin-top:10px;">
-          <table id="market-movers-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Moneda</th>
-                <th>Precio</th>
-                <th>Variación</th>
-                <th>Volumen</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-      <section class="card">
-        <div class="row-between">
-          <h2>Bots activos (24/7)</h2>
-          <div style="display:flex;gap:8px;"><button class="btn" type="button" id="refresh-bot-sessions-btn">Actualizar bots</button><button class="btn" type="button" id="copy-selected-bot-btn">Copiar bot seleccionado</button></div>
-        </div>
-        <small class="hint">Muestra estrategias realmente en ejecución continua por conector, símbolo y capital asignado por operación en USDT/USD.</small>
-        <div class="table-wrap" style="margin-top:10px;">
-          <table id="bot-sessions-table">
-            <thead>
-              <tr>
-                <th>Conector</th>
-                <th>Plataforma</th>
-                <th>Símbolos</th>
-                <th>Estrategia</th>
-                <th>Capital/op</th>
-                <th>Frecuencia</th>
-                <th>Estado</th>
-                <th>Última corrida</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
+      <button class="btn primary" type="submit">Guardar conector</button>
+    </form>
   </div>
 </section>
 
@@ -443,24 +354,8 @@
           <option value="month">Mensual</option>
         </select>
       </label>
-    </div>
-    <div class="trade-metrics" id="trade-metrics"></div>
-    <div class="table-wrap">
-      <table id="trades-table">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th>Plataforma</th>
-            <th>Símbolo</th>
-            <th>Inversión</th>
-            <th>Resultado</th>
-            <th>PNL</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
+      <small class="hint" id="strategy-managed-hint"></small>
+      <small class="hint">EMA+RSI: tendencia + momentum. Mean Reversion: busca retorno al promedio. Momentum Breakout: opera rupturas de niveles clave.</small>
 
   
   
@@ -547,22 +442,6 @@
   </div>
 </div>
 
-
-<div id="strategy-wizard-modal" class="modal hidden">
-  <div class="modal-card card strategy-modal-card strategy-wizard-card">
-    <div class="modal-head">
-      <h3 id="strategy-wizard-title">Wizard · Configuración profesional</h3>
-      <button class="btn" type="button" id="strategy-wizard-close">Cerrar</button>
-    </div>
-    <div id="strategy-wizard-content" class="stack" style="gap:10px;"></div>
-    <div class="row-between" style="margin-top:12px;">
-      <button class="btn" type="button" id="strategy-wizard-prev">Atrás</button>
-      <button class="btn primary" type="button" id="strategy-wizard-next">Siguiente</button>
-    </div>
-  </div>
-</div>
-
-</div>
 
 <script src="/static/dashboard.js?v={{ static_version }}"></script>
 
