@@ -9,7 +9,6 @@ DEFAULT_POLICIES = {
         "display_name": "MetaTrader 5",
         "category": "broker",
         "top_symbols": ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "US30", "NAS100", "BTCUSD", "ETHUSD", "AUDUSD", "USDCAD"],
-        "allowed_symbols": ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "US30", "NAS100", "BTCUSD", "ETHUSD", "AUDUSD", "USDCAD"],
         "allow_manual_symbols": True,
         "guide": {
             "title": "Conectar MetaTrader 5",
@@ -29,7 +28,6 @@ DEFAULT_POLICIES = {
         "display_name": "cTrader",
         "category": "broker",
         "top_symbols": ["EURUSD", "GBPUSD", "XAUUSD", "US30", "NAS100", "BTCUSD", "ETHUSD", "USDJPY", "AUDUSD", "GER40"],
-        "allowed_symbols": ["EURUSD", "GBPUSD", "XAUUSD", "US30", "NAS100", "BTCUSD", "ETHUSD", "USDJPY", "AUDUSD", "GER40"],
         "allow_manual_symbols": True,
         "guide": {
             "title": "Conectar cTrader",
@@ -49,7 +47,6 @@ DEFAULT_POLICIES = {
         "display_name": "TradingView",
         "category": "signals",
         "top_symbols": ["BTCUSDT", "ETHUSDT", "EURUSD", "XAUUSD", "SPX", "NDQ", "SOLUSDT", "BNBUSDT", "AAPL", "TSLA"],
-        "allowed_symbols": ["BTCUSDT", "ETHUSDT", "EURUSD", "XAUUSD", "SPX", "NDQ", "SOLUSDT", "BNBUSDT", "AAPL", "TSLA"],
         "allow_manual_symbols": True,
         "guide": {
             "title": "Conectar TradingView",
@@ -68,7 +65,6 @@ DEFAULT_POLICIES = {
         "display_name": "Binance",
         "category": "crypto",
         "top_symbols": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT"],
-        "allowed_symbols": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT"],
         "allow_manual_symbols": True,
         "guide": {
             "title": "Conectar Binance",
@@ -88,7 +84,6 @@ DEFAULT_POLICIES = {
         "display_name": "Bybit",
         "category": "crypto",
         "top_symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "LTC/USDT", "BNB/USDT", "AVAX/USDT"],
-        "allowed_symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "LTC/USDT", "BNB/USDT", "AVAX/USDT"],
         "allow_manual_symbols": True,
         "guide": {
             "title": "Conectar Bybit",
@@ -108,7 +103,6 @@ DEFAULT_POLICIES = {
         "display_name": "OKX",
         "category": "crypto",
         "top_symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "LTC/USDT", "BNB/USDT", "LINK/USDT", "AVAX/USDT"],
-        "allowed_symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "LTC/USDT", "BNB/USDT", "LINK/USDT", "AVAX/USDT"],
         "allow_manual_symbols": True,
         "guide": {
             "title": "Conectar OKX",
@@ -138,7 +132,7 @@ def seed_platform_policies(db):
                 is_enabled_global=True,
                 allow_manual_symbols=data["allow_manual_symbols"],
                 top_symbols_json={"symbols": data["top_symbols"]},
-                allowed_symbols_json={"symbols": data["allowed_symbols"]},
+                allowed_symbols_json={"symbols": []},
                 guide_json=data["guide"],
             )
             db.add(policy)
@@ -183,11 +177,6 @@ def validate_connector_request(db, user: User, platform: str, symbols: list[str]
     if len(symbols) > grant.max_symbols:
         raise HTTPException(status_code=400, detail=f"This account can use at most {grant.max_symbols} symbols on {platform}")
 
-    allowed_symbols = set((policy.allowed_symbols_json or {}).get("symbols", []))
-    if allowed_symbols:
-        invalid = [s for s in symbols if s not in allowed_symbols]
-        if invalid and not policy.allow_manual_symbols:
-            raise HTTPException(status_code=400, detail=f"Symbols not allowed by admin on {platform}: {', '.join(invalid)}")
 
     day_count = db.query(TradeLog).join(Connector, TradeLog.connector_id == Connector.id).filter(
         TradeLog.user_id == user.id,
