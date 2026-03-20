@@ -97,6 +97,9 @@ th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size
 .mini-pre{margin-top:10px;background:#090909;color:#d8d8d8;border:1px solid var(--line);border-radius:12px;padding:10px;font-size:12px;overflow:auto}
 code{background:#101010;padding:2px 6px;border-radius:8px}
 .chip-wrap{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.log-group-row td{background:rgba(240,185,11,.08);border-top:1px solid rgba(240,185,11,.22);border-bottom:1px solid rgba(240,185,11,.22)}
+.log-group-row strong{color:#ffe08a}
+.log-group-row small{margin-left:6px}
 .chip{padding:8px 10px;border-radius:999px;border:1px solid var(--line);background:#0f0f0f;color:var(--text);cursor:pointer}
 .chip strong{color:#ffe08a;font-weight:700}
 .lang-form{display:flex;align-items:center}

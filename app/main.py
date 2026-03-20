@@ -11,7 +11,7 @@ from sqlalchemy import inspect, text
 from app.db import Base, SessionLocal, engine
 from app.models import BotSession, StrategyProfile, StrategyTemplate, User, UserStrategyControl
 from app.routers import api, auth, views
-from app.security import hash_password
+from app.security import encrypt_payload, hash_password
 from app.services.alerts import format_failure_message, send_telegram_alert
 from app.services.policies import ensure_user_grants, seed_platform_policies
 from app.services.pricing import ensure_pricing_seed
@@ -94,6 +94,15 @@ def ensure_schema_updates(db):
     db.commit()
 
 
+def _sync_root_admin_telegram(admin: User) -> None:
+    token = (settings.telegram_admin_bot_token or "").strip()
+    chat_id = (settings.telegram_admin_chat_id or "").strip()
+    admin.telegram_alerts_enabled = bool(token and chat_id)
+    admin.alert_language = admin.alert_language or "es"
+    admin.telegram_bot_token_encrypted = encrypt_payload({"value": token}) if token else None
+    admin.telegram_chat_id_encrypted = encrypt_payload({"value": chat_id}) if chat_id else None
+
+
 @app.on_event("startup")
 def bootstrap():
     db = SessionLocal()
@@ -132,6 +141,7 @@ def bootstrap():
             )
             db.add(admin)
             db.flush()
+        _sync_root_admin_telegram(admin)
         seed_platform_policies(db)
         ensure_pricing_seed(db)
         if not inspect(engine).has_table("bot_sessions"):

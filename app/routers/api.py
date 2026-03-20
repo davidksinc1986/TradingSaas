@@ -148,6 +148,91 @@ def _translate_status_reason(reason_code: str | None) -> str:
     return mapping.get(str(reason_code or "ok"), f"circuit_breaker: {str(reason_code or 'ok')}")
 
 
+REPORT_STATE_PRIORITY = [
+    "volatilidad_excesiva",
+    "drawdown_reciente",
+    "overtrading",
+    "mercado_lateral_ruidoso",
+    "baja_calidad_de_senal",
+    "riesgo_global_alto",
+    "problemas_tecnicos",
+    "eventos_extremos_de_mercado",
+]
+
+
+def _trade_run_reason_codes(run: TradeRun | None, parsed_note: dict | None = None) -> list[str]:
+    if run is None:
+        return []
+    parsed = parsed_note if isinstance(parsed_note, dict) else {}
+    summary = parsed.get("decision_summary") or {}
+    raw_codes = summary.get("reason_codes") or []
+    codes: list[str] = []
+    for value in raw_codes:
+        clean = str(value or "").strip()
+        if clean and clean not in codes:
+            codes.append(clean)
+    primary = str(summary.get("primary_reason") or parsed.get("reason_code") or "").strip()
+    if primary and primary not in codes:
+        codes.append(primary)
+    status = str(getattr(run, "status", "") or "").strip()
+    if status.startswith("skipped_"):
+        derived = status.removeprefix("skipped_").strip()
+        if derived and derived not in codes:
+            codes.append(derived)
+    return codes
+
+
+def _operational_states_from_reason_codes(reason_codes: list[str], notes: dict | None = None) -> list[str]:
+    normalized_codes = [str(code or "").strip().lower() for code in reason_codes if str(code or "").strip()]
+    parsed_notes = notes if isinstance(notes, dict) else {}
+    states: list[str] = []
+    code_to_state = {
+        "market_data_anomaly": "volatilidad_excesiva",
+        "skipped_circuit_breaker": "volatilidad_excesiva",
+        "skipped_min_notional": "drawdown_reciente",
+        "max_open_positions": "overtrading",
+        "max_open_positions_reached": "overtrading",
+        "strategy_hold": "mercado_lateral_ruidoso",
+        "signal_hold": "mercado_lateral_ruidoso",
+        "low_confidence": "baja_calidad_de_senal",
+        "last_candle_not_confirmed": "baja_calidad_de_senal",
+        "portfolio_heat_limit": "riesgo_global_alto",
+        "symbol_concentration_limit": "riesgo_global_alto",
+        "trade_size_collapsed": "riesgo_global_alto",
+        "short_disabled": "riesgo_global_alto",
+        "spot_sell_without_inventory": "riesgo_global_alto",
+        "risk_engine_blocked": "riesgo_global_alto",
+        "balance_unavailable": "problemas_tecnicos",
+        "missing_market_data": "problemas_tecnicos",
+        "exchange_environment_not_ready": "problemas_tecnicos",
+        "invalid_symbol": "problemas_tecnicos",
+        "rejected_invalid_quantity": "problemas_tecnicos",
+        "skipped_min_qty": "problemas_tecnicos",
+        "pretrade_rejected": "problemas_tecnicos",
+        "exchange_rejected": "problemas_tecnicos",
+        "market_price_mismatch": "eventos_extremos_de_mercado",
+        "suspicious_price_scale_detected": "eventos_extremos_de_mercado",
+    }
+    for code in normalized_codes:
+        state = code_to_state.get(code)
+        if state and state not in states:
+            states.append(state)
+
+    if parsed_notes.get("circuit_breaker_triggered") and "volatilidad_excesiva" not in states:
+        states.append("volatilidad_excesiva")
+    if (parsed_notes.get("market_quality") or {}).get("anomalies") and "volatilidad_excesiva" not in states:
+        anomalies = (parsed_notes.get("market_quality") or {}).get("anomalies") or {}
+        issues = anomalies.get("issues") or []
+        if anomalies.get("severity") not in {None, "", "ok"} or issues:
+            states.append("volatilidad_excesiva")
+
+    if not states:
+        return ["operativa_normal"]
+    ordered = [state for state in REPORT_STATE_PRIORITY if state in states]
+    ordered.extend(state for state in states if state not in ordered)
+    return ordered
+
+
 def _trade_run_primary_reason(run: TradeRun | None) -> str:
     if run is None:
         return "ok"
@@ -160,6 +245,28 @@ def _trade_run_primary_reason(run: TradeRun | None) -> str:
         return "ok"
     summary = parsed.get("decision_summary") or {}
     return str(summary.get("primary_reason") or parsed.get("reason_code") or "ok")
+
+
+def _trade_run_connector_snapshot(connector: Connector | None, parsed_note: dict | None = None) -> dict[str, str | int | None]:
+    parsed = parsed_note if isinstance(parsed_note, dict) else {}
+    snapshot = parsed.get("connector") or {}
+    platform = connector.platform if connector else str(snapshot.get("platform") or "-")
+    label = connector.label if connector and connector.label else str(snapshot.get("label") or "-")
+    market_type = (
+        ensure_connector_market_type_state(connector, persist=False) if connector
+        else _normalize_market_type(
+            snapshot.get("market_type")
+            or parsed.get("market_type")
+            or (parsed.get("execution_environment") or {}).get("market_type")
+            or "spot"
+        )
+    )
+    return {
+        "connector_id": getattr(connector, "id", None) if connector else snapshot.get("id"),
+        "connector_label": label or "-",
+        "platform": platform or "-",
+        "market_type": market_type or "spot",
+    }
 
 
 def _safe_float(value, fallback: float = 0.0) -> float:
@@ -466,7 +573,7 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
     }
 
 
-@router.post("/me/telegram/test")
+@router.api_route("/me/telegram/test", methods=["GET", "POST"])
 def me_telegram_test(db=Depends(get_db), user=Depends(current_user)):
     _ = db
     try:
@@ -1245,22 +1352,48 @@ def download_execution_logs(limit: int = 500, db=Depends(get_db), user=Depends(c
 
     stream = io.StringIO()
     writer = csv.writer(stream)
-    writer.writerow(["id", "created_at", "connector_id", "platform", "market_type", "connector_label", "symbol", "display_symbol", "timeframe", "signal", "status", "status_reason", "ml_probability", "quantity", "notes_json"])
+    writer.writerow([
+        "id",
+        "created_at",
+        "connector_id",
+        "platform",
+        "market_type",
+        "connector_label",
+        "symbol",
+        "display_symbol",
+        "timeframe",
+        "signal",
+        "status",
+        "status_reason",
+        "operational_states",
+        "ml_probability",
+        "quantity",
+        "notes_json",
+    ])
     for run in runs:
+        note = run.notes or ""
+        try:
+            parsed_note = json.loads(note) if note else {}
+        except json.JSONDecodeError:
+            parsed_note = {"raw_notes": note}
         connector = db.query(Connector).filter(Connector.id == run.connector_id).first()
+        reason_codes = _trade_run_reason_codes(run, parsed_note)
+        reason_code = reason_codes[0] if reason_codes else "ok"
+        connector_meta = _trade_run_connector_snapshot(connector, parsed_note)
         writer.writerow([
             run.id,
             run.created_at.isoformat() if run.created_at else "",
             run.connector_id,
-            connector.platform if connector else "-",
-            ensure_connector_market_type_state(connector, persist=False) if connector else "spot",
-            connector.label if connector else "-",
+            connector_meta["platform"],
+            connector_meta["market_type"],
+            connector_meta["connector_label"],
             run.symbol,
             _display_symbol(run.symbol),
             run.timeframe,
             run.signal,
             run.status,
-            _translate_status_reason(_trade_run_primary_reason(run)),
+            _translate_status_reason(reason_code),
+            "|".join(_operational_states_from_reason_codes(reason_codes, parsed_note)),
             run.ml_probability,
             run.quantity,
             run.notes or "",
@@ -1630,14 +1763,15 @@ def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_us
         except json.JSONDecodeError:
             parsed_note = {"raw_notes": note}
         connector = db.query(Connector).filter(Connector.id == run.connector_id).first()
-        decision_summary = parsed_note.get("decision_summary") or {}
-        reason_code = decision_summary.get("primary_reason") or parsed_note.get("reason_code") or "ok"
+        reason_codes = _trade_run_reason_codes(run, parsed_note)
+        reason_code = reason_codes[0] if reason_codes else "ok"
+        connector_meta = _trade_run_connector_snapshot(connector, parsed_note)
         payload.append({
             "id": run.id,
-            "connector_id": run.connector_id,
-            "connector_label": connector.label if connector else "-",
-            "platform": connector.platform if connector else "-",
-            "market_type": ensure_connector_market_type_state(connector, persist=False) if connector else "spot",
+            "connector_id": connector_meta["connector_id"] or run.connector_id,
+            "connector_label": connector_meta["connector_label"],
+            "platform": connector_meta["platform"],
+            "market_type": connector_meta["market_type"],
             "symbol": run.symbol,
             "display_symbol": _display_symbol(run.symbol),
             "strategy_slug": run.strategy_slug,
@@ -1646,6 +1780,8 @@ def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_us
             "status": run.status,
             "status_reason_code": reason_code,
             "status_reason": _translate_status_reason(reason_code),
+            "reason_codes": reason_codes,
+            "operational_states": _operational_states_from_reason_codes(reason_codes, parsed_note),
             "ml_probability": run.ml_probability,
             "quantity": run.quantity,
             "created_at": run.created_at.isoformat(),
