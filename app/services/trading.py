@@ -800,6 +800,146 @@ def _candle_payload(df) -> dict[str, Any]:
     }
 
 
+def _analysis_frame(frame, market_health: dict[str, Any] | None) -> tuple[Any, dict[str, Any]]:
+    health = market_health or {}
+    if frame.empty:
+        return frame, {
+            "used_confirmed_only": False,
+            "dropped_unconfirmed_candle": False,
+            "dropped_rows": 0,
+        }
+
+    if not health.get("has_unconfirmed_candle") or len(frame.index) <= 1:
+        return frame, {
+            "used_confirmed_only": False,
+            "dropped_unconfirmed_candle": False,
+            "dropped_rows": 0,
+        }
+
+    confirmed = frame.iloc[:-1].copy()
+    return confirmed, {
+        "used_confirmed_only": True,
+        "dropped_unconfirmed_candle": True,
+        "dropped_rows": 1,
+        "reason": "analysis_uses_last_closed_candle",
+    }
+
+
+def _signal_diagnostics(data) -> dict[str, Any]:
+    if data.empty:
+        return {}
+    from app.services.indicators import add_indicators
+
+    enriched = add_indicators(data.copy())
+    if enriched.empty:
+        return {}
+    row = enriched.iloc[-1]
+    return {
+        "ret_1": _safe_float(row.get("ret_1")),
+        "ret_5": _safe_float(row.get("ret_5")),
+        "vol_10": _safe_float(row.get("vol_10")),
+        "adx": _safe_float(row.get("adx")),
+        "ema_fast": _safe_float(row.get("ema_fast")),
+        "ema_slow": _safe_float(row.get("ema_slow")),
+        "rsi": _safe_float(row.get("rsi")),
+        "atr": _safe_float(row.get("atr")),
+        "atr_mean_20": _safe_float(row.get("atr_mean_20")),
+        "hh_20": _safe_float(row.get("hh_20")),
+        "ll_20": _safe_float(row.get("ll_20")),
+    }
+
+
+def _primary_reason(decision_reasons: list[str]) -> str:
+    if not decision_reasons:
+        return "ok"
+    priority = [
+        "invalid_symbol",
+        "missing_market_data",
+        "balance_unavailable",
+        "strategy_market_mismatch",
+        "max_open_positions",
+        "spot_sell_without_inventory",
+        "short_disabled",
+        "low_confidence",
+        "strategy_hold",
+        "last_candle_not_confirmed",
+    ]
+    for item in priority:
+        if item in decision_reasons:
+            return item
+    return decision_reasons[0]
+
+
+def _reason_details(decision_reasons: list[str], notes: dict[str, Any]) -> list[dict[str, Any]]:
+    signal_context = notes.get("signal_context") or {}
+    market_quality = notes.get("market_quality") or {}
+    pretrade = notes.get("pretrade") or {}
+    risk_plan = notes.get("risk_plan") or {}
+    details_map: dict[str, str] = {
+        "missing_market_data": "No se encontró OHLCV utilizable para analizar el símbolo.",
+        "last_candle_not_confirmed": "Se evitó operar porque la última vela todavía no cerró.",
+        "strategy_market_mismatch": "La estrategia seleccionada no está habilitada para este tipo de mercado.",
+        "invalid_symbol": "El exchange no reconoció el símbolo configurado para este conector.",
+        "strategy_hold": "La estrategia no encontró una entrada o salida válida en la última vela confirmada.",
+        "low_confidence": "La probabilidad ML quedó por debajo del umbral mínimo configurado.",
+        "max_open_positions": "Se alcanzó el número máximo de posiciones abiertas permitidas.",
+        "spot_sell_without_inventory": "En spot no había inventario disponible para vender.",
+        "short_disabled": "La estrategia no permite abrir cortos nuevos en futures.",
+        "balance_unavailable": "No fue posible consultar el balance real/paper del conector.",
+        "exchange_environment_not_ready": "No se pudo preparar correctamente el entorno del exchange antes de operar.",
+        "rejected_invalid_quantity": "La cantidad calculada terminó en cero o fuera del paso mínimo del exchange.",
+        "skipped_min_qty": "La cantidad no cumple el tamaño mínimo del mercado.",
+        "skipped_min_notional": "El nocional final quedó por debajo del mínimo exigido por el exchange.",
+        "market_price_mismatch": "El precio de referencia para ejecutar difiere demasiado del precio analizado.",
+        "suspicious_price_scale_detected": "El precio del exchange parece desescalado o inconsistente frente al análisis.",
+        "risk_engine_blocked": "El motor de riesgo bloqueó la operación por límites de exposición.",
+        "max_open_positions_reached": "El motor de riesgo bloqueó la operación por exceso de posiciones abiertas.",
+        "market_data_anomaly": "El motor de riesgo detectó anomalías en los datos de mercado.",
+    }
+    details: list[dict[str, Any]] = []
+    for code in decision_reasons:
+        detail: dict[str, Any] = {"code": code, "message": details_map.get(code, code.replace("_", " "))}
+        if code == "low_confidence":
+            detail["context"] = {
+                "ml_probability": notes.get("ml_probability_decimal"),
+                "min_ml_probability": notes.get("min_ml_probability"),
+            }
+        elif code in {"strategy_hold", "market_data_anomaly"}:
+            detail["context"] = {
+                "signal_context": signal_context,
+                "market_health": market_quality.get("health") or {},
+            }
+        elif code.startswith("skipped_") or code.startswith("rejected_") or code in {"market_price_mismatch", "suspicious_price_scale_detected"}:
+            detail["context"] = {
+                "reason_message": pretrade.get("reason_message"),
+                "exchange_filters": pretrade.get("exchange_filters") or {},
+            }
+        elif code in {"risk_engine_blocked", "max_open_positions_reached"}:
+            detail["context"] = risk_plan
+        elif code == "exchange_environment_not_ready":
+            detail["context"] = notes.get("execution_environment") or {}
+        details.append(detail)
+    return details
+
+
+def _status_from_reasons(decision_reasons: list[str], *, default: str = "skipped") -> str:
+    if not decision_reasons:
+        return default
+    primary = _primary_reason(decision_reasons)
+    return f"skipped_{primary}"[:30]
+
+
+def _annotate_decision(notes: dict[str, Any], decision_reasons: list[str], *, decision: str) -> None:
+    primary = _primary_reason(decision_reasons)
+    notes["decision_reasons"] = list(decision_reasons)
+    notes["decision_summary"] = {
+        "decision": decision,
+        "primary_reason": primary,
+        "reason_codes": list(decision_reasons),
+        "reason_details": _reason_details(decision_reasons, notes),
+    }
+
+
 def _resolve_trade_amount_config(
     user,
     *,
@@ -1003,13 +1143,15 @@ def run_strategy(
                 "symbol_source_mode": symbol_source_mode,
                 "dynamic_symbol_limit": dynamic_symbol_limit,
             }
+            notes["min_ml_probability"] = min_ml_probability
 
             market_health = market_result.meta.get("health") or {}
             market_anomalies = market_result.meta.get("anomalies") or {}
-            if frame.empty:
+            analysis_frame, analysis_meta = _analysis_frame(frame, market_health)
+            notes["analysis_frame"] = analysis_meta
+            notes["analysis_candle"] = _candle_payload(analysis_frame)
+            if frame.empty or analysis_frame.empty:
                 decision_reasons.append("missing_market_data")
-            elif market_health.get("has_unconfirmed_candle"):
-                decision_reasons.append("last_candle_not_confirmed")
             notes["market_quality"] = {
                 "source": market_result.meta.get("source"),
                 "health": market_health,
@@ -1030,7 +1172,16 @@ def run_strategy(
             if not normalized.get("found", False) and connector.platform in {"binance", "bybit", "okx"}:
                 decision_reasons.append("invalid_symbol")
 
+            execution_environment = client.prepare_execution_environment(
+                normalized_symbol,
+                leverage_profile=leverage_profile,
+            ) if hasattr(client, "prepare_execution_environment") else {"ok": True}
+            notes["execution_environment"] = execution_environment
+            if not execution_environment.get("ok", True):
+                decision_reasons.append("exchange_environment_not_ready")
+
             if decision_reasons:
+                _annotate_decision(notes, decision_reasons, decision="skipped_before_signal")
                 run = TradeRun(
                     user_id=user.id,
                     connector_id=connector.id,
@@ -1040,7 +1191,7 @@ def run_strategy(
                     signal="hold",
                     ml_probability=0.0,
                     quantity=0.0,
-                    status="skipped",
+                    status=_status_from_reasons(decision_reasons),
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
@@ -1048,7 +1199,8 @@ def run_strategy(
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
-            data = frame
+            data = analysis_frame
+            notes["signal_context"] = _signal_diagnostics(data)
             signal = strategy_fn(data)
             ml_probability = train_and_score(data)
             notes["signal"] = signal
@@ -1088,6 +1240,7 @@ def run_strategy(
                 decision_reasons.append("short_disabled")
 
             if decision_reasons:
+                _annotate_decision(notes, decision_reasons, decision="skipped_signal_validation")
                 run = TradeRun(
                     user_id=user.id,
                     connector_id=connector.id,
@@ -1097,7 +1250,7 @@ def run_strategy(
                     signal=signal,
                     ml_probability=ml_probability,
                     quantity=0.0,
-                    status="skipped",
+                    status=_status_from_reasons(decision_reasons),
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
@@ -1121,6 +1274,7 @@ def run_strategy(
             notes["balance"] = balance
             if not balance.get("ok"):
                 decision_reasons.append("balance_unavailable")
+                _annotate_decision(notes, decision_reasons, decision="skipped_balance")
                 run = TradeRun(
                     user_id=user.id,
                     connector_id=connector.id,
@@ -1130,7 +1284,7 @@ def run_strategy(
                     signal=signal,
                     ml_probability=ml_probability,
                     quantity=0.0,
-                    status="skipped",
+                    status=_status_from_reasons(decision_reasons),
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
@@ -1177,23 +1331,31 @@ def run_strategy(
             )
             notes["risk_plan"] = risk_plan.to_dict()
 
+            reduce_only = False
+            reduce_only_reason = None
+            if connector_market_type == "futures" and position_context.get("has_position"):
+                current_side = str(position_context.get("side") or "").lower()
+                wants_long = signal == "buy"
+                wants_short = signal == "sell"
+                if (wants_long and current_side == "short") or (wants_short and current_side == "long"):
+                    reduce_only = True
+                    reduce_only_reason = f"close_{current_side}_before_reentry"
+
             if connector_market_type != "futures" and signal == "sell":
                 quantity = max(
                     _safe_float(position_context.get("spot_base_free"), 0.0),
                     _safe_float(position_context.get("spot_base_total"), 0.0),
+                )
+            elif reduce_only:
+                quantity = max(
+                    abs(_safe_float(position_context.get("net_contracts"), 0.0)),
+                    current_symbol_notional / max(price, 0.0000001),
                 )
             else:
                 quantity = risk_plan.approved_qty
 
             if not risk_plan.approved and signal != "sell":
                 decision_reasons.extend(risk_plan.block_reasons or ["risk_engine_blocked"])
-
-            reduce_only = bool(
-                connector_market_type == "futures"
-                and signal == "sell"
-                and position_context.get("has_position")
-                and position_context.get("side") == "long"
-            )
             notes["order_preview"] = {
                 "price": price,
                 "stop_loss_price": stop_loss_price,
@@ -1204,8 +1366,28 @@ def run_strategy(
                 "estimated_notional": quantity * price,
                 "estimated_max_loss": quantity * abs(price - stop_loss_price),
                 "reduce_only": reduce_only,
+                "reduce_only_reason": reduce_only_reason,
                 "risk_plan": risk_plan.to_dict(),
             }
+
+            if decision_reasons:
+                _annotate_decision(notes, decision_reasons, decision="skipped_risk_validation")
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal=signal,
+                    ml_probability=ml_probability,
+                    quantity=quantity,
+                    status=_status_from_reasons(decision_reasons),
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                db.commit()
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
+                continue
 
             risk_context = {
                 "allow_adjust_up": True,
@@ -1233,6 +1415,7 @@ def run_strategy(
             notes["pretrade"] = pretrade
             if not pretrade.get("ok"):
                 decision_reasons.append(pretrade.get("reason_code") or "pretrade_rejected")
+                _annotate_decision(notes, decision_reasons, decision="skipped_pretrade")
                 run = TradeRun(
                     user_id=user.id,
                     connector_id=connector.id,
@@ -1242,7 +1425,7 @@ def run_strategy(
                     signal=signal,
                     ml_probability=ml_probability,
                     quantity=quantity,
-                    status="skipped",
+                    status=_status_from_reasons(decision_reasons),
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
@@ -1287,6 +1470,7 @@ def run_strategy(
                 notes["risk_orders"] = risk_orders
             except Exception as exc:
                 notes["execution_error"] = str(exc)
+                _annotate_decision(notes, ["exchange_rejected"], decision="rejected_exchange")
                 run = TradeRun(
                     user_id=user.id,
                     connector_id=connector.id,
@@ -1347,7 +1531,7 @@ def run_strategy(
                 if existing_position.current_qty <= 0:
                     existing_position.is_open = False
                     existing_position.closed_at = __import__("datetime").datetime.utcnow()
-                close_reason = "signal_close"
+                close_reason = reduce_only_reason or "signal_close"
             elif connector_market_type != "futures" and signal == "sell" and existing_position:
                 pnl = (result.fill_price - existing_position.entry_price) * result.quantity
                 existing_position.is_open = False
@@ -1355,6 +1539,23 @@ def run_strategy(
                 existing_position.closed_at = __import__("datetime").datetime.utcnow()
                 existing_position.last_trade_log_id = trade_run.id
                 close_reason = "spot_sell"
+            elif existing_position and existing_position.position_side == ("long" if signal == "buy" else "short"):
+                prior_qty = max(_safe_float(existing_position.current_qty), 0.0)
+                fill_qty = max(_safe_float(result.quantity), 0.0)
+                total_qty = prior_qty + fill_qty
+                if total_qty > 0:
+                    existing_position.entry_price = (
+                        (_safe_float(existing_position.entry_price) * prior_qty)
+                        + (_safe_float(result.fill_price) * fill_qty)
+                    ) / total_qty
+                existing_position.current_qty = total_qty
+                existing_position.last_trade_log_id = trade_run.id
+                existing_position.meta_json = {
+                    **(existing_position.meta_json or {}),
+                    "last_scale_in_at": __import__("datetime").datetime.utcnow().isoformat(),
+                    "last_fill_price": result.fill_price,
+                }
+                close_reason = "position_scaled_in"
             else:
                 new_position = OpenPosition(
                     user_id=user.id,
@@ -1395,6 +1596,9 @@ def run_strategy(
                 if not policy_ok:
                     raise RuntimeError(f"critical_missing_exit_policy:{','.join(policy_errors)}")
                 db.add(new_position)
+
+            _annotate_decision(notes, [], decision="executed")
+            trade_run.notes = json.dumps(notes, ensure_ascii=False)
 
             db.add(TradeLog(
                 user_id=user.id,

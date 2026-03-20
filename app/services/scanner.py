@@ -38,8 +38,11 @@ def _score_symbol(symbol: str, timeframe: str, connector=None) -> dict[str, Any]
     adx_component = adx * 0.6
     liquidity_component = min(volume / 100000.0, 5.0)
     price_component = 0.3 if close > 0 else -2.0
+    stretch_threshold = max(0.04, vol_10 * 2.0)
+    stretch_excess = max(abs(ret_5) - stretch_threshold, 0.0)
+    stretch_penalty = stretch_excess * 800.0
 
-    score = trend_bonus + momentum_component + volatility_component + adx_component + liquidity_component + price_component
+    score = trend_bonus + momentum_component + volatility_component + adx_component + liquidity_component + price_component - stretch_penalty
 
     return {
         "symbol": symbol,
@@ -51,6 +54,9 @@ def _score_symbol(symbol: str, timeframe: str, connector=None) -> dict[str, Any]
         "vol_10": round(vol_10, 6),
         "volume": round(volume, 4),
         "trend_up": ema_fast > ema_slow,
+        "stretch_threshold": round(stretch_threshold, 6),
+        "stretch_excess": round(stretch_excess, 6),
+        "stretch_penalty": round(stretch_penalty, 6),
         "data_source": data_source,
     }
 
