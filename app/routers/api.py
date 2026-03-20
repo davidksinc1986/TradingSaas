@@ -111,6 +111,12 @@ def _safe_symbols(value) -> list[str]:
     return [str(item).strip() for item in items if str(item).strip()]
 
 
+def _clean_optional_name(value: str | None, *, fallback: str | None = None) -> str | None:
+    candidate = value if value is not None else fallback
+    clean = str(candidate or "").strip()
+    return clean or None
+
+
 def _display_symbol(value: str | None) -> str:
     raw = str(value or "").strip().upper()
     if not raw:
@@ -120,6 +126,18 @@ def _display_symbol(value: str | None) -> str:
             clean = raw[: -len(suffix)]
             return clean.rstrip("/") or raw
     return raw
+
+
+def _session_display_name(session: BotSession | None, connector: Connector | None = None) -> str:
+    explicit = _clean_optional_name(getattr(session, "session_name", None) if session is not None else None)
+    if explicit:
+        return explicit
+    strategy_slug = _clean_optional_name(getattr(session, "strategy_slug", None) if session is not None else None, fallback="strategy")
+    connector_label = _clean_optional_name(getattr(connector, "label", None) if connector is not None else None)
+    if connector_label:
+        return f"{strategy_slug} · {connector_label}"
+    connector_id = getattr(session, "connector_id", None) if session is not None else None
+    return f"{strategy_slug} · Conector #{connector_id or '-'}"
 
 
 def _translate_status_reason(reason_code: str | None) -> str:
@@ -684,6 +702,44 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
     return payload
 
 
+@router.get("/connectors/{connector_id}/balance")
+def connector_balance(connector_id: int, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(Connector.id == connector_id, Connector.user_id == user.id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    ensure_connector_market_type_state(connector, persist=True, db=db)
+    client = get_client(connector)
+    try:
+        balance = client.fetch_available_balance()
+    except Exception as exc:
+        logger.exception("Failed fetching balance for connector_id=%s", connector.id)
+        return {
+            "connector_id": connector.id,
+            "connector_label": connector.label,
+            "platform": connector.platform,
+            "market_type": connector.market_type,
+            "ok": False,
+            "available_balance": None,
+            "total_balance": None,
+            "quote_asset": "USDT",
+            "source": "error",
+            "error": str(exc),
+        }
+
+    return {
+        "connector_id": connector.id,
+        "connector_label": connector.label,
+        "platform": connector.platform,
+        "market_type": connector.market_type,
+        "ok": bool(balance.get("ok", True)),
+        "available_balance": _safe_float(balance.get("available_balance"), 0.0),
+        "total_balance": _safe_float(balance.get("total_balance"), 0.0),
+        "quote_asset": str(balance.get("quote_asset") or "USDT").upper(),
+        "source": balance.get("source") or "unknown",
+    }
+
+
 @router.post("/connectors")
 def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = Depends(current_user)):
     target_user_id = payload.user_id or user.id
@@ -986,6 +1042,8 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             session_market_type = normalize_market_type(getattr(session, "market_type", None))
             payload.append({
                 "id": session.id,
+                "session_name": _clean_optional_name(getattr(session, "session_name", None)),
+                "display_name": _session_display_name(session, connector),
                 "connector_id": session.connector_id,
                 "connector_label": connector.label if connector else "-",
                 "platform": connector.platform if connector else "-",
@@ -999,6 +1057,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "interval_minutes": session.interval_minutes,
                 "risk_per_trade": session.risk_per_trade,
                 "min_ml_probability": session.min_ml_probability,
+                "use_live_if_available": bool(getattr(session, "use_live_if_available", False)),
                 "take_profit_mode": session.take_profit_mode,
                 "take_profit_value": session.take_profit_value,
                 "stop_loss_mode": session.stop_loss_mode,
@@ -1031,6 +1090,8 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             serialization_errors.append(detail)
             payload.append({
                 "id": getattr(session, "id", None),
+                "session_name": _clean_optional_name(getattr(session, "session_name", None)),
+                "display_name": _session_display_name(session, None),
                 "connector_id": getattr(session, "connector_id", None),
                 "connector_label": "-",
                 "platform": "-",
@@ -1044,6 +1105,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "interval_minutes": getattr(session, "interval_minutes", 5),
                 "risk_per_trade": _safe_float(getattr(session, "risk_per_trade", 0.0)),
                 "min_ml_probability": _safe_float(getattr(session, "min_ml_probability", 0.0)),
+                "use_live_if_available": bool(getattr(session, "use_live_if_available", False)),
                 "take_profit_mode": "percent",
                 "take_profit_value": 1.5,
                 "stop_loss_mode": "percent",
@@ -1107,6 +1169,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         session = BotSession(
             user_id=user.id,
             connector_id=connector.id,
+            session_name=_clean_optional_name(payload.session_name),
             market_type=resolved_market_type,
             strategy_slug=payload.strategy_slug,
             timeframe=normalized_timeframe,
@@ -1174,6 +1237,8 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
         if payload.is_active is not None:
             session.is_active = payload.is_active
+        if payload.session_name is not None:
+            session.session_name = _clean_optional_name(payload.session_name)
         if payload.symbols is not None:
             current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
             current_symbols_json["symbols"] = payload.symbols
@@ -1309,6 +1374,7 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         cloned = BotSession(
             user_id=user.id,
             connector_id=connector.id,
+            session_name=_clean_optional_name(getattr(source, "session_name", None)),
             market_type=resolve_runtime_market_type(connector, requested_market_type=getattr(source, "market_type", None)),
             strategy_slug=source.strategy_slug,
             timeframe=source.timeframe,
@@ -1570,6 +1636,7 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        session_name=_clean_optional_name(cfg.get("session_name")) or _clean_optional_name(template.name),
         market_type=resolve_runtime_market_type(connector, requested_market_type=cfg.get("market_type")),
         strategy_slug=cfg.get("strategy_slug", "ema_rsi"),
         timeframe=cfg.get("timeframe", "5m"),
@@ -2144,6 +2211,8 @@ def admin_user_profile(user_id: int, db=Depends(get_db), _: User = Depends(admin
         } for run in recent_runs],
         "recent_sessions": [{
             "id": session.id,
+            "session_name": _clean_optional_name(getattr(session, "session_name", None)),
+            "display_name": _session_display_name(session, next((c for c in connectors if c.id == session.connector_id), None)),
             "strategy_slug": session.strategy_slug,
             "connector_label": next((c.label for c in connectors if c.id == session.connector_id), "-"),
             "market_type": normalize_market_type(session.market_type),
