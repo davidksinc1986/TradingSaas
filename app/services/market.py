@@ -146,6 +146,45 @@ def _cache_key(connector, symbol: str, timeframe: str, limit: int) -> tuple[Any,
     )
 
 
+def _normalize_frame_price_scale(frame: pd.DataFrame, exchange_price: float | None) -> tuple[pd.DataFrame, dict[str, Any]]:
+    meta = {"applied": False, "scale_ratio": None, "difference_pct_before": None, "difference_pct_after": None}
+    if frame.empty or exchange_price in (None, 0, 0.0):
+        return frame, meta
+
+    try:
+        bot_price = float(frame.iloc[-1]["close"])
+        exchange_value = float(exchange_price)
+    except Exception:
+        return frame, meta
+
+    if bot_price <= 0 or exchange_value <= 0:
+        return frame, meta
+
+    difference_pct = abs(bot_price - exchange_value) / max(exchange_value, 0.0000001) * 100.0
+    meta["difference_pct_before"] = round(difference_pct, 6)
+    if difference_pct <= 25.0:
+        meta["difference_pct_after"] = meta["difference_pct_before"]
+        return frame, meta
+
+    scale_ratio = exchange_value / max(bot_price, 0.0000001)
+    if scale_ratio <= 0 or scale_ratio != scale_ratio:
+        return frame, meta
+
+    normalized = frame.copy()
+    for column in ("open", "high", "low", "close"):
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce") * scale_ratio
+    normalized = normalized.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
+    if normalized.empty:
+        return frame, meta
+
+    meta.update({
+        "applied": True,
+        "scale_ratio": round(float(scale_ratio), 10),
+        "difference_pct_after": round(abs(float(normalized.iloc[-1]["close"]) - exchange_value) / max(exchange_value, 0.0000001) * 100.0, 6),
+    })
+    return normalized, meta
+
+
 def fetch_ohlcv_frame(connector, symbol: str, timeframe: str = "1h", limit: int = 300, *, use_cache: bool = True) -> MarketFrameResult:
     from app.services.connectors import CCXTConnectorClient, get_client
 
@@ -190,6 +229,13 @@ def fetch_ohlcv_frame(connector, symbol: str, timeframe: str = "1h", limit: int 
         except Exception as exc:
             notes.append(f"exchange_ohlcv_failed:{exc}")
 
+    normalization_meta = {"applied": False, "scale_ratio": None, "difference_pct_before": None, "difference_pct_after": None}
+    if not frame.empty and exchange_price not in (None, 0, 0.0):
+        frame, normalization_meta = _normalize_frame_price_scale(frame, exchange_price)
+        if normalization_meta.get("applied"):
+            difference_pct = normalization_meta.get("difference_pct_after")
+            notes.append("normalized_ohlcv_price_scale")
+
     if frame.empty:
         frame = synthetic_ohlcv(symbol=normalized_symbol, periods=limit, timeframe=timeframe)
 
@@ -207,6 +253,7 @@ def fetch_ohlcv_frame(connector, symbol: str, timeframe: str = "1h", limit: int 
             "exchange_price": exchange_price,
             "bot_price": float(frame.iloc[-1]["close"]) if not frame.empty else None,
             "difference_pct": round(difference_pct, 6) if difference_pct is not None else None,
+            "price_normalization": normalization_meta,
             "health": health,
             "anomalies": anomalies,
             "notes": notes or (["using_synthetic_data"] if source == "synthetic_fallback" else []),

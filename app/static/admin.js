@@ -63,20 +63,40 @@ function renderAdminOverview() {
     ].join('');
   }
   if (platformWrap) {
-    platformWrap.innerHTML = (overview.platforms || []).map((item) => `
+    const platformCards = (overview.platforms || []).map((item) => `
       <article class="quantum-report-item">
         <strong>${item.platform.toUpperCase()}</strong>
         <small>Total ${item.total} · habilitados ${item.enabled} · live ${item.live}</small>
       </article>
-    `).join('') || '<small class="hint">Sin plataformas registradas.</small>';
+    `).join('');
+    const marketCards = (overview.markets || []).map((item) => `
+      <article class="quantum-report-item">
+        <strong>${String(item.market_type || '-').toUpperCase()}</strong>
+        <small>Total ${item.total} · habilitados ${item.enabled} · live ${item.live}</small>
+      </article>
+    `).join('');
+    const connectorCards = (overview.connectors || []).map((item) => `
+      <article class="quantum-report-item">
+        <strong>${item.label}</strong>
+        <small>${item.platform} · ${item.market_type} · runs ${item.runs || 0} · trades ${item.trades || 0}</small>
+      </article>
+    `).join('');
+    platformWrap.innerHTML = [platformCards, marketCards, connectorCards].filter(Boolean).join('') || '<small class="hint">Sin plataformas registradas.</small>';
   }
   if (eventsWrap) {
-    eventsWrap.innerHTML = (overview.events || []).map((item) => `
+    const runEvents = (overview.events || []).map((item) => `
       <article class="quantum-report-item">
         <strong>${item.symbol} · ${item.status}</strong>
         <small>${item.reason} · ${formatDate(item.created_at)}</small>
       </article>
-    `).join('') || '<small class="hint">Sin eventos recientes.</small>';
+    `).join('');
+    const tradeEvents = (overview.trade_logs || []).map((item) => `
+      <article class="quantum-report-item">
+        <strong>${item.symbol} · ${item.side} · ${item.status}</strong>
+        <small>${item.platform} · ${formatDate(item.created_at)}</small>
+      </article>
+    `).join('');
+    eventsWrap.innerHTML = [runEvents, tradeEvents].filter(Boolean).join('') || '<small class="hint">Sin eventos recientes.</small>';
   }
 }
 
@@ -506,7 +526,7 @@ async function refreshAdmin() {
   });
   const [users, policies, overview] = values;
   usersState = Array.isArray(users) ? users : [];
-  adminOverviewState = overview || {
+  adminOverviewState = overview || adminOverviewState || {
     metrics: {
       users_total: usersState.length,
       users_active: usersState.filter((user) => user.is_active).length,
@@ -519,7 +539,10 @@ async function refreshAdmin() {
       recent_run_errors: 0,
     },
     platforms: [],
+    markets: [],
+    connectors: [],
     events: [],
+    trade_logs: [],
   };
   renderUserList();
   renderPolicies(Array.isArray(policies) ? policies : []);
@@ -529,11 +552,10 @@ async function refreshAdmin() {
   } else {
     document.getElementById('selected-user-profile').innerHTML = '<small class="hint">No hay usuarios disponibles.</small>';
   }
-  const relevantFailures = failures.filter((item) => !item.startsWith('overview: Not Found'));
-  if (relevantFailures.length) {
-    setFeedback(`Panel cargado parcialmente: ${relevantFailures.join(' | ')}`, 'error');
-  } else if (failures.length) {
-    setFeedback('Panel cargado con fallback local mientras se recompone el overview.', 'ok');
+  if (failures.length) {
+    setFeedback(`Panel cargado parcialmente: ${failures.join(' | ')}`, 'error');
+  } else {
+    setFeedback('Panel administrativo actualizado.', 'ok');
   }
 }
 

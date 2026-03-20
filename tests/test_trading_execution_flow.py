@@ -590,3 +590,25 @@ def test_run_strategy_scales_into_existing_spot_position_instead_of_creating_dup
     trade_run = db.query(TradeRun).order_by(TradeRun.id.desc()).first()
     notes = json.loads(trade_run.notes)
     assert notes["decision_summary"]["decision"] == "executed"
+
+
+def test_resolve_connector_trade_amount_config_uses_connector_defaults_on_inherit():
+    connector = type("Connector", (), {
+        "platform": "binance",
+        "market_type": "futures",
+        "config_json": {"trade_amount_mode": "fixed_usd", "fixed_trade_amount_usd": 25},
+        "symbols_json": {"symbols": ["BTC/USDT"]},
+    })()
+    user = type("User", (), {"trade_amount_mode": "balance_percent", "fixed_trade_amount_usd": 99, "trade_balance_percent": 15})()
+
+    result = trading._resolve_connector_trade_amount_config(
+        user,
+        connector,
+        trade_amount_mode="inherit",
+        fixed_trade_amount_usd=None,
+        trade_balance_percent=None,
+    )
+
+    assert result["mode"] == "fixed_usd"
+    assert result["fixed_trade_amount_usd"] == 25
+    assert result["trade_balance_percent"] == 0.0
