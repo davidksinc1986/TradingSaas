@@ -941,6 +941,56 @@ def _annotate_decision(notes: dict[str, Any], decision_reasons: list[str], *, de
     }
 
 
+def _recommended_connector_fixed_amount(connector) -> float:
+    config = getattr(connector, "config_json", {}) if connector is not None else {}
+    market_type = getattr(connector, "market_type", None) if connector is not None else None
+    platform = getattr(connector, "platform", None) if connector is not None else None
+    baseline = 10.0 if str(platform or "").lower() == "binance" else 5.0
+    if str(market_type or "").lower() == "futures":
+        baseline = max(baseline, 5.0)
+    symbols = ((getattr(connector, "symbols_json", {}) or {}).get("symbols") or []) if connector is not None else []
+    for symbol in symbols:
+        base = str(symbol or "").upper().split("/")[0].replace("USDT", "")
+        if base.startswith("BTC"):
+            baseline = max(baseline, 10.0)
+        elif base.startswith(("ETH", "BNB", "SOL")):
+            baseline = max(baseline, 5.0)
+    raw_value = _safe_float((config or {}).get("fixed_trade_amount_usd", (config or {}).get("allocation_value")), 0.0)
+    return raw_value if raw_value > 0 else baseline
+
+
+def _resolve_connector_trade_amount_config(
+    user,
+    connector,
+    *,
+    trade_amount_mode: str | None = None,
+    fixed_trade_amount_usd: float | None = None,
+    trade_balance_percent: float | None = None,
+) -> dict[str, float | str]:
+    mode = str(trade_amount_mode or "").strip().lower()
+    if mode == "inherit":
+        mode = str(((getattr(connector, "config_json", {}) or {}).get("trade_amount_mode") or "fixed_usd")).lower()
+        fixed_trade_amount_usd = _safe_float(
+            fixed_trade_amount_usd if fixed_trade_amount_usd is not None else ((getattr(connector, "config_json", {}) or {}).get("fixed_trade_amount_usd")),
+            0.0,
+        )
+        trade_balance_percent = _safe_float(
+            trade_balance_percent if trade_balance_percent is not None else ((getattr(connector, "config_json", {}) or {}).get("trade_balance_percent")),
+            0.0,
+        )
+    resolved = _resolve_trade_amount_config(
+        user,
+        trade_amount_mode=mode or trade_amount_mode,
+        fixed_trade_amount_usd=fixed_trade_amount_usd,
+        trade_balance_percent=trade_balance_percent,
+    )
+    if str(resolved["mode"]).lower() == "fixed_usd" and _safe_float(resolved["fixed_trade_amount_usd"], 0.0) <= 0:
+        resolved["fixed_trade_amount_usd"] = _recommended_connector_fixed_amount(connector)
+    if str(resolved["mode"]).lower() == "balance_percent" and _safe_float(resolved["trade_balance_percent"], 0.0) <= 0:
+        resolved["trade_balance_percent"] = 10.0
+    return resolved
+
+
 def _resolve_trade_amount_config(
     user,
     *,
@@ -1095,12 +1145,11 @@ def run_strategy(
     bot_session = None
     if bot_session_id is not None:
         bot_session = db.query(BotSession).filter(BotSession.id == bot_session_id, BotSession.user_id == user_id).first()
-    trade_amount_config = _resolve_trade_amount_config(
-        user,
-        trade_amount_mode=trade_amount_mode,
-        fixed_trade_amount_usd=fixed_trade_amount_usd,
-        trade_balance_percent=trade_balance_percent,
-    )
+    requested_trade_amount_config = {
+        "trade_amount_mode": trade_amount_mode,
+        "fixed_trade_amount_usd": fixed_trade_amount_usd,
+        "trade_balance_percent": trade_balance_percent,
+    }
 
     results: list[dict[str, Any]] = []
 
@@ -1112,6 +1161,13 @@ def run_strategy(
         ensure_connector_market_type_state(connector, persist=True, db=db)
         connector_market_type = resolve_runtime_market_type(connector, requested_market_type=market_type)
         runtime_connector = build_runtime_connector(connector, market_type=connector_market_type)
+        trade_amount_config = _resolve_connector_trade_amount_config(
+            user,
+            runtime_connector,
+            trade_amount_mode=requested_trade_amount_config["trade_amount_mode"],
+            fixed_trade_amount_usd=requested_trade_amount_config["fixed_trade_amount_usd"],
+            trade_balance_percent=requested_trade_amount_config["trade_balance_percent"],
+        )
 
         client = get_connector_client(runtime_connector)
         lifecycle_meta = run_position_lifecycle(db, connector_ids=[connector.id])

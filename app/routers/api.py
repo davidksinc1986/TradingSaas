@@ -501,16 +501,17 @@ def _connector_trade_amount_defaults(connector: Connector | None) -> dict[str, f
         symbols=_safe_symbols(getattr(connector, "symbols_json", {})) if connector is not None else [],
         market_type=getattr(connector, "market_type", None) if connector is not None else None,
     )
+    raw_fixed_value = _safe_float(config.get("fixed_trade_amount_usd", config.get("allocation_value")), 0.0)
+    raw_balance_percent = _safe_float(config.get("trade_balance_percent"), 0.0)
     if mode == "balance_percent":
         return {
             "trade_amount_mode": "balance_percent",
             "amount_per_trade": None,
-            "amount_percentage": _safe_float(config.get("trade_balance_percent"), DEFAULT_SESSION_BALANCE_PERCENT),
+            "amount_percentage": raw_balance_percent if raw_balance_percent > 0 else DEFAULT_SESSION_BALANCE_PERCENT,
         }
-    fixed_value = config.get("fixed_trade_amount_usd", config.get("allocation_value"))
     return {
         "trade_amount_mode": "fixed_usd",
-        "amount_per_trade": _safe_float(fixed_value, recommended_fixed),
+        "amount_per_trade": raw_fixed_value if raw_fixed_value > 0 else recommended_fixed,
         "amount_percentage": None,
     }
 
@@ -2486,8 +2487,11 @@ def admin_overview(db=Depends(get_db), _: User = Depends(admin_user)):
     connectors = db.query(Connector).all()
     sessions = db.query(BotSession).all()
     recent_runs = db.query(TradeRun).order_by(TradeRun.created_at.desc()).limit(20).all()
+    recent_trade_logs = db.query(TradeLog).order_by(TradeLog.created_at.desc()).limit(20).all()
 
     platform_summary: dict[str, dict[str, int]] = {}
+    market_summary: dict[str, dict[str, int]] = {}
+    connector_summary: dict[str, dict[str, Any]] = {}
     for connector in connectors:
         platform = str(connector.platform or "-")
         bucket = platform_summary.setdefault(platform, {"total": 0, "enabled": 0, "live": 0})
@@ -2497,9 +2501,39 @@ def admin_overview(db=Depends(get_db), _: User = Depends(admin_user)):
         if str(connector.mode or "").lower() == "live" and connector.is_enabled:
             bucket["live"] += 1
 
+        market_type = normalize_market_type(getattr(connector, "market_type", None))
+        market_bucket = market_summary.setdefault(market_type, {"total": 0, "enabled": 0, "live": 0})
+        market_bucket["total"] += 1
+        if connector.is_enabled:
+            market_bucket["enabled"] += 1
+        if str(connector.mode or "").lower() == "live" and connector.is_enabled:
+            market_bucket["live"] += 1
+
+        connector_bucket = connector_summary.setdefault(str(connector.id), {
+            "connector_id": connector.id,
+            "label": connector.label,
+            "platform": connector.platform,
+            "market_type": market_type,
+            "runs": 0,
+            "trades": 0,
+            "last_event_at": None,
+        })
+        connector_bucket["enabled"] = bool(connector.is_enabled)
+
     events = []
     for run in recent_runs:
         primary_reason = _trade_run_primary_reason(run)
+        connector_bucket = connector_summary.setdefault(str(run.connector_id), {
+            "connector_id": run.connector_id,
+            "label": f"Conector #{run.connector_id}",
+            "platform": "-",
+            "market_type": "spot",
+            "runs": 0,
+            "trades": 0,
+            "last_event_at": None,
+        })
+        connector_bucket["runs"] += 1
+        connector_bucket["last_event_at"] = connector_bucket["last_event_at"] or _safe_iso(run.created_at)
         events.append({
             "id": run.id,
             "created_at": _safe_iso(run.created_at),
@@ -2507,6 +2541,29 @@ def admin_overview(db=Depends(get_db), _: User = Depends(admin_user)):
             "status": run.status,
             "reason": _translate_status_reason(primary_reason),
             "connector_id": run.connector_id,
+        })
+
+    trade_log_events = []
+    for trade in recent_trade_logs:
+        connector_bucket = connector_summary.setdefault(str(trade.connector_id), {
+            "connector_id": trade.connector_id,
+            "label": f"Conector #{trade.connector_id}",
+            "platform": trade.platform,
+            "market_type": "spot",
+            "runs": 0,
+            "trades": 0,
+            "last_event_at": None,
+        })
+        connector_bucket["trades"] += 1
+        connector_bucket["last_event_at"] = connector_bucket["last_event_at"] or _safe_iso(trade.created_at)
+        trade_log_events.append({
+            "id": trade.id,
+            "created_at": _safe_iso(trade.created_at),
+            "symbol": _display_symbol(trade.symbol),
+            "status": trade.status,
+            "side": trade.side,
+            "platform": trade.platform,
+            "connector_id": trade.connector_id,
         })
 
     errored_sessions = [
@@ -2531,7 +2588,13 @@ def admin_overview(db=Depends(get_db), _: User = Depends(admin_user)):
             {"platform": platform, **values}
             for platform, values in sorted(platform_summary.items(), key=lambda entry: entry[0])
         ],
+        "markets": [
+            {"market_type": market_type, **values}
+            for market_type, values in sorted(market_summary.items(), key=lambda entry: entry[0])
+        ],
+        "connectors": sorted(connector_summary.values(), key=lambda item: ((item.get("runs") or 0) + (item.get("trades") or 0), item.get("label") or ""), reverse=True)[:12],
         "events": events,
+        "trade_logs": trade_log_events,
     }
 
 

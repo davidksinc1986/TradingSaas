@@ -136,6 +136,8 @@ const FIELD_ADVISORY_CONFIG = {
   },
 };
 
+const DASHBOARD_TAB_STORAGE_KEY = 'trading-saas.dashboard.active-tab';
+
 const state = {
   me: null,
   summary: null,
@@ -394,14 +396,28 @@ function getConnectorById(connectorId) {
   return state.connectors.find((item) => item.id === Number(connectorId)) || null;
 }
 
+function activateTab(tabName) {
+  const buttons = Array.from(document.querySelectorAll('#dashboard-tabs .tab-btn'));
+  const normalized = String(tabName || 'profile');
+  const fallback = buttons.find((button) => button.dataset.tab === normalized) || buttons[0];
+  if (!fallback) return;
+  buttons.forEach((btn) => btn.classList.toggle('active', btn === fallback));
+  document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${fallback.dataset.tab}`));
+  try {
+    window.localStorage?.setItem(DASHBOARD_TAB_STORAGE_KEY, fallback.dataset.tab);
+  } catch (_error) {}
+}
+
 function initTabs() {
   const buttons = Array.from(document.querySelectorAll('#dashboard-tabs .tab-btn'));
   buttons.forEach((button) => {
-    button.addEventListener('click', () => {
-      buttons.forEach((btn) => btn.classList.toggle('active', btn === button));
-      document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${button.dataset.tab}`));
-    });
+    button.addEventListener('click', () => activateTab(button.dataset.tab));
   });
+  let savedTab = 'profile';
+  try {
+    savedTab = window.localStorage?.getItem(DASHBOARD_TAB_STORAGE_KEY) || savedTab;
+  } catch (_error) {}
+  activateTab(savedTab);
 }
 
 function renderStrategyOptions() {
@@ -818,89 +834,91 @@ function renderBotSessions() {
 }
 
 function renderExecutionLogs() {
-  const body = document.querySelector('#execution-logs-table tbody');
-  if (!body) return;
+  const board = document.getElementById('execution-logs-board');
+  if (!board) return;
   if (!state.executionLogs.length) {
-    body.innerHTML = '<tr><td colspan="8"><small class="hint">Sin logs todavía.</small></td></tr>';
+    board.innerHTML = '<article class="log-market-card"><small class="hint">Sin logs todavía.</small></article>';
     return;
   }
   const groups = new Map();
   state.executionLogs.forEach((item) => {
     const connectorLabel = prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`);
-    const key = [connectorLabel, prettyPlatform(item.platform), prettyMarketType(item.market_type, item.connector_id)].join('||');
+    const key = [prettyMarketType(item.market_type, item.connector_id), prettyPlatform(item.platform), connectorLabel].join('||');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   });
 
-  body.innerHTML = Array.from(groups.entries()).map(([key, rows]) => {
-    const [connectorLabel, platform, marketType] = key.split('||');
-    const title = `${connectorLabel} · ${platform} · ${marketType}`;
-    const logRows = rows.map((item) => {
+  board.innerHTML = Array.from(groups.entries()).map(([key, rows]) => {
+    const [marketType, platform, connectorLabel] = key.split('||');
+    const itemsMarkup = rows.map((item) => {
       const states = Array.isArray(item.operational_states) && item.operational_states.length ? item.operational_states : ['operativa_normal'];
       const detail = buildLogDetails(item);
       const detailId = `log-detail-${item.id}`;
       return `
-        <tr class="log-entry-row" data-log-toggle="${detailId}">
-          <td>${formatDate(item.created_at)}</td>
-          <td>
-            <strong>${escapeHtml(prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`))}</strong>
-            <div class="connector-meta">
-              <span>${escapeHtml(prettyLabel(item.bot_session_display_name || item.bot_session_name, item.strategy_slug || 'Sesión'))}</span>
-              <span>${escapeHtml(prettyPlatform(item.platform))}</span>
-              <span>${escapeHtml(prettyMarketType(item.market_type, item.connector_id))}</span>
+        <article class="log-entry-card" data-log-toggle="${detailId}">
+          <div class="row-between log-entry-card-head">
+            <div>
+              <strong>${escapeHtml(item.display_symbol || displaySymbol(item.symbol))}</strong>
+              <div class="connector-meta">
+                <span>${formatDate(item.created_at)}</span>
+                <span>${escapeHtml(prettyLabel(item.bot_session_display_name || item.bot_session_name, item.strategy_slug || 'Sesión'))}</span>
+                <span>${escapeHtml(item.timeframe || '-')}</span>
+                <span>${escapeHtml(item.signal || '-')}</span>
+              </div>
             </div>
-          </td>
-          <td>${escapeHtml(item.display_symbol || displaySymbol(item.symbol))}</td>
-          <td>${escapeHtml(item.timeframe || '-')}</td>
-          <td>${escapeHtml(item.signal || '-')}</td>
-          <td><span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span></td>
-          <td>${escapeHtml(formatDecisionReason(item.status_reason || item.status_reason_code || item.status || '-'))}</td>
-          <td>
-            <div class="chip-wrap">
-              ${states.map((stateCode) => `<span class="chip chip-static">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
+            <div class="log-entry-status-stack">
+              <span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span>
+              <small>${escapeHtml(formatDecisionReason(item.status_reason || item.status_reason_code || item.status || '-'))}</small>
             </div>
-          </td>
-        </tr>
-        <tr class="log-detail-row hidden" id="${detailId}">
-          <td colspan="8">
-            <div class="log-detail-card">
-              <div class="log-detail-grid">
-                <div>
-                  <strong>Razones relevantes</strong>
-                  <ul class="log-reason-list">
-                    ${(detail.reasonDetails.length ? detail.reasonDetails : [formatDecisionReason(item.status_reason)]).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
-                  </ul>
-                </div>
-                <div>
-                  <strong>Highlights</strong>
-                  <ul class="log-reason-list">
-                    ${(detail.highlights.length ? detail.highlights : ['Sin explicación adicional reportada.']).map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
-                  </ul>
-                </div>
+          </div>
+          <div class="chip-wrap">
+            ${states.map((stateCode) => `<span class="chip chip-static">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
+          </div>
+          <section class="log-detail-card hidden" id="${detailId}">
+            <div class="log-detail-grid">
+              <div>
+                <strong>Razones relevantes</strong>
+                <ul class="log-reason-list">
+                  ${(detail.reasonDetails.length ? detail.reasonDetails : [formatDecisionReason(item.status_reason)]).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
+                </ul>
               </div>
               <div>
-                <strong>Detalle técnico</strong>
-                <pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>
+                <strong>Highlights</strong>
+                <ul class="log-reason-list">
+                  ${(detail.highlights.length ? detail.highlights : ['Sin explicación adicional reportada.']).map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
+                </ul>
               </div>
             </div>
-          </td>
-        </tr>
+            <div>
+              <strong>Detalle técnico</strong>
+              <pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>
+            </div>
+          </section>
+        </article>
       `;
     }).join('');
     return `
-      <tr class="log-group-row">
-        <td colspan="8">
-          <strong>${escapeHtml(title)}</strong>
-          <small class="hint">${rows.length} evento(s) agrupados por conector.</small>
-        </td>
-      </tr>
-      ${logRows}
+      <section class="log-market-card">
+        <div class="row-between">
+          <div>
+            <strong>${escapeHtml(marketType)} · ${escapeHtml(platform)}</strong>
+            <div class="connector-meta">
+              <span>${escapeHtml(connectorLabel)}</span>
+              <span>${rows.length} evento(s)</span>
+            </div>
+          </div>
+        </div>
+        <div class="log-entry-stack">
+          ${itemsMarkup}
+        </div>
+      </section>
     `;
   }).join('');
-  body.querySelectorAll('[data-log-toggle]').forEach((row) => {
-    row.addEventListener('click', () => {
-      const detailRow = document.getElementById(row.dataset.logToggle);
-      detailRow?.classList.toggle('hidden');
+  board.querySelectorAll('[data-log-toggle]').forEach((card) => {
+    card.addEventListener('click', (event) => {
+      const detail = card.querySelector(`#${card.dataset.logToggle}`);
+      if (event.target.closest('pre')) return;
+      detail?.classList.toggle('hidden');
     });
   });
   const meta = document.getElementById('execution-logs-refresh-meta');

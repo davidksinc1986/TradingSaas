@@ -2,14 +2,14 @@
 {% block content %}
 <section class="dashboard-header dashboard-header-grid hero-glass">
   <div>
-    <span class="pill">Hola, {{ user.name }}</span>
-    <h1>Centro operativo</h1>
-    <p>Configura perfil, conectores, estrategias y monitorea la operación en una sola vista.</p>
+    <span class="pill">{{ tr('dashboard.greeting') }}, {{ user.name }}</span>
+    <h1>{{ tr('dashboard.title') }}</h1>
+    <p>{{ tr('dashboard.subtitle') }}</p>
   </div>
   <aside class="card economic-summary" id="economic-summary">
     <div class="row-between">
-      <h3>Resumen de cuenta</h3>
-      <small class="hint">Actualizado en vivo</small>
+      <h3>{{ tr('dashboard.account_summary') }}</h3>
+      <small class="hint">{{ tr('dashboard.live_updated') }}</small>
     </div>
     <div class="economic-grid economic-grid-compact">
       <div class="economic-item"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
@@ -22,10 +22,10 @@
 </section>
 
 <section class="tabs" id="dashboard-tabs">
-  <button class="tab-btn active" type="button" data-tab="profile">Perfil</button>
-  <button class="tab-btn" type="button" data-tab="connectors">Conectores</button>
-  <button class="tab-btn" type="button" data-tab="automation">Automatización</button>
-  <button class="tab-btn" type="button" data-tab="activity">Actividad</button>
+  <button class="tab-btn active" type="button" data-tab="profile">{{ tr('dashboard.tab_profile') }}</button>
+  <button class="tab-btn" type="button" data-tab="connectors">{{ tr('dashboard.tab_connectors') }}</button>
+  <button class="tab-btn" type="button" data-tab="automation">{{ tr('dashboard.tab_automation') }}</button>
+  <button class="tab-btn" type="button" data-tab="activity">{{ tr('dashboard.tab_activity') }}</button>
 </section>
 
 <section id="tab-profile" class="tab-panel active">
@@ -289,23 +289,7 @@
       </div>
     </div>
     <small class="hint" id="execution-logs-refresh-meta">Mostrando últimos logs.</small>
-    <div class="table-wrap" style="margin-top:12px;">
-      <table id="execution-logs-table">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th>Conector</th>
-            <th>Símbolo</th>
-            <th>Timeframe</th>
-            <th>Señal</th>
-            <th>Estado</th>
-            <th>Razón de estado</th>
-            <th>Razones operativas</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
+    <div id="execution-logs-board" class="execution-logs-board" style="margin-top:12px;"></div>
   </article>
 </section>
 

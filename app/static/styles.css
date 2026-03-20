@@ -360,6 +360,16 @@ select[multiple]{min-height:120px}
 .strategy-wizard-card textarea{width:100%;min-height:110px;background:#0f1217;color:#f8fafc;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px}
 .strategy-wizard-card label{display:grid;gap:6px}
 .strategy-wizard-card .modal-list li{margin-bottom:6px}
+.execution-logs-board{display:grid;gap:14px}
+.log-market-card{padding:14px;border:1px solid rgba(255,255,255,.09);border-radius:16px;background:linear-gradient(180deg,rgba(17,24,39,.92),rgba(15,15,15,.98));display:grid;gap:12px}
+.log-entry-stack{display:grid;gap:10px}
+.log-entry-card{padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#0f1319;display:grid;gap:10px;cursor:pointer}
+.log-entry-card:hover{border-color:rgba(240,185,11,.35)}
+.log-entry-card-head{align-items:flex-start;gap:12px}
+.log-entry-status-stack{display:grid;justify-items:end;gap:4px;text-align:right}
+.log-detail-card{padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:#0b0f14}
+.log-detail-card pre{max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+@media (max-width: 720px){.log-entry-card-head{grid-template-columns:1fr;display:grid}.log-entry-status-stack{justify-items:start;text-align:left}}
 
 /* Dashboard redesign v2: cleaner visual hierarchy and stronger attraction */
 .dashboard-redesign{

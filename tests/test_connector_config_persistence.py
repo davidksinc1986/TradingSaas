@@ -308,3 +308,19 @@ def test_list_bot_sessions_repairs_legacy_zero_fixed_amount_and_forces_live_exec
         assert session.amount_per_trade >= 10
     finally:
         db.close()
+
+
+def test_connector_trade_amount_defaults_replace_zero_fixed_amount_with_recommended(tmp_path):
+    Session = _session_factory(tmp_path)
+    db = Session()
+    try:
+        user, connector = _base_user_and_connector(db, market_type="futures")
+        connector.config_json.update({"trade_amount_mode": "fixed_usd", "fixed_trade_amount_usd": 0})
+        db.commit()
+
+        defaults = api._connector_trade_amount_defaults(connector)
+
+        assert defaults["trade_amount_mode"] == "fixed_usd"
+        assert defaults["amount_per_trade"] == 10.0
+    finally:
+        db.close()
