@@ -51,6 +51,77 @@ const STRATEGIES = [
   'volatility_breakout',
 ];
 
+const FIELD_ADVISORY_CONFIG = {
+  connector: {
+    platform: {
+      title: 'Plataforma',
+      recommend: 'Elige el exchange/plataforma exacto que vas a conectar para cargar solo los campos compatibles.',
+    },
+    market_type: {
+      title: 'Mercado',
+      recommend: 'Spot opera inventario real; Futures habilita derivados, apalancamiento y posiciones en corto.',
+    },
+    symbols: {
+      title: 'Símbolos base',
+      recommend: 'Usa pares líquidos y consistentes con el mercado elegido. Ejemplo: BTC/USDT, ETH/USDT.',
+    },
+  },
+  run: {
+    connector_id: {
+      title: 'Conector',
+      recommend: 'Selecciona un conector activo antes de ejecutar o automatizar una estrategia.',
+    },
+    symbols: {
+      title: 'Símbolos',
+      recommend: 'Prioriza símbolos líquidos, evita duplicados y mantén una cesta manejable para no dispersar capital.',
+    },
+    timeframe: {
+      title: 'Timeframe',
+      recommend: '15m y 1h suelen ser buenos marcos base. 1m/3m exigen más control y más ruido de mercado.',
+    },
+    strategy_slug: {
+      title: 'Estrategia',
+      recommend: 'Asegúrate de que la estrategia sea compatible con el mercado del conector para evitar setups incoherentes.',
+    },
+    risk_per_trade_percent: {
+      title: 'Riesgo por trade',
+      recommend: 'Para trading serio, normalmente conviene mantenerse entre 0.25% y 2% por operación.',
+    },
+    min_ml_probability_percent: {
+      title: 'Probabilidad mínima ML',
+      recommend: 'Entre 55% y 75% suele equilibrar frecuencia y filtro. Valores extremos pueden bloquear demasiadas entradas.',
+    },
+    take_profit_value: {
+      title: 'Take profit',
+      recommend: 'El take profit debería compensar el riesgo asumido y mantener una relación beneficio/riesgo sana.',
+    },
+    stop_loss_value: {
+      title: 'Stop loss',
+      recommend: 'Nunca dejes una posición sin stop loss. En porcentaje, mantenerlo ajustado ayuda a limitar drawdown.',
+    },
+    trailing_stop_value: {
+      title: 'Trailing stop',
+      recommend: 'Úsalo como protección dinámica, idealmente más ajustado que el take profit y coherente con la volatilidad.',
+    },
+    trade_amount_mode: {
+      title: 'Modo de sizing',
+      recommend: 'Heredar sirve para consistencia. Monto fijo aporta control; % de balance adapta el tamaño al capital.',
+    },
+    amount_per_trade: {
+      title: 'Monto por trade',
+      recommend: 'Debe ser suficiente para superar mínimos del exchange y no quedar rechazado por notional o qty mínima.',
+    },
+    amount_percentage: {
+      title: '% por trade',
+      recommend: 'Para robustez, evita porcentajes excesivos. Un rango moderado reduce sobreexposición y concentración.',
+    },
+    use_live_if_available: {
+      title: 'Modo live',
+      recommend: 'Actívalo solo cuando el conector, el sizing y los límites de riesgo ya estén validados.',
+    },
+  },
+};
+
 const state = {
   me: null,
   summary: null,
@@ -92,6 +163,20 @@ function formatDate(value) {
   return d.toLocaleString();
 }
 
+function prettyLabel(value, fallback = '-') {
+  const raw = String(value ?? '').trim();
+  if (!raw || ['undefined', 'null'].includes(raw.toLowerCase())) return fallback;
+  return raw;
+}
+
+function prettyMarketType(value, connectorId = null) {
+  const connector = state.connectors.find((item) => item.id === Number(connectorId));
+  const raw = String(value ?? connector?.market_type ?? '').trim().toLowerCase();
+  const normalized = raw === 'future' ? 'futures' : raw;
+  const labels = { spot: 'Spot', futures: 'Futures', forex: 'Forex', cfd: 'CFD', signals: 'Signals' };
+  return labels[normalized] || prettyLabel(value ?? connector?.market_type, 'Spot');
+}
+
 function reportMarkup(items = []) {
   return items.map((item) => `
     <article class="quantum-report-item fade-in-up">
@@ -99,6 +184,10 @@ function reportMarkup(items = []) {
       <small>${item.body}</small>
     </article>
   `).join('');
+}
+
+function getConnectorById(connectorId) {
+  return state.connectors.find((item) => item.id === Number(connectorId)) || null;
 }
 
 function initTabs() {
@@ -122,7 +211,7 @@ function renderConnectorFields() {
   const marketType = document.getElementById('connector-market-type');
   const fieldsWrap = document.getElementById('connector-friendly-fields');
   if (marketType) {
-    marketType.innerHTML = (PLATFORM_MARKET_TYPES[platform] || ['spot']).map((type) => `<option value="${type}">${type}</option>`).join('');
+    marketType.innerHTML = (PLATFORM_MARKET_TYPES[platform] || ['spot']).map((type) => `<option value="${type}">${prettyMarketType(type)}</option>`).join('');
   }
   if (fieldsWrap) {
     fieldsWrap.innerHTML = (PLATFORM_FIELD_MAP[platform] || []).map((field) => `
@@ -173,12 +262,12 @@ function renderConnectors() {
   const panel = document.getElementById('connector-health-panel');
   const runSelect = document.getElementById('run-connector-select');
   if (runSelect) {
-    runSelect.innerHTML = state.connectors.filter((c) => c.is_enabled).map((c) => `<option value="${c.id}">${c.label} · ${c.platform} · ${c.market_type}</option>`).join('');
+    runSelect.innerHTML = state.connectors.filter((c) => c.is_enabled).map((c) => `<option value="${c.id}">${c.label} · ${c.platform} · ${prettyMarketType(c.market_type, c.id)}</option>`).join('');
   }
   if (panel) {
     panel.innerHTML = state.connectors.length ? reportMarkup(state.connectors.map((c) => ({
       title: `${c.label} · ${c.platform}`,
-      body: `${c.mode} · ${c.market_type} · ${c.is_enabled ? 'activo' : 'inactivo'} · ${(c.symbols || []).length} símbolos`,
+      body: `${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'} · ${(c.symbols || []).length} símbolos`,
     }))) : reportMarkup([{ title: 'Sin conectores', body: 'Crea al menos un conector para operar o automatizar.' }]);
   }
   if (!list) return;
@@ -194,7 +283,7 @@ function renderConnectors() {
           <div class="connector-meta">
             <span>${connector.platform}</span>
             <span>${connector.mode}</span>
-            <span>${connector.market_type}</span>
+            <span>${prettyMarketType(connector.market_type, connector.id)}</span>
           </div>
         </div>
         <span class="pill tiny ${connector.is_enabled ? 'pill-on' : 'pill-off'}">${connector.is_enabled ? 'Activo' : 'Inactivo'}</span>
@@ -241,11 +330,11 @@ function renderBotSessions() {
     <article class="connector-item fade-in-up">
       <div class="row-between">
         <div>
-          <strong>${session.strategy_slug}</strong>
+          <strong>${prettyLabel(session.strategy_slug, 'strategy')}</strong>
           <div class="connector-meta">
-            <span>${session.connector_label}</span>
-            <span>${session.platform}</span>
-            <span>${session.market_type}</span>
+            <span>${prettyLabel(session.connector_label, 'Cuenta')}</span>
+            <span>${prettyLabel(session.platform, '-')}</span>
+            <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
           </div>
         </div>
         <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
@@ -415,6 +504,7 @@ async function saveConnector(event) {
     });
     form.reset();
     renderConnectorFields();
+    bindFieldAdvisories('#connector-form', 'connector');
     setStatus('connector-feedback', 'Conector guardado correctamente.', 'ok');
     await refreshDashboard();
   } catch (error) {
@@ -425,9 +515,11 @@ async function saveConnector(event) {
 function buildRunPayload(form) {
   const fd = new FormData(form);
   const connectorId = Number(fd.get('connector_id'));
+  const connector = getConnectorById(connectorId);
   return {
     connector_ids: [connectorId],
     connector_id: connectorId,
+    market_type: connector?.market_type || 'spot',
     symbols: String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
     timeframe: fd.get('timeframe'),
     strategy_slug: fd.get('strategy_slug'),
@@ -452,6 +544,217 @@ function buildRunPayload(form) {
     symbol_source_mode: 'manual',
     dynamic_symbol_limit: 10,
   };
+}
+
+function getPopoverElements() {
+  return {
+    popover: document.getElementById('field-advisory-popover'),
+    title: document.getElementById('field-advisory-title'),
+    body: document.getElementById('field-advisory-body'),
+  };
+}
+
+function hideFieldPopover() {
+  const { popover } = getPopoverElements();
+  if (!popover) return;
+  popover.classList.add('hidden');
+}
+
+function showFieldPopover(target, title, body) {
+  const { popover, title: titleEl, body: bodyEl } = getPopoverElements();
+  if (!popover || !titleEl || !bodyEl || !target || !body) return;
+  titleEl.textContent = title || 'Sugerencia';
+  bodyEl.textContent = body;
+  popover.classList.remove('hidden');
+  const rect = target.getBoundingClientRect();
+  const popRect = popover.getBoundingClientRect();
+  const left = Math.max(12, Math.min(window.innerWidth - popRect.width - 12, rect.left));
+  const top = rect.bottom + 10 + popRect.height < window.innerHeight
+    ? rect.bottom + 10
+    : Math.max(12, rect.top - popRect.height - 10);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function getFieldMeta(formKind, input) {
+  return FIELD_ADVISORY_CONFIG[formKind]?.[input?.name] || null;
+}
+
+function parseSymbols(rawValue) {
+  return String(rawValue || '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function advisoryForField(formKind, input) {
+  if (!input) return null;
+  const meta = getFieldMeta(formKind, input);
+  const raw = input.type === 'checkbox' ? input.checked : String(input.value || '').trim();
+  const form = input.form;
+  const severity = 'warning';
+
+  if (formKind === 'connector') {
+    if (input.name === 'symbols') {
+      const symbols = parseSymbols(raw);
+      const unique = new Set(symbols.map((item) => item.toUpperCase()));
+      if (!symbols.length) return { severity, message: 'Agrega al menos un símbolo base para testear compatibilidad y defaults.' };
+      if (unique.size !== symbols.length) return { severity: 'danger', message: 'Hay símbolos duplicados. Deja cada par una sola vez.' };
+      if (symbols.length > 30) return { severity, message: 'Demasiados símbolos iniciales pueden volver más lenta la operación y el monitoreo.' };
+    }
+    return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+  }
+
+  if (formKind === 'run') {
+    const fd = new FormData(form);
+    const tpMode = String(fd.get('take_profit_mode') || 'percent');
+    const slMode = String(fd.get('stop_loss_mode') || 'percent');
+    const trailingMode = String(fd.get('trailing_stop_mode') || 'percent');
+    const tpValue = Number(fd.get('take_profit_value') || 0);
+    const slValue = Number(fd.get('stop_loss_value') || 0);
+    const trailingValue = Number(fd.get('trailing_stop_value') || 0);
+    const mode = String(fd.get('trade_amount_mode') || 'inherit');
+    const connector = getConnectorById(fd.get('connector_id'));
+
+    if (input.name === 'connector_id') {
+      if (!connector) return { severity: 'danger', message: 'Debes elegir un conector válido y activo.' };
+      if (!connector.is_enabled) return { severity: 'danger', message: 'Ese conector está desactivado. Actívalo antes de operar.' };
+      if (connector.mode !== 'live' && fd.get('use_live_if_available') === 'on') return { severity, message: 'El conector no está en modo live; aunque actives live, la orden no saldrá al exchange.' };
+      return meta?.recommend ? { severity: 'ok', message: `${meta.recommend} Conector actual: ${connector.label} · ${prettyMarketType(connector.market_type)}.` } : null;
+    }
+
+    if (input.name === 'symbols') {
+      const symbols = parseSymbols(raw);
+      const unique = new Set(symbols.map((item) => item.toUpperCase()));
+      if (!symbols.length) return { severity: 'danger', message: 'Ingresa al menos un símbolo para ejecutar la estrategia.' };
+      if (unique.size !== symbols.length) return { severity: 'danger', message: 'No conviene repetir símbolos en una misma corrida.' };
+      if (symbols.length > 12) return { severity, message: 'Más de 12 símbolos con el mismo capital suele diluir demasiado el sizing por operación.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'timeframe') {
+      const allowed = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'];
+      if (!allowed.includes(raw)) return { severity, message: 'Usa un timeframe estándar como 5m, 15m, 1h o 4h para evitar intervalos ambiguos.' };
+      if (['1m', '3m'].includes(raw)) return { severity, message: 'Timeframes muy bajos aumentan ruido, comisiones y sensibilidad a latencia.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'strategy_slug') {
+      const strategy = String(raw || '');
+      const market = String(connector?.market_type || fd.get('market_type') || 'spot').toLowerCase();
+      const futuresOnly = ['momentum_breakout', 'macd_trend_pullback', 'adx_trend_follow', 'supertrend_volatility', 'kalman_trend_filter', 'atr_channel_breakout', 'volatility_breakout'];
+      const spotOnly = ['ema_rsi', 'mean_reversion_zscore'];
+      if (market === 'spot' && futuresOnly.includes(strategy)) return { severity: 'danger', message: 'Esta estrategia está pensada para futures; en spot puede generar expectativas no realistas.' };
+      if (market === 'futures' && spotOnly.includes(strategy)) return { severity, message: 'Esta estrategia fue diseñada para spot. Verifica que el comportamiento en futures tenga sentido.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'risk_per_trade_percent') {
+      const value = Number(raw || 0);
+      if (value <= 0) return { severity: 'danger', message: 'El riesgo por trade debe ser mayor a 0.' };
+      if (value > 5) return { severity: 'danger', message: 'Más de 5% por trade es agresivo para una cuenta robusta y puede escalar drawdown muy rápido.' };
+      if (value > 2) return { severity, message: 'Por encima de 2% por trade ya entras en un perfil de riesgo elevado.' };
+      if (value < 0.25) return { severity: 'ok', message: 'Riesgo muy conservador: protege capital, pero puede volver insignificante el impacto del sistema.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'min_ml_probability_percent') {
+      const value = Number(raw || 0);
+      if (value < 50) return { severity, message: 'Un filtro ML por debajo de 50% suele dejar pasar demasiadas señales débiles.' };
+      if (value > 90) return { severity, message: 'Un umbral tan alto puede bloquear casi todas las entradas y hacer que el bot opere muy poco.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'stop_loss_value') {
+      if (slValue <= 0) return { severity: 'danger', message: 'Toda operación necesita stop loss positivo.' };
+      if (slMode === 'percent' && slValue > 1.5) return { severity: 'danger', message: 'El backend ya restringe stop loss porcentual superior a 1.5% para evitar setups descontrolados.' };
+      if (tpMode === slMode && tpValue > 0 && slValue >= tpValue) return { severity: 'danger', message: 'El stop loss no debería ser igual o mayor al take profit cuando comparten unidad.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'take_profit_value') {
+      if (tpValue <= 0 && trailingValue <= 0) return { severity: 'danger', message: 'Define take profit o trailing stop; no dejes salidas abiertas sin criterio.' };
+      if (tpMode === slMode && tpValue > 0 && slValue >= tpValue) return { severity: 'danger', message: 'El take profit debe dejar un espacio lógico por encima del stop loss.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'trailing_stop_value') {
+      if (trailingValue <= 0) return { severity: 'ok', message: 'Puedes dejar trailing en 0 solo si el take profit está bien definido y la estrategia no requiere trailing.' };
+      if (trailingMode === slMode && trailingValue >= slValue) return { severity, message: 'Un trailing mayor o igual al stop puede volver incoherente la protección dinámica.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'trade_amount_mode') {
+      if (raw === 'inherit' && !state.me) return { severity, message: 'Si vas a heredar sizing, primero asegúrate de tener el perfil de capital configurado.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'amount_per_trade') {
+      const value = Number(raw || 0);
+      if (mode === 'fixed_usd' && value <= 0) return { severity: 'danger', message: 'En modo monto fijo debes definir un capital por operación.' };
+      if (mode === 'fixed_usd' && value > 0 && value < 10) return { severity, message: 'Montos muy bajos suelen chocar con mínimos de exchange, sobre todo en símbolos caros.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'amount_percentage') {
+      const value = Number(raw || 0);
+      if (mode === 'balance_percent' && value <= 0) return { severity: 'danger', message: 'En modo % de balance debes definir un porcentaje válido.' };
+      if (mode === 'balance_percent' && value > 25) return { severity: 'danger', message: 'Más de 25% del balance por trade suele ser excesivo para una operación cuantitativa estable.' };
+      if (mode === 'balance_percent' && value > 10) return { severity, message: 'Por encima de 10% por trade ya estás asumiendo una exposición importante.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+
+    if (input.name === 'use_live_if_available') {
+      if (input.checked && connector?.mode !== 'live') return { severity, message: 'Marcaste live, pero el conector actual no está en modo live.' };
+      return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+    }
+  }
+
+  return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
+}
+
+function syncFieldHintState(formKind, input, { reveal = false } = {}) {
+  if (!input) return;
+  const label = input.closest('label');
+  if (!label) return;
+  const meta = getFieldMeta(formKind, input);
+  if (!meta) return;
+  const advisory = advisoryForField(formKind, input);
+  label.classList.add('field-hint-enabled');
+  label.classList.remove('field-hint-warning', 'field-hint-danger');
+  if (advisory?.severity === 'warning') label.classList.add('field-hint-warning');
+  if (advisory?.severity === 'danger') label.classList.add('field-hint-danger');
+  if (reveal && advisory?.message) showFieldPopover(input, meta.title, advisory.message);
+}
+
+function appendAsteriskToLabel(label) {
+  if (!label || label.querySelector('.field-asterisk')) return;
+  const marker = document.createElement('span');
+  marker.className = 'field-asterisk';
+  marker.textContent = ' *';
+  label.insertBefore(marker, label.firstElementChild || null);
+}
+
+function bindFieldAdvisories(formSelector, formKind) {
+  const form = document.querySelector(formSelector);
+  if (!form || form.dataset.advisoriesBound === 'true') return;
+  form.dataset.advisoriesBound = 'true';
+  const inputs = Array.from(form.querySelectorAll('input, select, textarea'));
+  inputs.forEach((input) => {
+    const meta = getFieldMeta(formKind, input);
+    if (!meta) return;
+    const label = input.closest('label');
+    appendAsteriskToLabel(label);
+    ['focus', 'mouseenter'].forEach((eventName) => {
+      input.addEventListener(eventName, () => {
+        const advisory = advisoryForField(formKind, input);
+        if (advisory?.message) showFieldPopover(input, meta.title, advisory.message);
+      });
+    });
+    ['input', 'change'].forEach((eventName) => {
+      input.addEventListener(eventName, () => syncFieldHintState(formKind, input, { reveal: true }));
+    });
+    input.addEventListener('blur', hideFieldPopover);
+    syncFieldHintState(formKind, input);
+  });
+  form.addEventListener('mouseleave', hideFieldPopover);
 }
 
 async function runStrategy(event) {
@@ -496,6 +799,10 @@ async function init() {
   document.getElementById('refresh-bot-sessions-btn')?.addEventListener('click', refreshDashboard);
   document.getElementById('refresh-execution-logs-btn')?.addEventListener('click', refreshDashboard);
   document.getElementById('download-execution-logs-btn')?.addEventListener('click', downloadExecutionLogs);
+  window.addEventListener('scroll', hideFieldPopover, { passive: true });
+  window.addEventListener('resize', hideFieldPopover);
+  bindFieldAdvisories('#connector-form', 'connector');
+  bindFieldAdvisories('#run-form', 'run');
   await refreshDashboard();
 }
 

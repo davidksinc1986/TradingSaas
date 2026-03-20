@@ -122,6 +122,7 @@
         <button class="btn primary" type="submit">Guardar conector</button>
         <div id="connector-feedback" class="status-msg"></div>
       </form>
+      <small class="hint subtle-guide">Los campos con <span class="field-asterisk-inline">*</span> incluyen guía contextual.</small>
     </article>
 
     <article class="card">
@@ -183,6 +184,7 @@
         </div>
         <div id="run-feedback" class="status-msg"></div>
       </form>
+      <small class="hint subtle-guide">Los campos marcados con <span class="field-asterisk-inline">*</span> muestran recomendaciones discretas según el contexto.</small>
     </article>
 
     <article class="card">
@@ -256,6 +258,11 @@
     </div>
   </article>
 </section>
+
+<div id="field-advisory-popover" class="field-advisory-popover hidden" role="status" aria-live="polite">
+  <strong id="field-advisory-title"></strong>
+  <p id="field-advisory-body"></p>
+</div>
 
 <script src="/static/dashboard.js?v={{ static_version }}"></script>
 {% endblock %}

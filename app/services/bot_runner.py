@@ -47,12 +47,30 @@ def _resolve_session_market_type(session: BotSession, connector: Connector | Non
 def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
     now = now or _now_utc()
     run_position_lifecycle(db)
-    sessions = db.query(BotSession).filter(BotSession.is_active.is_(True)).order_by(BotSession.id.asc()).all()
+    session_ids = [
+        item[0]
+        for item in db.query(BotSession.id)
+        .filter(BotSession.is_active.is_(True))
+        .order_by(BotSession.id.asc())
+        .all()
+    ]
     processed = 0
 
-    for session in sessions:
+    for session_id in session_ids:
+        processed += _process_due_bot_session(session_id=session_id, now=now)
+
+    return processed
+
+
+def _process_due_bot_session(*, session_id: int, now: datetime) -> int:
+    db = SessionLocal()
+    try:
+        session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.is_active.is_(True)).first()
+        if not session:
+            return 0
+
         if session.next_run_at and session.next_run_at > now:
-            continue
+            return 0
 
         connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
         if not connector or not connector.is_enabled:
@@ -60,8 +78,8 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             session.last_error = "Connector disabled or missing"
             session.last_run_at = now
             session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
-            processed += 1
-            continue
+            db.commit()
+            return 1
 
         ensure_connector_market_type_state(connector, persist=True, db=db) if connector else "spot"
         session_market_type = normalize_market_type(getattr(session, "market_type", None))
@@ -78,8 +96,8 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             session.last_error = "No symbols configured"
             session.last_run_at = now
             session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
-            processed += 1
-            continue
+            db.commit()
+            return 1
 
         try:
             run_strategy(
@@ -116,16 +134,23 @@ def execute_due_bot_sessions(db, now: datetime | None = None) -> int:
             session.last_status = "ok"
             session.last_error = None
         except Exception as exc:
-            logger.exception("Bot session %s failed", session.id)
+            db.rollback()
+            logger.exception("Bot session %s failed", session_id)
+            session = db.query(BotSession).filter(BotSession.id == session_id).first()
+            if not session:
+                return 1
             session.last_status = "error"
             session.last_error = str(exc)
 
         session.last_run_at = now
         session.next_run_at = now + timedelta(minutes=max(session.interval_minutes, 1))
-        processed += 1
-
-    db.commit()
-    return processed
+        db.commit()
+        return 1
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _worker_loop() -> None:
