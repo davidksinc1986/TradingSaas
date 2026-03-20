@@ -2,102 +2,53 @@
 {% block content %}
 <section class="dashboard-header">
   <span class="pill">Admin</span>
-  <h1>Panel de control administrativo</h1>
-  <p>Gestiona usuarios, permisos por plataforma y configuración de movimiento por app para el usuario seleccionado.</p>
+  <h1>Panel administrativo</h1>
+  <p>Gestiona usuarios, grants, conectores, estrategias y políticas globales desde un flujo claro.</p>
 </section>
 
-<section class="admin-command-grid">
-  <article class="card admin-command-card">
+<section class="grid-2 dashboard-grid-two">
+  <article class="card">
     <div class="row-between">
       <div>
-        <small class="quantum-label">Governance matrix</small>
-        <h2>Resumen operativo</h2>
+        <small class="quantum-label">Usuarios</small>
+        <h2>Crear usuario</h2>
       </div>
-      <span class="pill" id="admin-ops-state">Cargando</span>
+      <span id="admin-total-users" class="pill tiny">0</span>
     </div>
-    <div class="quantum-metrics-grid">
-      <div class="quantum-metric"><small>Usuarios</small><strong id="admin-metric-users">0</strong></div>
-      <div class="quantum-metric"><small>Activos</small><strong id="admin-metric-active-users">0</strong></div>
-      <div class="quantum-metric"><small>Admins</small><strong id="admin-metric-admins">0</strong></div>
-      <div class="quantum-metric"><small>Planes</small><strong id="admin-metric-plans">0</strong></div>
-    </div>
-    <div id="admin-system-report" class="quantum-report-list"></div>
+    <form id="create-user-form" class="form-grid">
+      <label>Email<input name="email" type="email" required></label>
+      <label>Nombre<input name="name" minlength="2" required></label>
+      <label>Password<input name="password" type="password" minlength="6" required></label>
+      <button class="btn primary" type="submit">Crear usuario</button>
+      <div id="admin-feedback" class="status-msg"></div>
+    </form>
+    <div id="admin-users" class="stack" style="margin-top:16px;"></div>
   </article>
 
-  <article class="card admin-command-side">
+  <article class="card">
     <div class="row-between">
       <div>
-        <small class="quantum-label">Selected account</small>
-        <h2>Insight de usuario</h2>
+        <small class="quantum-label">Selección</small>
+        <h2>Cuenta administrada</h2>
       </div>
       <span class="pill tiny" id="admin-selected-user-state">Sin selección</span>
     </div>
-    <div id="admin-user-insights" class="quantum-report-list"></div>
+    <label>Usuario
+      <select id="selected-user"></select>
+    </label>
+    <div id="selected-user-profile" class="stack" style="margin-top:16px;"></div>
   </article>
 </section>
 
-<section class="admin-layout-v2">
-  <aside class="card admin-sidebar">
-    <div class="row-between">
-      <h2>Usuarios</h2>
-      <span id="admin-total-users" class="pill tiny">0</span>
+<section class="card" style="margin-top:24px;">
+  <div class="row-between">
+    <div>
+      <small class="quantum-label">Políticas</small>
+      <h2>Políticas globales por plataforma</h2>
     </div>
-    <form id="create-user-form" class="form-grid" style="margin-top:10px;">
-      <label>Email<input name="email" type="email" placeholder="usuario@dominio.com" required></label>
-      <label>Nombre<input name="name" minlength="2" required></label>
-      <label>Contraseña<input name="password" type="password" minlength="6" required></label>
-      <button class="btn primary btn-sm" type="submit">+ Crear</button>
-    </form>
-    <div id="admin-feedback" class="status-msg hidden"></div>
-    <label style="margin-top:12px;display:block;">Usuario a gestionar
-      <select id="selected-user"></select>
-    </label>
-    <div id="admin-users" class="stack"></div>
   </div>
-  <div class="card">
-    <h2>Perfil del usuario seleccionado</h2>
-    <div id="selected-user-profile" class="stack"></div>
-  </div>
-</section>
-
-<section class="card">
-  <h2>Políticas globales de plataforma</h2>
   <div id="admin-policies" class="stack"></div>
 </section>
-
-<div id="strategy-modal" class="modal hidden">
-  <div class="modal-card card admin-strategy-modal">
-    <div class="row-between">
-      <h3>Estrategias permitidas</h3>
-      <button class="btn btn-sm" id="close-strategy-modal">Cerrar</button>
-    </div>
-    <form id="strategy-control-form" class="form-grid" style="margin-top:12px;"></form>
-  </div>
-</div>
-
-<div id="edit-user-modal" class="modal hidden">
-  <div class="modal-card card admin-strategy-modal">
-    <div class="row-between">
-      <h3>Editar usuario</h3>
-      <button class="btn btn-sm" id="close-edit-user-modal">Cerrar</button>
-    </div>
-    <form id="edit-user-form" class="form-grid" style="margin-top:12px;">
-      <label>Email<input name="email" type="email" required></label>
-      <label>Nombre<input name="name" minlength="2" required></label>
-      <label>Teléfono<input name="phone" minlength="7" maxlength="40" placeholder="Opcional"></label>
-      <label>Activo
-        <select name="is_active"><option value="true">Sí</option><option value="false">No</option></select>
-      </label>
-      <label>Administrador
-        <select name="is_admin"><option value="true">Sí</option><option value="false">No</option></select>
-      </label>
-      <div class="row-wrap">
-        <button class="btn primary btn-sm" type="submit">Guardar</button>
-        <button id="delete-user-in-modal" class="btn btn-sm" type="button">Eliminar</button>
-      </div>
-    </form>
-  </div>
-</div>
 
 <script src="/static/admin.js?v={{ static_version }}"></script>
 {% endblock %}

@@ -9,23 +9,41 @@ from fastapi.responses import StreamingResponse
 
 from app.db import get_db
 from app.core import settings
-from app.models import Connector, PlatformPolicy, TradeLog, User, UserPlatformGrant, UserStrategyControl
+from app.models import (
+    BotSession,
+    Connector,
+    OpenPosition,
+    PlanConfig,
+    PlatformPolicy,
+    PricingConfig,
+    StrategyTemplate,
+    TradeLog,
+    TradeRun,
+    User,
+    UserPlatformGrant,
+    UserStrategyControl,
+)
 from app.routers.deps import admin_user, current_user
 from app.schemas import (
     AdminUserCreate,
     AdminGrantUpdate,
     AdminPlanConfigPayload,
     AdminPolicyUpdate,
+    AdminPricingConfigUpdate,
     AdminStrategyControlUpdate,
     AdminUserUpdate,
+    BotSessionCopyPayload,
+    BotSessionCreate,
+    BotSessionUpdate,
     ConnectorCreate,
     ConnectorUpdate,
     StrategyRequest,
+    StrategyControlUpdate,
     StrategyTemplateApplyPayload,
     StrategyTemplateCreate,
     TradingViewWebhook,
 )
-from app.security import encrypt_payload, hash_password
+from app.security import decrypt_payload, encrypt_payload, hash_password
 from app.services.alerts import (
     TelegramDeliveryError,
     format_failure_message,
@@ -34,6 +52,7 @@ from app.services.alerts import (
     normalize_alert_locale,
     send_admin_user_alert_sync,
     send_telegram_alert_sync,
+    send_user_telegram_test_alert,
 )
 from app.services.connector_state import (
     PLATFORM_MARKET_TYPES,
@@ -49,30 +68,158 @@ from app.services.policies import ensure_user_grants, get_user_grant, validate_c
 from app.services.pricing import estimate_monthly_cost
 from app.services.position_lifecycle import trigger_kill_switch
 from app.services.trading import activity_metrics, dashboard_data, run_strategy, sync_positions_with_exchange
-from app.services.strategies import ALL_STRATEGIES, get_strategy_rule
+from app.services.strategies import ALL_STRATEGIES as AVAILABLE_STRATEGIES, get_strategy_rule
 
 router = APIRouter(prefix="/api", tags=["api"])
 ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
-ALL_STRATEGIES = ["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]
+ALL_STRATEGIES = list(AVAILABLE_STRATEGIES)
+
+logger = logging.getLogger("trading_saas.api")
 
 
-def _is_root_admin(user: User) -> bool:
-    # IMPORTANT: root-admin identity must rely on immutable identity only.
-    # user.name is editable via /api/me and cannot be used for privilege checks.
-    return (user.email or "").strip().lower() == ROOT_ADMIN_EMAIL
+def _extract_http_error_detail(exc: HTTPException) -> str:
+    detail = getattr(exc, "detail", "")
+    if isinstance(detail, (dict, list)):
+        return json.dumps(detail, ensure_ascii=False)
+    return str(detail)
 
 
-def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
-    control = db.query(UserStrategyControl).filter(UserStrategyControl.user_id == user_id).first()
-    if not control:
-        control = UserStrategyControl(user_id=user_id, managed_by_admin=False, allowed_strategies_json={"items": ALL_STRATEGIES})
-        db.add(control)
-        db.commit()
-        db.refresh(control)
-    if not (control.allowed_strategies_json or {}).get("items"):
-        control.allowed_strategies_json = {"items": ALL_STRATEGIES}
-        db.commit()
-    return control
+def _safe_iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") and value else None
+
+
+def _safe_json_object(value):
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _safe_symbols(value) -> list[str]:
+    if isinstance(value, dict):
+        items = value.get("symbols") or []
+    elif isinstance(value, list):
+        items = value
+    else:
+        items = []
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _safe_float(value, fallback: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if result != result:
+        return fallback
+    return result
+
+
+def _normalize_market_type(value: str | None) -> str:
+    return normalize_market_type(value)
+
+
+def _resolve_connector_market_type(*, platform: str, market_type: str | None = None, config: dict | None = None) -> str:
+    return resolve_connector_market_type(platform=platform, market_type=market_type, config=config)
+
+
+def _sync_connector_config_market_type(config: dict | None, market_type: str) -> dict:
+    return sync_connector_config_market_type(config, market_type)
+
+
+def _normalize_timeframe(value: str | None) -> str:
+    clean = str(value or "5m").strip().lower()
+    allowed = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
+    return clean if clean in allowed else "5m"
+
+
+def _interval_from_timeframe(timeframe: str, fallback: int | None = None) -> int:
+    mapping = {
+        "1m": 1,
+        "3m": 3,
+        "5m": 5,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60,
+        "2h": 120,
+        "4h": 240,
+        "6h": 360,
+        "8h": 480,
+        "12h": 720,
+        "1d": 1440,
+    }
+    normalized = _normalize_timeframe(timeframe)
+    return int(fallback or mapping.get(normalized, 5))
+
+
+def _alert_admin_failure(scope: str, detail: str) -> None:
+    try:
+        send_telegram_alert_sync(format_failure_message(scope, detail))
+    except Exception:
+        logger.exception("Could not notify admin failure for %s", scope)
+
+
+def _notify_user_info(user: User | None, *, title: str, detail: str, connector_label: str | None = None,
+                      platform: str | None = None, symbol: str | None = None) -> None:
+    if user is None:
+        return
+    try:
+        message = format_user_info_message(
+            locale=getattr(user, "alert_language", "es"),
+            title=title,
+            detail=detail,
+            connector_label=connector_label,
+            platform=platform,
+            symbol=symbol,
+        )
+        send_admin_user_alert_sync(user, message, scope="user-info")
+    except Exception:
+        logger.exception("Could not send user info notification")
+
+
+def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int], strategy_slug: str) -> list[Connector]:
+    connectors = db.query(Connector).filter(Connector.user_id == user_id, Connector.id.in_(connector_ids)).all()
+    if len(connectors) != len(set(connector_ids)):
+        raise HTTPException(status_code=404, detail="One or more connectors were not found")
+
+    strategy_rule = get_strategy_rule(strategy_slug)
+    allowed_market_types = {normalize_market_type(item) for item in strategy_rule.get("market_types", ["spot", "futures"])}
+    incompatible = []
+    for connector in connectors:
+        connector_market_type = ensure_connector_market_type_state(connector, persist=False)
+        if connector_market_type not in allowed_market_types:
+            incompatible.append(f"{connector.label} ({connector_market_type})")
+
+    if incompatible:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La estrategia {strategy_slug} no es compatible con: {', '.join(incompatible)}",
+        )
+    return connectors
+
+
+def _resolve_trade_amount_settings(user: User, payload) -> dict[str, float | str | None]:
+    mode = str(getattr(payload, "trade_amount_mode", None) or "inherit").lower()
+    if mode == "inherit":
+        return {
+            "trade_amount_mode": getattr(user, "trade_amount_mode", "fixed_usd") or "fixed_usd",
+            "amount_per_trade": _safe_float(getattr(user, "fixed_trade_amount_usd", 10), 10.0),
+            "amount_percentage": _safe_float(getattr(user, "trade_balance_percent", 10), 10.0),
+        }
+    return {
+        "trade_amount_mode": mode,
+        "amount_per_trade": _safe_float(getattr(payload, "amount_per_trade", None), 0.0) or None,
+        "amount_percentage": _safe_float(getattr(payload, "amount_percentage", None), 0.0) or None,
+    }
+
+
+def _estimate_trade_investment(trade: TradeLog, user: User | None) -> float:
+    quantity = _safe_float(getattr(trade, "quantity", 0.0), 0.0)
+    price = _safe_float(getattr(trade, "price", 0.0), 0.0)
+    notional = quantity * price
+    if notional > 0:
+        return notional
+    if user is not None and getattr(user, "trade_amount_mode", "fixed_usd") == "balance_percent":
+        return _safe_float(getattr(user, "trade_balance_percent", 0.0), 0.0)
+    return _safe_float(getattr(user, "fixed_trade_amount_usd", 0.0), 0.0) if user is not None else 0.0
+
 
 def _is_root_admin(user: User) -> bool:
     # IMPORTANT: root-admin identity must rely on immutable identity only.
@@ -104,6 +251,9 @@ def me(user=Depends(current_user), db=Depends(get_db)):
         "is_admin": user.is_admin,
         "alert_language": normalize_alert_locale(user.alert_language),
         "admin_alerts_enabled": bool((settings.telegram_admin_bot_token or "").strip() and (settings.telegram_admin_chat_id or "").strip()),
+        "telegram_alerts_enabled": bool(getattr(user, "telegram_alerts_enabled", False)),
+        "has_telegram_bot_key": bool((decrypt_payload(user.telegram_bot_token_encrypted).get("value") or "").strip()),
+        "telegram_chat_id": (decrypt_payload(user.telegram_chat_id_encrypted).get("value") or "").strip() or None,
         "trade_amount_mode": user.trade_amount_mode or "fixed_usd",
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
@@ -129,6 +279,17 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
     next_language = payload.get("alert_language")
     if next_language is not None:
         user.alert_language = normalize_alert_locale(str(next_language))
+
+    if "telegram_alerts_enabled" in payload:
+        user.telegram_alerts_enabled = bool(payload.get("telegram_alerts_enabled"))
+    if "telegram_bot_key" in payload:
+        bot_key = str(payload.get("telegram_bot_key") or "").strip()
+        if bot_key:
+            user.telegram_bot_token_encrypted = encrypt_payload({"value": bot_key})
+    if "telegram_chat_id" in payload:
+        chat_id = str(payload.get("telegram_chat_id") or "").strip()
+        if chat_id:
+            user.telegram_chat_id_encrypted = encrypt_payload({"value": chat_id})
 
     next_trade_mode = payload.get("trade_amount_mode")
     if next_trade_mode is not None:
@@ -165,6 +326,8 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
         "phone": user.phone,
         "alert_language": normalize_alert_locale(user.alert_language),
         "admin_alerts_enabled": bool((settings.telegram_admin_bot_token or "").strip() and (settings.telegram_admin_chat_id or "").strip()),
+        "telegram_alerts_enabled": bool(getattr(user, "telegram_alerts_enabled", False)),
+        "has_telegram_bot_key": bool((user.telegram_bot_token_encrypted or "")),
         "trade_amount_mode": user.trade_amount_mode,
         "fixed_trade_amount_usd": float(user.fixed_trade_amount_usd or 10),
         "trade_balance_percent": float(user.trade_balance_percent or 10),
@@ -175,16 +338,12 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
 def me_telegram_test(db=Depends(get_db), user=Depends(current_user)):
     _ = db
     try:
-        ok = send_admin_user_alert_sync(
-            user,
-            "🧪 Prueba manual de alertas administrativas.\nEl canal central de Telegram está activo para eventos del sistema y de usuarios.",
-            scope="admin-telegram-test",
-        )
+        ok = send_user_telegram_test_alert(user, raise_on_error=True)
     except TelegramDeliveryError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     if not ok:
-        raise HTTPException(status_code=502, detail="No se pudo enviar la prueba al canal administrativo de Telegram")
-    return {"ok": True, "message": "Mensaje de prueba enviado al Telegram administrativo"}
+        raise HTTPException(status_code=502, detail="No se pudo enviar la prueba al Telegram configurado para este usuario")
+    return {"ok": True, "message": "Mensaje de prueba enviado al Telegram del usuario"}
 
 
 @router.get("/platform-metadata")
@@ -325,7 +484,9 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
     if payload.config is not None:
         current = connector.config_json or {}
         current.update(payload.config)
-        connector.config_json = current
+        connector.config_json = _sync_connector_config_market_type(current, connector.market_type)
+    else:
+        connector.config_json = _sync_connector_config_market_type(next_config, connector.market_type)
     if payload.secrets is not None:
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
@@ -348,6 +509,8 @@ def delete_connector(connector_id: int, db=Depends(get_db), user: User = Depends
         raise HTTPException(status_code=404, detail="Connector not found")
     if connector.user_id != user.id:
         admin_user(user)
+    owner = db.query(User).filter(User.id == connector.user_id).first()
+    detail = f"Se eliminó el conector {connector.label} ({connector.platform})."
     db.delete(connector)
     db.commit()
     if owner:
@@ -400,7 +563,7 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
         current = connector.config_json or {}
         current.update(payload.config)
         connector.config_json = current
-    ensure_connector_market_type_state(connector)
+    ensure_connector_market_type_state(connector, persist=True, db=db)
 
     db.commit()
     _notify_user_info(
@@ -419,6 +582,10 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
     if control.managed_by_admin and payload.strategy_slug not in allowed:
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+    _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
+    risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+    trade_amount_settings = _resolve_trade_amount_settings(user, payload)
 
     result = run_strategy(
         db=db,
@@ -504,14 +671,30 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
             connector = session.connector
             symbols = _safe_symbols(getattr(session, "symbols_json", {}))
             config = _safe_json_object(getattr(connector, "config_json", {})) if connector else {}
-            capital = _safe_float(getattr(session.user, "fixed_trade_amount_usd", 0) or config.get("allocation_value", config.get("default_quantity", 0)) or 0)
+            session_mode = str(getattr(session, "trade_amount_mode", None) or "inherit").lower()
+            owner_mode = str(getattr(session.user, "trade_amount_mode", "fixed_usd") or "fixed_usd").lower() if getattr(session, "user", None) else "fixed_usd"
+            effective_mode = owner_mode if session_mode == "inherit" else session_mode
+            if effective_mode == "balance_percent":
+                capital = _safe_float(
+                    getattr(session, "amount_percentage", None)
+                    or getattr(getattr(session, "user", None), "trade_balance_percent", 0)
+                    or 0
+                )
+            else:
+                capital = _safe_float(
+                    getattr(session, "amount_per_trade", None)
+                    or getattr(getattr(session, "user", None), "fixed_trade_amount_usd", 0)
+                    or config.get("allocation_value", config.get("default_quantity", 0))
+                    or 0
+                )
+            session_market_type = normalize_market_type(getattr(session, "market_type", None))
             payload.append({
                 "id": session.id,
                 "connector_id": session.connector_id,
                 "connector_label": connector.label if connector else "-",
                 "platform": connector.platform if connector else "-",
                 "mode": connector.mode if connector else "-",
-                "market_type": connector.market_type if connector else "spot",
+                "market_type": session_market_type or (connector.market_type if connector else "spot"),
                 "strategy_slug": session.strategy_slug,
                 "timeframe": session.timeframe,
                 "symbols": symbols,
@@ -539,6 +722,7 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
                 "last_error": session.last_error,
                 "capital_per_operation": capital,
                 "capital_currency": "USDT",
+                "trade_amount_mode": effective_mode,
                 "created_at": _safe_iso(session.created_at),
             })
         except Exception as exc:
@@ -609,11 +793,14 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
 
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+    trade_amount_settings = _resolve_trade_amount_settings(user, payload)
+    resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
 
     normalized_timeframe = _normalize_timeframe(payload.timeframe)
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        market_type=resolved_market_type,
         strategy_slug=payload.strategy_slug,
         timeframe=normalized_timeframe,
         symbols_json={
@@ -623,6 +810,9 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         },
         interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
         risk_per_trade=risk_value,
+        trade_amount_mode=trade_amount_settings["trade_amount_mode"],
+        amount_per_trade=trade_amount_settings["amount_per_trade"],
+        amount_percentage=trade_amount_settings["amount_percentage"],
         min_ml_probability=ml_value,
         use_live_if_available=payload.use_live_if_available,
         take_profit_mode=payload.take_profit_mode,
@@ -684,6 +874,9 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
             raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
         _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
         session.strategy_slug = payload.strategy_slug
+    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    if payload.market_type is not None and connector is not None:
+        session.market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
     if payload.timeframe is not None:
         normalized_timeframe = _normalize_timeframe(payload.timeframe)
         session.timeframe = normalized_timeframe
@@ -693,6 +886,12 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
     if payload.risk_per_trade is not None:
         session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+    if payload.trade_amount_mode is not None:
+        session.trade_amount_mode = payload.trade_amount_mode
+    if payload.amount_per_trade is not None:
+        session.amount_per_trade = payload.amount_per_trade
+    if payload.amount_percentage is not None:
+        session.amount_percentage = payload.amount_percentage
     if payload.min_ml_probability is not None:
         session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
     if payload.use_live_if_available is not None:
@@ -723,7 +922,7 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
 
     db.commit()
-    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+    connector = connector or db.query(Connector).filter(Connector.id == session.connector_id).first()
     _notify_user_info(
         user,
         title="Bot actualizado",
@@ -765,9 +964,11 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         raise HTTPException(status_code=404, detail="Enabled connector not found")
 
     source_symbols_json = _safe_json_object(getattr(source, "symbols_json", {}))
+    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=source.strategy_slug)
     cloned = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        market_type=resolve_runtime_market_type(connector, requested_market_type=getattr(source, "market_type", None)),
         strategy_slug=source.strategy_slug,
         timeframe=source.timeframe,
         symbols_json={
@@ -776,6 +977,9 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         },
         interval_minutes=source.interval_minutes,
         risk_per_trade=source.risk_per_trade,
+        trade_amount_mode=getattr(source, "trade_amount_mode", "inherit"),
+        amount_per_trade=getattr(source, "amount_per_trade", None),
+        amount_percentage=getattr(source, "amount_percentage", None),
         min_ml_probability=source.min_ml_probability,
         use_live_if_available=source.use_live_if_available,
         take_profit_mode=source.take_profit_mode,
@@ -911,8 +1115,12 @@ def create_strategy_template(payload: StrategyTemplateCreate, db=Depends(get_db)
             raise HTTPException(status_code=404, detail="Source bot session not found")
         config = {
             "strategy_slug": source.strategy_slug,
+            "market_type": getattr(source, "market_type", None),
             "timeframe": source.timeframe,
             "risk_per_trade": source.risk_per_trade,
+            "trade_amount_mode": getattr(source, "trade_amount_mode", "inherit"),
+            "amount_per_trade": getattr(source, "amount_per_trade", None),
+            "amount_percentage": getattr(source, "amount_percentage", None),
             "min_ml_probability": source.min_ml_probability,
             "use_live_if_available": source.use_live_if_available,
             "take_profit_mode": source.take_profit_mode,
@@ -976,14 +1184,19 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         raise HTTPException(status_code=404, detail="Enabled connector not found")
 
     cfg = template.config_json or {}
+    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=cfg.get("strategy_slug", "ema_rsi"))
     session = BotSession(
         user_id=user.id,
         connector_id=connector.id,
+        market_type=resolve_runtime_market_type(connector, requested_market_type=cfg.get("market_type")),
         strategy_slug=cfg.get("strategy_slug", "ema_rsi"),
         timeframe=cfg.get("timeframe", "5m"),
         symbols_json={"symbols": payload.symbols},
         interval_minutes=int(cfg.get("interval_minutes", _interval_from_timeframe(cfg.get("timeframe", "5m"), 5))),
         risk_per_trade=float(cfg.get("risk_per_trade", 0.03)),
+        trade_amount_mode=cfg.get("trade_amount_mode", "inherit"),
+        amount_per_trade=cfg.get("amount_per_trade"),
+        amount_percentage=cfg.get("amount_percentage"),
         min_ml_probability=float(cfg.get("min_ml_probability", 0.58)),
         use_live_if_available=bool(cfg.get("use_live_if_available", False)),
         take_profit_mode=cfg.get("take_profit_mode", "percent"),

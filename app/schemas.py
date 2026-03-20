@@ -4,6 +4,7 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 
 PLATFORMS = Literal["mt5", "ctrader", "tradingview", "binance", "bybit", "okx"]
 STRATEGY_LITERAL = str
+MARKET_TYPES = Literal["spot", "futures", "cfd", "forex", "signals"]
 
 
 class UserCreate(BaseModel):
@@ -22,7 +23,7 @@ class ConnectorCreate(BaseModel):
     platform: PLATFORMS
     label: str
     mode: Literal["paper", "live", "signal"] = "paper"
-    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] = "spot"
+    market_type: MARKET_TYPES = "spot"
     symbols: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, Any] = Field(default_factory=dict)
@@ -31,7 +32,7 @@ class ConnectorCreate(BaseModel):
 class ConnectorUpdate(BaseModel):
     label: str | None = None
     mode: Literal["paper", "live", "signal"] | None = None
-    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    market_type: MARKET_TYPES | None = None
     symbols: list[str] | None = None
     config: dict[str, Any] | None = None
     secrets: dict[str, Any] | None = None
@@ -45,7 +46,6 @@ class StrategyRiskMixin(BaseModel):
         sl_mode = getattr(self, "stop_loss_mode", "percent")
         tp_value = float(getattr(self, "take_profit_value", 0) or 0)
         sl_value = float(getattr(self, "stop_loss_value", 0) or 0)
-
         trailing_value = float(getattr(self, "trailing_stop_value", 0) or 0)
 
         if sl_value <= 0:
@@ -79,7 +79,7 @@ class TradeAmountMixin(BaseModel):
 
 class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
     connector_ids: list[int]
-    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    market_type: MARKET_TYPES | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
     dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
@@ -104,7 +104,7 @@ class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
 
 class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     connector_id: int
-    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    market_type: MARKET_TYPES | None = None
     symbols: list[str]
     symbol_source_mode: Literal["manual", "dynamic"] = "manual"
     dynamic_symbol_limit: int = Field(default=10, ge=1, le=200)
@@ -133,7 +133,7 @@ class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
     trade_amount_mode: Literal["inherit", "fixed_usd", "balance_percent"] | None = None
     amount_per_trade: float | None = Field(default=None, gt=0)
     amount_percentage: float | None = Field(default=None, gt=0, le=100)
-    market_type: Literal["spot", "futures", "cfd", "forex", "signals"] | None = None
+    market_type: MARKET_TYPES | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     symbols: list[str] | None = None
     symbol_source_mode: Literal["manual", "dynamic"] | None = None
@@ -156,6 +156,12 @@ class BotSessionUpdate(StrategyRiskMixin, TradeAmountMixin):
     min_ml_probability: float | None = Field(default=None, ge=0, le=100)
     use_live_if_available: bool | None = None
 
+
+class BotSessionCopyPayload(BaseModel):
+    connector_id: int | None = None
+    symbols: list[str] | None = None
+
+
 class TradingViewWebhook(BaseModel):
     connector_id: int
     symbol: str
@@ -166,6 +172,24 @@ class TradingViewWebhook(BaseModel):
     passphrase: str | None = None
     target_connector_id: int | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTemplateCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    description: str = ""
+    is_public: bool = False
+    source_bot_session_id: int | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTemplateApplyPayload(BaseModel):
+    connector_id: int
+    symbols: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class StrategyControlUpdate(BaseModel):
+    allowed_strategies: list[str] = Field(default_factory=list)
 
 
 class AdminUserUpdate(BaseModel):
@@ -201,4 +225,27 @@ class AdminPolicyUpdate(BaseModel):
 
 class AdminStrategyControlUpdate(BaseModel):
     managed_by_admin: bool
-    allowed_strategies: list[Literal["ema_rsi", "mean_reversion_zscore", "momentum_breakout"]] = Field(default_factory=list)
+    allowed_strategies: list[str] = Field(default_factory=list)
+
+
+class AdminPlanConfigPayload(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = ""
+    apps: int = Field(default=1, ge=1)
+    symbols: int = Field(default=5, ge=0)
+    daily_movements: int = Field(default=10, ge=0)
+    monthly_price_usd: float = Field(default=20.0, ge=0)
+    is_custom: bool = False
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class AdminPricingConfigUpdate(BaseModel):
+    base_commission_usd: float = Field(ge=0)
+    cost_per_app_usd: float = Field(ge=0)
+    cost_per_symbol_usd: float = Field(ge=0)
+    cost_per_movement_usd: float = Field(ge=0)
+    cost_per_gb_ram_usd: float = Field(ge=0)
+    cost_per_gb_disk_usd: float = Field(ge=0)
+    suggested_ram_per_app_gb: float = Field(ge=0)
+    suggested_disk_per_app_gb: float = Field(ge=0)

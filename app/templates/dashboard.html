@@ -1,144 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="dashboard-redesign">
 <section class="dashboard-header dashboard-header-grid hero-glass">
   <div>
     <span class="pill">Hola, {{ user.name }}</span>
-    <h1>Tu centro de operación inteligente</h1>
-    <p>Gestiona conectores, estrategias y resultados desde una vista simple y rápida.</p>
+    <h1>Centro operativo</h1>
+    <p>Configura perfil, conectores, estrategias y monitorea la operación en una sola vista.</p>
   </div>
   <aside class="card economic-summary" id="economic-summary">
     <div class="row-between">
-      <h3>Panel de apps y estrategias</h3>
-      <small class="hint">Estado actual</small>
+      <h3>Resumen de cuenta</h3>
+      <small class="hint">Actualizado en vivo</small>
     </div>
     <div class="economic-grid economic-grid-compact">
-      <div class="economic-item">
-        <small>Apps activas</small>
-        <strong id="eco-active-apps">0</strong>
-      </div>
-      <div class="economic-item">
-        <small>Símbolos por app (prom.)</small>
-        <strong id="eco-symbols-per-app">0.0</strong>
-      </div>
-      <div class="economic-item">
-        <small>Estrategias activas</small>
-        <strong id="eco-active-strategies">0</strong>
-      </div>
+      <div class="economic-item"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
+      <div class="economic-item"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
+      <div class="economic-item"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
+      <div class="economic-item"><small>PnL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
     </div>
     <div id="strategy-performance-list" class="strategy-performance-list"></div>
   </aside>
 </section>
 
 <section class="tabs" id="dashboard-tabs">
-  <button class="tab-btn active tab-icon-btn" type="button" data-tab="profile" title="Perfil" aria-label="Perfil"><span class="tab-glyph">◉</span><span class="tab-label">Perfil</span></button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="connectors" title="Conectores" aria-label="Conectores"><span class="tab-glyph">◉</span><span class="tab-label">Apps</span></button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="strategies" title="Estrategias" aria-label="Estrategias"><span class="tab-glyph">◉</span><span class="tab-label">Estrategias</span></button>
-  <button class="tab-btn tab-icon-btn" type="button" data-tab="activity" title="Actividad" aria-label="Actividad"><span class="tab-glyph">◉</span><span class="tab-label">Actividad</span></button>
+  <button class="tab-btn active" type="button" data-tab="profile">Perfil</button>
+  <button class="tab-btn" type="button" data-tab="connectors">Conectores</button>
+  <button class="tab-btn" type="button" data-tab="automation">Automatización</button>
+  <button class="tab-btn" type="button" data-tab="activity">Actividad</button>
 </section>
 
 <section id="tab-profile" class="tab-panel active">
-  <section class="profile-operations-shell">
-    <div class="row-between">
-      <div>
-        <small class="quantum-label">Profile command deck</small>
-        <h2>Resumen operativo del perfil</h2>
+  <div class="grid-2 dashboard-grid-two">
+    <article class="card quantum-command-card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Perfil</small>
+          <h2 id="profile-title">Perfil de usuario</h2>
+        </div>
+        <span class="pill tiny" id="user-config-state">Cargando</span>
       </div>
-      <small class="hint">Mission control, configuración, decisiones y riesgo ahora viven dentro de Perfil.</small>
-    </div>
-    <section class="quantum-command-grid profile-command-grid">
-      <article class="card quantum-command-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">Quantum Mission Control</small>
-            <h2>Estado táctico del sistema</h2>
-          </div>
-          <div class="row-wrap">
-            <button class="btn btn-sm" type="button" id="refresh-quantum-btn">Refresh</button>
-            <span class="pill" id="quant-health-pill">Inicializando</span>
-          </div>
-        </div>
-        <div class="quantum-metrics-grid">
-          <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
-          <div class="quantum-metric"><small>Sync engine</small><strong id="quant-sync-status">Pendiente</strong></div>
-          <div class="quantum-metric"><small>Conectores live</small><strong id="quant-live-connectors">0</strong></div>
-          <div class="quantum-metric"><small>Último heartbeat</small><strong id="quant-last-heartbeat">--:--</strong></div>
-        </div>
-        <div class="quantum-status-strip" id="quant-status-strip"></div>
-      </article>
-
-      <article class="card quantum-side-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">User configuration</small>
-            <h2>Configuración operativa</h2>
-          </div>
-          <span class="pill tiny" id="user-config-state">Profile loaded</span>
-        </div>
-        <div id="user-config-report" class="quantum-report-list"></div>
-      </article>
-
-      <article class="card quantum-side-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">Decision telemetry</small>
-            <h2>Flujo de decisiones</h2>
-          </div>
-          <span class="pill tiny" id="decision-report-state">0 eventos</span>
-        </div>
-        <div id="decision-breakdown-panel" class="quantum-report-list"></div>
-      </article>
-
-      <article class="card quantum-side-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">Risk radar</small>
-            <h2>Riesgo visible en 3 segundos</h2>
-          </div>
-          <div class="row-wrap">
-            <button class="btn btn-sm" type="button" id="refresh-risk-radar-btn">Refresh</button>
-            <span class="pill tiny" id="risk-radar-state">Estable</span>
-          </div>
-        </div>
-        <div class="quantum-metrics-grid">
-          <div class="quantum-metric"><small>Health</small><strong id="risk-health-score">100%</strong></div>
-          <div class="quantum-metric"><small>Open risk</small><strong id="risk-open-heat">0.00</strong></div>
-          <div class="quantum-metric"><small>Drawdown</small><strong id="risk-drawdown">0.00%</strong></div>
-          <div class="quantum-metric"><small>Kill switch</small><strong id="risk-kill-switch">OFF</strong></div>
-        </div>
-        <div id="risk-radar-panel" class="quantum-report-list"></div>
-      </article>
-    </section>
-  </section>
-  <div class="card profile-strategy-layout">
-    <section class="profile-main-flow">
-      <h2 id="profile-title">Perfil de usuario</h2>
-      <p class="hint">Ajusta tu cuenta por bloques para mantener un flujo claro: identidad, contacto y alertas automatizadas.</p>
-      <form id="profile-form" class="form-grid profile-grid profile-cascade-form">
-      <div class="profile-form-group">
-        <h3>Identidad</h3>
-        <label>Nombre
-          <input name="name" id="profile-name" required>
-        </label>
-        <label>Email
-          <input name="email" id="profile-email" disabled>
-        </label>
-      </div>
-      <div class="profile-form-group">
-        <h3>Contacto</h3>
-        <label>Número de teléfono (WhatsApp futuro)
-          <input name="phone" id="profile-phone" placeholder="+57 300 000 0000">
-        </label>
-      </div>
-      <div class="profile-form-group">
-        <h3>Alertas y notificaciones</h3>
-        <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram (operaciones y fallas)</label>
-        <label>Bot Key de Telegram
-          <input name="telegram_bot_key" id="profile-telegram-bot-key" placeholder="123456:ABC..." autocomplete="off">
-        </label>
-        <label>Telegram ID / Chat ID
-          <input name="telegram_chat_id" id="profile-telegram-chat-id" placeholder="6902163541" autocomplete="off">
-        </label>
+      <form id="profile-form" class="form-grid profile-grid">
+        <label>Nombre<input name="name" id="profile-name" required></label>
+        <label>Email<input name="email" id="profile-email" disabled></label>
+        <label>Teléfono<input name="phone" id="profile-phone" placeholder="+57 300 000 0000"></label>
         <label>Idioma de alertas
           <select name="alert_language" id="profile-alert-language">
             <option value="es">Español</option>
@@ -147,185 +50,196 @@
             <option value="fr">Français</option>
           </select>
         </label>
+        <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram</label>
+        <label>Bot Key de Telegram<input name="telegram_bot_key" id="profile-telegram-bot-key" autocomplete="off" placeholder="123456:ABC..."></label>
+        <label>Chat ID de Telegram<input name="telegram_chat_id" id="profile-telegram-chat-id" autocomplete="off" placeholder="6902163541"></label>
         <div class="row-wrap">
-          <button class="btn btn-sm" type="button" id="test-telegram-btn">Probar Telegram</button>
-          <small class="hint">Envía un mensaje de prueba para validar bot key + chat id.</small>
+          <button class="btn primary" type="submit">Guardar perfil</button>
+          <button class="btn" id="test-telegram-btn" type="button">Probar Telegram</button>
+        </div>
+        <div id="profile-feedback" class="status-msg"></div>
+        <div id="telegram-test-feedback" class="status-msg"></div>
+      </form>
+    </article>
+
+    <article class="card quantum-side-card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Sizing</small>
+          <h2>Configuración de capital</h2>
         </div>
       </div>
-      <small class="hint">Mission control, configuración, decisiones y riesgo ahora viven dentro de Perfil.</small>
-    </div>
-    <section class="quantum-command-grid profile-command-grid">
-      <article class="card quantum-command-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">Quantum Mission Control</small>
-            <h2>Estado táctico del sistema</h2>
-          </div>
-          <div class="row-wrap">
-            <button class="btn btn-sm" type="button" id="refresh-quantum-btn">Refresh</button>
-            <span class="pill" id="quant-health-pill">Inicializando</span>
-          </div>
-        </div>
-        <div class="quantum-metrics-grid">
-          <div class="quantum-metric"><small>Health score</small><strong id="quant-health-score">0%</strong></div>
-          <div class="quantum-metric"><small>Sync engine</small><strong id="quant-sync-status">Pendiente</strong></div>
-          <div class="quantum-metric"><small>Conectores live</small><strong id="quant-live-connectors">0</strong></div>
-          <div class="quantum-metric"><small>Último heartbeat</small><strong id="quant-last-heartbeat">--:--</strong></div>
-        </div>
-        <div class="quantum-status-strip" id="quant-status-strip"></div>
-      </article>
-
-      <article class="card quantum-side-card">
-        <div class="row-between">
-          <div>
-            <small class="quantum-label">User configuration</small>
-            <h2>Configuración operativa</h2>
-          </div>
-          <span class="pill tiny" id="user-config-state">Profile loaded</span>
-        </div>
-        <div id="user-config-report" class="quantum-report-list"></div>
-      </article>
-
-        <form id="run-form" class="form-grid wizard-form">
-          <div class="wizard-step-nav">
-            <button class="btn btn-sm active" type="button" data-wizard-step="1">1. Base</button>
-            <button class="btn btn-sm" type="button" data-wizard-step="2">2. Riesgo</button>
-            <button class="btn btn-sm" type="button" data-wizard-step="3">3. Salida</button>
-          </div>
-          <div class="wizard-step active" data-wizard-content="1">
-            <label>Conectores disponibles para ejecutar
-              <select id="run-connector-select" multiple size="5"></select>
-            </label>
-            <small class="hint">Selecciona uno o más conectores (Ctrl/Cmd + click para selección múltiple).</small>
-            <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
-            <div class="symbol-picker-shell">
-              <div class="row-between">
-                <strong>Lista de símbolos</strong>
-                <small class="hint" id="symbol-catalog-status">Selecciona un conector para cargar su universo.</small>
-              </div>
-              <label>Buscar símbolo
-                <input id="symbol-search-input" type="search" placeholder="Ej. BTC, ETH, SOL">
-              </label>
-              <div class="symbol-picker-layout">
-                <select id="symbol-catalog-list" multiple size="8"></select>
-                <div class="symbol-picker-actions">
-                  <button class="btn btn-sm" type="button" id="symbol-add-selected">Agregar →</button>
-                  <button class="btn btn-sm" type="button" id="symbol-remove-selected">← Quitar</button>
-                  <button class="btn btn-sm" type="button" id="symbol-clear-selected">Limpiar</button>
-                </div>
-                <select id="symbol-selected-list" multiple size="8"></select>
-              </div>
-              <small class="hint">Usa el buscador y el selector para construir tu cesta manual. La lista se filtra por conector y mercado.</small>
-            </div>
-            <label>Modo de selección de símbolos
-              <select name="symbol_source_mode" id="symbol-source-mode">
-                <option value="manual">Manual</option>
-                <option value="dynamic">Dinámico desde la app seleccionada</option>
-              </select>
-            </label>
-            <label>Cantidad de símbolos para selección dinámica
-              <input name="dynamic_symbol_limit" id="dynamic-symbol-limit" type="number" min="1" max="200" value="20">
-            </label>
-            <small class="hint" id="symbol-source-help">Manual: escribe los pares separados por coma. Dinámico: el bot usará el universo del conector o top símbolos disponibles.</small>
-            <label>Timeframe<input name="timeframe" value="1h"></label>
-            <label>Estrategia <a class="strategy-inline-help" href="#strategy-library-panel" title="Ir a estrategias disponibles">?</a>
-              <select name="strategy_slug"></select>
-            </label>
-          </div>
-          <div class="wizard-step" data-wizard-content="2">
-          <small class="hint" id="strategy-managed-hint"></small>
-          <div class="row-wrap">
-            <button class="btn btn-sm" type="button" id="open-strategy-wizard">Wizard de configuración</button>
-            <button class="btn btn-sm" type="button" id="open-strategy-setup-help">Ver guía de campos</button>
-          </div>
-          <label>Riesgo por trade (%) <button type="button" class="btn btn-sm term-help" data-term="risk">?</button><input name="risk_per_trade_percent" type="number" step="1" min="1" max="100" value="1"></label>
-          <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" step="1" min="0" max="100" value="55"></label>
-          <label>Máx. posiciones abiertas simultáneas
-            <input name="max_open_positions" type="number" min="1" max="20" value="1">
-            <small class="hint">Solo contará posiciones realmente abiertas del conector seleccionado.</small>
-          </label>
-          <div id="strategy-dynamic-guidance" class="strategy-guidance-card"></div>
-          </div>
-          <div class="wizard-step" data-wizard-content="3">
-          <label>Take Win / Take Profit <button type="button" class="btn btn-sm term-help" data-term="tp">?</button>
-            <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" step="0.1" min="0.1" value="1.5"></div>
-            <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
-          </label>
-          <label>Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button>
-            <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" step="0.1" min="0.1" value="1.0"></div>
-            <small class="hint">Consulta el ejemplo en el botón <b>?</b>.</small>
-          </label>
-          <label>Trailing Stop <button type="button" class="btn btn-sm term-help" data-term="trailing">?</button>
-            <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" step="0.1" min="0.1" value="0.8"></div>
-            <small class="hint">Consulta explicación en el botón <b>?</b>.</small>
-          </label>
-          <label>Cierre por indicador
-            <div class="row-wrap"><label class="checkbox"><input name="indicator_exit_enabled" type="checkbox"> Activado</label><select name="indicator_exit_rule"><option value="macd_cross">Cruce MACD</option><option value="rsi_reversal">Reversión RSI</option><option value="ema_cross">Cruce EMA</option></select></div>
-          </label>
-          <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
-          <input type="hidden" name="leverage_profile" value="none">
-          <input type="hidden" name="compound_growth_enabled" value="false">
-          <input type="hidden" name="atr_volatility_filter_enabled" value="true">
-          </div>
-          <div class="row-between">
-            <button class="btn" type="button" id="wizard-prev-inline">Atrás</button>
-            <button class="btn" type="button" id="wizard-next-inline">Siguiente</button>
-          </div>
-          <div class="row-wrap"><button class="btn primary" type="submit">Ejecutar</button><button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button></div>
-          <div id="run-feedback" class="status-msg" hidden></div>
-        </form>
-      </div>
-      <label>Símbolos elegidos (separados por coma)<input id="symbols-input" name="symbols" placeholder="BTC/USDT,ETH/USDT"></label>
-
-      <div class="card soft-card">
-        <strong>Credenciales del conector</strong>
-        <p class="hint">Completa estos campos. Nosotros guardamos la configuración técnica por detrás.</p>
-        <div id="connector-friendly-fields" class="form-grid"></div>
-      </div>
-      <button class="btn primary" type="submit">Guardar conector</button>
-    </form>
+      <form id="profile-trade-amount-form" class="form-grid">
+        <label>Modo de tamaño
+          <select name="trade_amount_mode" id="trade-amount-mode">
+            <option value="fixed_usd">Monto fijo</option>
+            <option value="balance_percent">% de balance</option>
+          </select>
+        </label>
+        <label>Monto fijo USD<input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10"></label>
+        <label>% del balance<input name="trade_balance_percent" id="trade-balance-percent" type="number" min="0.1" max="100" step="0.1" value="10"></label>
+        <button class="btn primary" type="submit">Guardar sizing</button>
+        <div id="profile-trade-amount-feedback" class="status-msg"></div>
+      </form>
+      <div id="user-config-report" class="quantum-report-list" style="margin-top:16px;"></div>
+    </article>
   </div>
 </section>
 
-<section id="tab-activity" class="tab-panel">
-  <section class="quantum-report-grid">
+<section id="tab-connectors" class="tab-panel">
+  <div class="grid-2 dashboard-grid-two">
     <article class="card">
       <div class="row-between">
         <div>
-          <small class="quantum-label">Connector intelligence</small>
-          <h2>Health de conectores</h2>
+          <small class="quantum-label">Conectores</small>
+          <h2>Nuevo conector</h2>
+        </div>
+      </div>
+      <form id="connector-form" class="form-grid">
+        <label>Plataforma
+          <select name="platform" id="connector-platform">
+            <option value="binance">Binance</option>
+            <option value="bybit">Bybit</option>
+            <option value="okx">OKX</option>
+            <option value="mt5">MT5</option>
+            <option value="ctrader">cTrader</option>
+            <option value="tradingview">TradingView</option>
+          </select>
+        </label>
+        <label>Nombre<input name="label" id="connector-label" placeholder="Binance principal" required></label>
+        <label>Modo
+          <select name="mode" id="connector-mode">
+            <option value="paper">Paper</option>
+            <option value="live">Live</option>
+            <option value="signal">Signal</option>
+          </select>
+        </label>
+        <label>Mercado
+          <select name="market_type" id="connector-market-type"></select>
+        </label>
+        <label>Símbolos base<input name="symbols" id="symbols-input" placeholder="BTC/USDT,ETH/USDT"></label>
+        <div id="connector-friendly-fields" class="form-grid"></div>
+        <button class="btn primary" type="submit">Guardar conector</button>
+        <div id="connector-feedback" class="status-msg"></div>
+      </form>
+    </article>
+
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Estado</small>
+          <h2>Conectores configurados</h2>
         </div>
         <button class="btn btn-sm" type="button" id="refresh-connector-health-btn">Refrescar</button>
       </div>
       <div id="connector-health-panel" class="quantum-report-list"></div>
+      <div id="connector-list" class="stack" style="margin-top:16px;"></div>
+    </article>
+  </div>
+</section>
+
+<section id="tab-automation" class="tab-panel">
+  <div class="grid-2 dashboard-grid-two">
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Ejecución</small>
+          <h2>Run manual o activar bot</h2>
+        </div>
+      </div>
+      <form id="run-form" class="form-grid wizard-form">
+        <label>Conector
+          <select id="run-connector-select" name="connector_id"></select>
+        </label>
+        <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+        <label>Timeframe<input name="timeframe" value="15m"></label>
+        <label>Estrategia
+          <select name="strategy_slug" id="strategy-select"></select>
+        </label>
+        <label>Riesgo por trade (%)<input name="risk_per_trade_percent" type="number" min="0.1" max="100" step="0.1" value="1"></label>
+        <label>Prob. mínima ML (%)<input name="min_ml_probability_percent" type="number" min="0" max="100" step="1" value="55"></label>
+        <label>Take profit
+          <div class="row-wrap"><select name="take_profit_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="take_profit_value" type="number" min="0.1" step="0.1" value="1.5"></div>
+        </label>
+        <label>Stop loss
+          <div class="row-wrap"><select name="stop_loss_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="stop_loss_value" type="number" min="0.1" step="0.1" value="1"></div>
+        </label>
+        <label>Trailing stop
+          <div class="row-wrap"><select name="trailing_stop_mode"><option value="percent">%</option><option value="usdt">USDT</option></select><input name="trailing_stop_value" type="number" min="0.1" step="0.1" value="0.8"></div>
+        </label>
+        <label>Modo de sizing
+          <select name="trade_amount_mode">
+            <option value="inherit">Heredar del perfil</option>
+            <option value="fixed_usd">Monto fijo</option>
+            <option value="balance_percent">% de balance</option>
+          </select>
+        </label>
+        <label>Monto por trade<input name="amount_per_trade" type="number" min="0.01" step="0.01"></label>
+        <label>% por trade<input name="amount_percentage" type="number" min="0.1" max="100" step="0.1"></label>
+        <label class="checkbox"><input name="use_live_if_available" type="checkbox"> Intentar live si el conector está en live</label>
+        <div class="row-wrap">
+          <button class="btn primary" type="submit">Ejecutar estrategia</button>
+          <button class="btn" type="button" id="activate-bot-btn">Activar bot 24/7</button>
+        </div>
+        <div id="run-feedback" class="status-msg"></div>
+      </form>
+    </article>
+
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Bots</small>
+          <h2>Sesiones automáticas</h2>
+        </div>
+        <button class="btn btn-sm" type="button" id="refresh-bot-sessions-btn">Refrescar</button>
+      </div>
+      <div id="bot-sessions-panel" class="stack"></div>
+    </article>
+  </div>
+</section>
+
+<section id="tab-activity" class="tab-panel">
+  <div class="grid-2 dashboard-grid-two">
+    <article class="card">
+      <div class="row-between">
+        <div>
+          <small class="quantum-label">Reportes</small>
+          <h2>Resumen ejecutivo</h2>
+        </div>
+        <span class="pill tiny" id="reports-range-badge">Actual</span>
+      </div>
+      <div id="executive-report-panel" class="quantum-report-list"></div>
     </article>
     <article class="card">
       <div class="row-between">
         <div>
-          <small class="quantum-label">Reports</small>
-          <h2>Resumen ejecutivo</h2>
+          <small class="quantum-label">Configuración</small>
+          <h2>Indicadores rápidos</h2>
         </div>
-        <span class="pill tiny" id="reports-range-badge">Semana</span>
       </div>
-      <div id="executive-report-panel" class="quantum-report-list"></div>
+      <div class="quantum-metrics-grid">
+        <div class="quantum-metric"><small>Health</small><strong id="quant-health-score">0%</strong></div>
+        <div class="quantum-metric"><small>Sync</small><strong id="quant-sync-status">Pendiente</strong></div>
+        <div class="quantum-metric"><small>Live</small><strong id="quant-live-connectors">0</strong></div>
+        <div class="quantum-metric"><small>Último evento</small><strong id="quant-last-heartbeat">--</strong></div>
+      </div>
+      <div id="quant-status-strip" class="quantum-report-list"></div>
     </article>
-  </section>
+  </div>
 
-  <section class="stats-grid kpi-ribbon">
-    <div class="card stat stat-card"><small>Conectores</small><strong id="stat-connectors">{{ summary.total_connectors }}</strong></div>
-    <div class="card stat stat-card"><small>Activos</small><strong id="stat-enabled">{{ summary.enabled_connectors }}</strong></div>
-    <div class="card stat stat-card"><small>Trades</small><strong id="stat-trades">{{ summary.total_trades }}</strong></div>
-    <div class="card stat stat-card"><small>PNL realizado</small><strong id="stat-pnl">{{ summary.realized_pnl }}</strong></div>
-  </section>
-
-  <section class="card">
+  <article class="card" style="margin-top:24px;">
     <div class="row-between">
-      <h2>Logs de ejecución (5m / 1h)</h2>
-      <div style="display:flex;gap:8px;"><button class="btn" type="button" id="refresh-execution-logs-btn">Actualizar logs</button><button class="btn" type="button" id="download-execution-logs-btn">Descargar CSV</button></div>
+      <div>
+        <small class="quantum-label">Logs</small>
+        <h2>Logs de ejecución</h2>
+      </div>
+      <div class="row-wrap">
+        <button class="btn btn-sm" type="button" id="refresh-execution-logs-btn">Actualizar</button>
+        <button class="btn btn-sm" type="button" id="download-execution-logs-btn">Descargar CSV</button>
+      </div>
     </div>
-    <small class="hint">Muestra la última vela capturada, decisión (sin acción / compra / venta) y estado de ejecución para validar conexión con Binance u otros conectores.</small>
-    <small class="hint" id="execution-logs-refresh-meta">Auto-refresh cada 5 minutos · Mostrando últimos 50 logs.</small>
-    <div class="table-wrap" style="margin-top:10px;">
+    <small class="hint" id="execution-logs-refresh-meta">Mostrando últimos logs.</small>
+    <div class="table-wrap" style="margin-top:12px;">
       <table id="execution-logs-table">
         <thead>
           <tr>
@@ -333,127 +247,15 @@
             <th>Símbolo</th>
             <th>Timeframe</th>
             <th>Señal</th>
-            <th>Decisión</th>
             <th>Estado</th>
-            <th>Prob ML</th>
-            <th>Vela</th>
+            <th>ML</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
-  </section>
-
-<section class="card">
-    <div class="row-between">
-      <h2>Transacciones <button type="button" class="btn btn-sm term-help" data-term="pnl">?</button></h2>
-      <label>Filtro
-        <select id="trade-range-filter">
-          <option value="day">Diario</option>
-          <option value="week" selected>Semanal</option>
-          <option value="month">Mensual</option>
-        </select>
-      </label>
-      <small class="hint" id="strategy-managed-hint"></small>
-      <small class="hint">EMA+RSI: tendencia + momentum. Mean Reversion: busca retorno al promedio. Momentum Breakout: opera rupturas de niveles clave.</small>
-
-  
-  
-  <section class="card">
-    <div class="row-between">
-      <h2>Actividad y performance avanzada</h2>
-      <small class="hint">Basado en tus operaciones históricas</small>
-    </div>
-    <div class="grid-2" style="margin-top:10px;">
-      <div><canvas id="equity-curve-chart" height="120"></canvas></div>
-      <div><canvas id="drawdown-curve-chart" height="120"></canvas></div>
-    </div>
-    <div class="grid-2" style="margin-top:10px;">
-      <div><canvas id="monthly-returns-chart" height="120"></canvas></div>
-      <div><canvas id="yearly-returns-chart" height="120"></canvas></div>
-    </div>
-    <div id="activity-kpis" class="trade-metrics" style="margin-top:10px;"></div>
-  </section>
-
-<section class="card">
-    <div class="grid-2">
-      <div>
-        <h2>PNL por plataforma</h2>
-        <canvas id="pnl-platform-chart" height="220"></canvas>
-      </div>
-      <div>
-        <h2>Distribución por resultado</h2>
-        <canvas id="win-loss-chart" height="220"></canvas>
-      </div>
-    </div>
-    <h2>Evolución acumulada del PNL</h2>
-    <canvas id="pnl-cumulative-chart" height="120"></canvas>
-  </section>
-
-  <section class="card">
-    <h2>Webhook de TradingView explicado fácil</h2>
-    <ul class="hint">
-      <li>1) TradingView envía una alerta a una URL segura de tu cuenta.</li>
-      <li>2) La app valida tu clave secreta (passphrase).</li>
-      <li>3) Si indicas <code>target_connector_id</code>, reenvía la orden a Binance/Bybit/OKX/MT5.</li>
-    </ul>
-    <p class="hint">Endpoint: <code>/api/webhooks/tradingview</code></p>
-  </section>
+  </article>
 </section>
 
-<div id="strategy-info-modal" class="modal hidden">
-  <div class="modal-card card strategy-modal-card">
-    <div class="modal-head">
-      <h3 id="strategy-modal-title">Estrategia</h3>
-      <button class="btn" type="button" id="strategy-info-close">Cerrar</button>
-    </div>
-    <p id="strategy-modal-summary" class="hint"></p>
-    <div class="grid-2 modal-grid">
-      <div>
-        <h4>¿Para qué se recomienda?</h4>
-        <p id="strategy-modal-usecase" class="hint"></p>
-      </div>
-      <div>
-        <h4>Timeframes sugeridos</h4>
-        <p id="strategy-modal-timeframes" class="hint"></p>
-      </div>
-    </div>
-    <div class="card soft-card" style="margin-top:10px;">
-      <strong>Consejos</strong>
-      <ul id="strategy-modal-tips" class="modal-list"></ul>
-    </div>
-  </div>
-</div>
-
-
-<div id="strategy-setup-help-modal" class="modal hidden">
-  <div class="modal-card card strategy-modal-card">
-    <div class="modal-head">
-      <h3>Guía rápida del flujo de estrategia</h3>
-      <button class="btn" type="button" id="strategy-setup-help-close">Cerrar</button>
-    </div>
-    <ul class="modal-list">
-      <li><b>Símbolos:</b> usa formato BASE/USDT, separados por coma. Ej: <code>BTC/USDT,ETH/USDT</code>.</li>
-      <li><b>Riesgo por trade (%):</b> número entero o decimal entre 1 y 100. Ej: <code>2</code> = 2%.</li>
-      <li><b>Prob. mínima ML (%):</b> umbral entre 0 y 100. Ej: <code>55</code> significa 55%.</li>
-      <li><b>Take Win / Stop Loss <button type="button" class="btn btn-sm term-help" data-term="sl">?</button> / Trailing:</b> selecciona unidad <code>%</code> o <code>USDT</code> y luego valor numérico.</li>
-      <li><b>Live/Paper:</b> activa “Intentar live…” solo si tu conector está en modo live.</li>
-    </ul>
-  </div>
-</div>
-
-
 <script src="/static/dashboard.js?v={{ static_version }}"></script>
-
-<div id="term-help-modal" class="modal hidden">
-  <div class="modal-card card strategy-modal-card">
-    <div class="modal-head">
-      <h3 id="term-help-title">Explicación</h3>
-      <button class="btn" type="button" id="term-help-close">Cerrar</button>
-    </div>
-    <p id="term-help-body" class="hint"></p>
-  </div>
-</div>
-
-<script src="/static/strategy_wizard.js?v={{ static_version }}"></script>
 {% endblock %}
