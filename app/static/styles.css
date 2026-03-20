@@ -61,6 +61,38 @@ table{width:100%;border-collapse:collapse}
 th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
 .checkbox{display:flex;align-items:center;gap:10px}
 .hint{color:var(--muted);font-size:14px}
+.subtle-guide{margin-top:10px;display:block}
+.field-asterisk-inline,
+.field-asterisk{color:#ffe08a;font-weight:800}
+.field-hint-enabled{position:relative}
+.field-hint-enabled input,
+.field-hint-enabled select,
+.field-hint-enabled textarea{border-color:rgba(240,185,11,.22)}
+.field-hint-enabled.field-hint-warning input,
+.field-hint-enabled.field-hint-warning select,
+.field-hint-enabled.field-hint-warning textarea{
+  border-color:rgba(245,158,11,.55);
+  box-shadow:0 0 0 1px rgba(245,158,11,.12);
+}
+.field-hint-enabled.field-hint-danger input,
+.field-hint-enabled.field-hint-danger select,
+.field-hint-enabled.field-hint-danger textarea{
+  border-color:rgba(239,68,68,.55);
+  box-shadow:0 0 0 1px rgba(239,68,68,.1);
+}
+.field-advisory-popover{
+  position:fixed;
+  width:min(320px,calc(100vw - 24px));
+  padding:12px 14px;
+  border-radius:14px;
+  border:1px solid rgba(240,185,11,.35);
+  background:linear-gradient(180deg,rgba(16,16,16,.98),rgba(25,25,25,.98));
+  box-shadow:0 16px 36px rgba(0,0,0,.38);
+  z-index:40;
+  pointer-events:none;
+}
+.field-advisory-popover strong{display:block;color:#ffe08a;font-size:13px;margin-bottom:4px}
+.field-advisory-popover p{margin:0;color:#d6d6d6;font-size:13px;line-height:1.45}
 .mini-pre{margin-top:10px;background:#090909;color:#d8d8d8;border:1px solid var(--line);border-radius:12px;padding:10px;font-size:12px;overflow:auto}
 code{background:#101010;padding:2px 6px;border-radius:8px}
 .chip-wrap{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}

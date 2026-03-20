@@ -2,7 +2,7 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -75,6 +75,7 @@ ROOT_ADMIN_EMAIL = (settings.admin_email or "davidksinc").strip().lower()
 ALL_STRATEGIES = list(AVAILABLE_STRATEGIES)
 
 logger = logging.getLogger("trading_saas.api")
+BOT_SESSION_INITIAL_DELAY_SECONDS = 10
 
 
 def _extract_http_error_detail(exc: HTTPException) -> str:
@@ -829,21 +830,24 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
         is_active=True,
         last_status="queued",
-        next_run_at=datetime.utcnow(),
+        next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS),
     )
     db.add(session)
+    db.flush()
+    session_id = session.id
+    strategy_slug = session.strategy_slug
+    timeframe = session.timeframe
     db.commit()
-    db.refresh(session)
 
     _notify_user_info(
         user,
         title="Bot 24/7 activado",
-        detail=f"Sesión #{session.id} creada con estrategia {session.strategy_slug} en timeframe {session.timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
+        detail=f"Sesión #{session_id} creada con estrategia {strategy_slug} en timeframe {timeframe}. La primera corrida quedó en cola para ejecutarse automáticamente.",
         connector_label=connector.label,
         platform=connector.platform,
     )
 
-    return {"ok": True, "session_id": session.id}
+    return {"ok": True, "session_id": session_id}
 
 
 @router.put("/bot-sessions/{session_id}")
@@ -996,18 +1000,20 @@ def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends
         atr_volatility_filter_enabled=bool(getattr(source, "atr_volatility_filter_enabled", True)),
         is_active=bool(source.is_active),
         last_status="cloned",
+        next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS) if bool(source.is_active) else None,
     )
     db.add(cloned)
+    db.flush()
+    cloned_id = cloned.id
     db.commit()
-    db.refresh(cloned)
     _notify_user_info(
         user,
         title="Bot clonado",
-        detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned.id}.",
+        detail=f"Se clonó la sesión #{source.id} hacia la nueva sesión #{cloned_id}.",
         connector_label=connector.label,
         platform=connector.platform,
     )
-    return {"ok": True, "session_id": cloned.id}
+    return {"ok": True, "session_id": cloned_id}
 
 
 @router.get("/connectors/{connector_id}/symbols-catalog")
@@ -1213,11 +1219,13 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         atr_volatility_filter_enabled=bool(cfg.get("atr_volatility_filter_enabled", True)),
         is_active=payload.is_active,
         last_status="from_template",
+        next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS) if payload.is_active else None,
     )
     db.add(session)
+    db.flush()
+    session_id = session.id
     db.commit()
-    db.refresh(session)
-    return {"ok": True, "session_id": session.id}
+    return {"ok": True, "session_id": session_id}
 
 
 @router.get("/activity/performance")
