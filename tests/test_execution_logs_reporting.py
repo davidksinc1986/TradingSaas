@@ -380,6 +380,17 @@ def test_trade_run_connector_snapshot_prefers_live_connector_when_available():
     assert snapshot["market_type"] == "spot"
 
 
+def test_trade_run_connector_snapshot_builds_fallback_label_when_missing_everything():
+    api = _load_api_module()
+
+    snapshot = api._trade_run_connector_snapshot(None, {"connector": {"id": 41, "platform": "binance"}})
+
+    assert snapshot["connector_id"] == 41
+    assert snapshot["connector_label"] == "Conector #41"
+    assert snapshot["platform"] == "binance"
+    assert snapshot["market_type"] == "spot"
+
+
 def test_sync_root_admin_telegram_overwrites_admin_profile_with_settings():
     main = _load_main_module()
     admin = main.User(email="admin@example.com", name="davidksinc", hashed_password="x")

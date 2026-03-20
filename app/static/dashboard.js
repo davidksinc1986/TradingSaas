@@ -46,6 +46,9 @@ const COMMON_CONNECTOR_CONFIG_FIELDS = [
   { key: 'leverage_profile', label: 'Leverage profile', target: 'config', type: 'select', options: ['none', 'conservative', 'balanced', 'aggressive'], platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'Perfil de apalancamiento usado por la lógica runtime.' },
   { key: 'retry_attempts', label: 'Retry attempts', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Número de reintentos para timeouts/rechazos recuperables.' },
   { key: 'retry_delay_ms', label: 'Retry delay (ms)', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Espera entre reintentos; 0 = inmediato.' },
+  { key: 'trade_amount_mode', label: 'Sizing por conector', target: 'config', type: 'select', options: ['fixed_usd', 'balance_percent'], hint: 'Cada conector guarda su sizing de forma independiente.' },
+  { key: 'fixed_trade_amount_usd', label: 'Monto fijo USD', target: 'config', type: 'number', hint: 'Monto fijo que usará este conector cuando opere en sizing fijo.' },
+  { key: 'trade_balance_percent', label: '% balance', target: 'config', type: 'number', hint: 'Porcentaje de balance que usará este conector cuando opere en %.' },
   { key: 'paper_balance', label: 'Paper balance', target: 'config', type: 'number', hint: 'Balance de referencia cuando el conector corre en paper.' },
   { key: 'sandbox', label: 'Sandbox/Testnet', target: 'config', type: 'checkbox', platforms: ['binance', 'bybit', 'okx'], hint: 'Activa testnet/sandbox cuando el exchange lo soporte.' },
 ];
@@ -118,7 +121,7 @@ const FIELD_ADVISORY_CONFIG = {
     },
     trade_amount_mode: {
       title: 'Modo de sizing',
-      recommend: 'Heredar sirve para consistencia. Monto fijo aporta control; % de balance adapta el tamaño al capital.',
+      recommend: 'Usa el sizing del conector para aislar riesgo por cuenta/mercado. También puedes sobreescribirlo solo para esta automatización.',
     },
     amount_per_trade: {
       title: 'Monto por trade',
@@ -141,6 +144,8 @@ const state = {
   connectors: [],
   botSessions: [],
   executionLogs: [],
+  heartbeat: null,
+  activity: null,
   editingConnectorId: null,
   pendingActions: {
     runStrategy: false,
@@ -264,11 +269,11 @@ function activitySummaryCard(title, value, tone = 'neutral') {
 function formatTradeAmountMode(mode) {
   const normalized = String(mode || 'inherit').toLowerCase();
   const labels = {
-    inherit: 'Heredar',
+    inherit: 'Conector',
     fixed_usd: 'Monto fijo',
     balance_percent: '% balance',
   };
-  return labels[normalized] || prettyLabel(mode, 'Heredar');
+  return labels[normalized] || prettyLabel(mode, 'Conector');
 }
 
 function formatSessionCapital(session) {
@@ -283,7 +288,38 @@ function formatSessionCapital(session) {
   const effectiveValue = session.trade_amount_mode === 'balance_percent'
     ? `${Number(session.capital_per_operation || 0).toFixed(2)}%`
     : `${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}`;
-  return `Perfil (${effectiveLabel}: ${effectiveValue})`;
+  return `Conector (${effectiveLabel}: ${effectiveValue})`;
+}
+
+function connectorSizingSummary(connector = {}) {
+  const config = connector.config || {};
+  const mode = String(config.trade_amount_mode || 'fixed_usd').toLowerCase();
+  if (mode === 'balance_percent') return `${Number(config.trade_balance_percent || 0).toFixed(2)}% balance`;
+  return `${Number(config.fixed_trade_amount_usd || 0).toFixed(2)} USD fijo`;
+}
+
+function statusPillClass(kind) {
+  const normalized = String(kind || '').toLowerCase();
+  if (['error', 'failed', 'danger'].includes(normalized)) return 'pill-danger';
+  if (['warning', 'skipped', 'paused'].includes(normalized)) return 'pill-warning';
+  return 'pill-ok';
+}
+
+function formatDecisionReason(reason) {
+  const normalized = String(reason || '').trim();
+  if (!normalized) return 'operativa_normal';
+  return normalized.replace(/^circuit_breaker:\s*/i, '').replaceAll('_', ' ');
+}
+
+function buildLogDetails(item) {
+  const notes = item.notes || {};
+  const decision = notes.decision_summary || {};
+  const reasonDetails = Array.isArray(decision.reason_details) ? decision.reason_details : [];
+  const highlights = [];
+  if (decision.decision) highlights.push(`Decisión: ${decision.decision}`);
+  if (notes.error) highlights.push(`Error: ${notes.error}`);
+  if ((notes.execution_raw || {}).message) highlights.push(`Exchange: ${notes.execution_raw.message}`);
+  return { reasonDetails, highlights, raw: notes };
 }
 
 function percentFromStoredValue(value) {
@@ -322,6 +358,9 @@ function configEntriesForDisplay(config = {}) {
     'leverage_profile',
     'retry_attempts',
     'retry_delay_ms',
+    'trade_amount_mode',
+    'fixed_trade_amount_usd',
+    'trade_balance_percent',
     'sandbox',
     'paper_balance',
   ];
@@ -368,6 +407,7 @@ function renderConnectorFields() {
   const marketType = document.getElementById('connector-market-type');
   const fieldsWrap = document.getElementById('connector-friendly-fields');
   const previousMarketType = marketType?.value || 'spot';
+  const isEditing = Boolean(state.editingConnectorId);
   if (marketType) {
     const options = PLATFORM_MARKET_TYPES[platform] || ['spot'];
     marketType.innerHTML = options.map((type) => `<option value="${type}">${prettyMarketType(type)}</option>`).join('');
@@ -378,10 +418,12 @@ function renderConnectorFields() {
     fieldsWrap.innerHTML = connectorFieldDefinitions(platform, selectedMarketType).map((field) => {
       const name = `field_${field.target}_${field.key}`;
       const inputType = field.type || 'text';
+      const isSecretField = field.target === 'secrets';
+      const isRequired = Boolean(field.required && !(isEditing && isSecretField));
       if (inputType === 'select') {
         return `
           <label>${field.label}
-            <select name="${name}" ${field.required ? 'required' : ''}>
+            <select name="${name}" ${isRequired ? 'required' : ''}>
               <option value="">Auto / sin definir</option>
               ${(field.options || []).map((option) => `<option value="${option}">${prettyLabel(option, option)}</option>`).join('')}
             </select>
@@ -392,14 +434,14 @@ function renderConnectorFields() {
       if (inputType === 'checkbox') {
         return `
           <label class="checkbox">${field.label}
-            <input type="checkbox" name="${name}" ${field.required ? 'required' : ''}>
+            <input type="checkbox" name="${name}" ${isRequired ? 'required' : ''}>
             <span class="hint">${field.hint || ''}</span>
           </label>
         `;
       }
       return `
         <label>${field.label}
-          <input name="${name}" type="${inputType}" ${field.required ? 'required' : ''} ${inputType === 'number' ? 'step="1"' : ''}>
+          <input name="${name}" type="${inputType}" ${isRequired ? 'required' : ''} ${inputType === 'number' ? 'step="0.01"' : ''}>
           ${field.hint ? `<small class="hint">${field.hint}</small>` : ''}
         </label>
       `;
@@ -484,14 +526,11 @@ function renderProfile() {
   document.getElementById('profile-telegram-enabled').checked = Boolean(user.telegram_alerts_enabled);
   document.getElementById('profile-telegram-bot-key').value = user.telegram_bot_key || '';
   document.getElementById('profile-telegram-chat-id').value = user.telegram_chat_id || '';
-  document.getElementById('trade-amount-mode').value = user.trade_amount_mode || 'fixed_usd';
-  document.getElementById('fixed-trade-amount-usd').value = Number(user.fixed_trade_amount_usd || 10);
-  document.getElementById('trade-balance-percent').value = Number(user.trade_balance_percent || 10);
   document.getElementById('profile-title').textContent = user.is_admin ? 'Cuenta administrativa' : 'Perfil de usuario';
   document.getElementById('user-config-state').textContent = `Perfil · ${user.name || user.email}`;
   document.getElementById('user-config-report').innerHTML = reportMarkup([
     { title: 'Alertas', body: user.telegram_alerts_enabled ? `Telegram activo · idioma ${String(user.alert_language || 'es').toUpperCase()}` : 'Telegram inactivo' },
-    { title: 'Sizing', body: user.trade_amount_mode === 'balance_percent' ? `${user.trade_balance_percent}% del balance por operación` : `${Number(user.fixed_trade_amount_usd || 0).toFixed(2)} USD por operación` },
+    { title: 'Sizing', body: 'La asignación de capital ya no vive en Perfil. Cada conector administra su sizing y el bot puede sobreescribirlo solo para esa sesión.' },
     { title: 'Canal admin', body: user.admin_alerts_enabled ? 'Canal administrativo de contingencias disponible' : 'Canal administrativo no configurado' },
     { title: 'Cobertura Telegram', body: 'Conexión, errores, mercado conectado, velas revisadas y tendencia de la corrida manual se notifican en el canal configurado.' },
   ]);
@@ -507,7 +546,7 @@ function renderConnectors() {
   if (panel) {
     panel.innerHTML = state.connectors.length ? reportMarkup(state.connectors.map((c) => ({
       title: `${c.label} · ${prettyPlatform(c.platform)}`,
-      body: `${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'} · ${(c.symbols || []).length} símbolos · ${configEntriesForDisplay(c.config || {}).length} parámetros visibles`,
+      body: `${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'} · sizing ${connectorSizingSummary(c)} · ${(c.symbols || []).length} símbolos`,
     }))) : reportMarkup([{ title: 'Sin conectores', body: 'Crea al menos un conector para operar o automatizar.' }]);
   }
   if (!list) return;
@@ -530,6 +569,7 @@ function renderConnectors() {
         <span class="pill tiny ${connector.is_enabled ? 'pill-on' : 'pill-off'}">${connector.is_enabled ? 'Activo' : 'Inactivo'}</span>
       </div>
       <small class="hint">Símbolos: ${(connector.symbols || []).join(', ') || 'Sin símbolos configurados'}.</small>
+      <small class="hint">Sizing independiente: ${connectorSizingSummary(connector)}.</small>
       <div class="chip-wrap">
         ${configEntriesForDisplay(connector.config || {}).map((entry) => `<span class="chip chip-static"><strong>${entry.label}:</strong> ${entry.value}</span>`).join('') || '<span class="chip chip-static">Sin parámetros visibles adicionales</span>'}
       </div>
@@ -628,7 +668,7 @@ function renderBotSessions() {
         <label class="compact-field">Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${percentFromStoredValue(session.min_ml_probability)}"></label>
         <label class="compact-field">Modo sizing
           <select name="trade_amount_mode">
-            <option value="inherit" ${session.configured_trade_amount_mode === 'inherit' ? 'selected' : ''}>Heredar</option>
+            <option value="inherit" ${session.configured_trade_amount_mode === 'inherit' ? 'selected' : ''}>Usar conector</option>
             <option value="fixed_usd" ${session.configured_trade_amount_mode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
             <option value="balance_percent" ${session.configured_trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
           </select>
@@ -749,34 +789,61 @@ function renderExecutionLogs() {
   }
   const groups = new Map();
   state.executionLogs.forEach((item) => {
-    const key = [
-      prettyPlatform(item.platform),
-      prettyMarketType(item.market_type, item.connector_id),
-      prettyLabel(item.connector_label, 'Cuenta sin snapshot'),
-    ].join('||');
+    const connectorLabel = prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`);
+    const key = [connectorLabel, prettyPlatform(item.platform), prettyMarketType(item.market_type, item.connector_id)].join('||');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   });
 
   body.innerHTML = Array.from(groups.entries()).map(([key, rows]) => {
-    const [platform, marketType, connectorLabel] = key.split('||');
-    const title = `${platform} · ${marketType} · ${connectorLabel}`;
+    const [connectorLabel, platform, marketType] = key.split('||');
+    const title = `${connectorLabel} · ${platform} · ${marketType}`;
     const logRows = rows.map((item) => {
-      const states = Array.isArray(item.operational_states) && item.operational_states.length
-        ? item.operational_states
-        : ['operativa_normal'];
+      const states = Array.isArray(item.operational_states) && item.operational_states.length ? item.operational_states : ['operativa_normal'];
+      const detail = buildLogDetails(item);
+      const detailId = `log-detail-${item.id}`;
       return `
-        <tr>
+        <tr class="log-entry-row" data-log-toggle="${detailId}">
           <td>${formatDate(item.created_at)}</td>
-          <td>${prettyPlatform(item.platform)} · ${prettyMarketType(item.market_type, item.connector_id)}</td>
-          <td>${prettyLabel(item.connector_label, 'Cuenta sin snapshot')}</td>
-          <td>${item.display_symbol || displaySymbol(item.symbol)}</td>
-          <td>${item.timeframe || '-'}</td>
-          <td>${item.signal || '-'}</td>
-          <td>${item.status_reason || item.status || '-'}</td>
+          <td>
+            <strong>${escapeHtml(prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`))}</strong>
+            <div class="connector-meta">
+              <span>${escapeHtml(prettyPlatform(item.platform))}</span>
+              <span>${escapeHtml(prettyMarketType(item.market_type, item.connector_id))}</span>
+            </div>
+          </td>
+          <td>${escapeHtml(item.display_symbol || displaySymbol(item.symbol))}</td>
+          <td>${escapeHtml(item.timeframe || '-')}</td>
+          <td>${escapeHtml(item.signal || '-')}</td>
+          <td><span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span></td>
+          <td>${escapeHtml(formatDecisionReason(item.status_reason || item.status_reason_code || item.status || '-'))}</td>
           <td>
             <div class="chip-wrap">
               ${states.map((stateCode) => `<span class="chip chip-static">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
+            </div>
+          </td>
+        </tr>
+        <tr class="log-detail-row hidden" id="${detailId}">
+          <td colspan="8">
+            <div class="log-detail-card">
+              <div class="log-detail-grid">
+                <div>
+                  <strong>Razones relevantes</strong>
+                  <ul class="log-reason-list">
+                    ${(detail.reasonDetails.length ? detail.reasonDetails : [formatDecisionReason(item.status_reason)]).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
+                  </ul>
+                </div>
+                <div>
+                  <strong>Highlights</strong>
+                  <ul class="log-reason-list">
+                    ${(detail.highlights.length ? detail.highlights : ['Sin explicación adicional reportada.']).map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
+                  </ul>
+                </div>
+              </div>
+              <div>
+                <strong>Detalle técnico</strong>
+                <pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>
+              </div>
             </div>
           </td>
         </tr>
@@ -786,12 +853,18 @@ function renderExecutionLogs() {
       <tr class="log-group-row">
         <td colspan="8">
           <strong>${escapeHtml(title)}</strong>
-          <small class="hint"> ${rows.length} evento(s) · agrupado por conector y mercado.</small>
+          <small class="hint">${rows.length} evento(s) agrupados por conector.</small>
         </td>
       </tr>
       ${logRows}
     `;
   }).join('');
+  body.querySelectorAll('[data-log-toggle]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const detailRow = document.getElementById(row.dataset.logToggle);
+      detailRow?.classList.toggle('hidden');
+    });
+  });
   const meta = document.getElementById('execution-logs-refresh-meta');
   if (meta) meta.textContent = `Mostrando ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
 }
@@ -818,18 +891,24 @@ function renderActivity() {
 
 function renderSummary() {
   const summary = state.summary || {};
+  const heartbeat = state.heartbeat || {};
+  const heartbeatChecks = Array.isArray(heartbeat.checks) ? heartbeat.checks : [];
+  const heartbeatHealth = heartbeatChecks.length ? Math.round((heartbeatChecks.filter((item) => item.ok).length / heartbeatChecks.length) * 100) : null;
+  const currentSync = state.executionLogs[0]?.status_reason || state.executionLogs[0]?.status || 'Sin eventos';
   document.getElementById('stat-connectors').textContent = Number(summary.total_connectors || 0);
   document.getElementById('stat-enabled').textContent = Number(summary.enabled_connectors || 0);
   document.getElementById('stat-trades').textContent = Number(summary.total_trades || 0);
   document.getElementById('stat-pnl').textContent = Number(summary.realized_pnl || 0).toFixed(2);
-  document.getElementById('quant-health-score').textContent = `${Math.round(summary?.risk_summary?.health_score || 0)}%`;
-  document.getElementById('quant-sync-status').textContent = (state.executionLogs[0]?.status || 'Sin eventos');
+  const healthScore = heartbeatHealth ?? Number(summary?.risk_summary?.health_score || 0);
+  document.getElementById('quant-health-score').textContent = `${Math.round(healthScore)}%`;
+  document.getElementById('quant-sync-status').textContent = formatDecisionReason(currentSync);
   document.getElementById('quant-live-connectors').textContent = state.connectors.filter((c) => c.mode === 'live' && c.is_enabled).length;
-  document.getElementById('quant-last-heartbeat').textContent = formatDate(state.executionLogs[0]?.created_at);
+  document.getElementById('quant-last-heartbeat').textContent = formatDate(heartbeat.checked_at || state.executionLogs[0]?.created_at);
   document.getElementById('quant-status-strip').innerHTML = reportMarkup([
     { title: 'Riesgo abierto', body: `${Number(summary?.risk_summary?.estimated_open_risk || 0).toFixed(2)} USD estimados.` },
     { title: 'Drawdown', body: `${Number(summary?.risk_summary?.rolling_drawdown_pct || 0).toFixed(2)}%` },
     { title: 'Kill switch', body: summary?.risk_summary?.kill_switch_armed ? 'Armado' : 'Desarmado' },
+    { title: 'Heartbeat', body: heartbeatChecks.length ? `${heartbeatChecks.filter((item) => item.ok).length}/${heartbeatChecks.length} conectores respondiendo.` : 'Sin heartbeat reciente.' },
   ]);
   document.getElementById('executive-report-panel').innerHTML = reportMarkup([
     { title: 'PNL realizado', body: `${Number(summary.realized_pnl || 0).toFixed(2)} USD con ${Number(summary.total_trades || 0)} trades.` },
@@ -846,21 +925,23 @@ async function refreshDashboard() {
     api('/api/bot-sessions'),
     api('/api/execution-logs?limit=25'),
     api('/api/activity/performance'),
+    api('/api/heartbeat'),
   ]);
-  const labels = ['perfil', 'dashboard', 'conectores', 'bots', 'logs', 'actividad'];
+  const labels = ['perfil', 'dashboard', 'conectores', 'bots', 'logs', 'actividad', 'heartbeat'];
   const failures = [];
   const values = settled.map((result, index) => {
     if (result.status === 'fulfilled') return result.value;
     failures.push(`${labels[index]}: ${parseApiError(result.reason)}`);
     return null;
   });
-  const [me, summary, connectors, botSessions, executionLogs, activity] = values;
+  const [me, summary, connectors, botSessions, executionLogs, activity, heartbeat] = values;
   state.me = me || state.me;
   state.summary = summary || state.summary || {};
   state.connectors = Array.isArray(connectors) ? connectors : (state.connectors || []);
   state.botSessions = Array.isArray(botSessions) ? botSessions : (state.botSessions || []);
   state.executionLogs = Array.isArray(executionLogs) ? executionLogs : (state.executionLogs || []);
   state.activity = activity || state.activity || null;
+  state.heartbeat = heartbeat || state.heartbeat || null;
   renderProfile();
   renderConnectors();
   renderBotSessions();
@@ -907,24 +988,6 @@ async function testTelegram() {
   }
 }
 
-async function saveTradeAmountSettings(event) {
-  event.preventDefault();
-  const fd = new FormData(event.currentTarget);
-  try {
-    await api('/api/me', {
-      method: 'PUT',
-      body: JSON.stringify({
-        trade_amount_mode: fd.get('trade_amount_mode'),
-        fixed_trade_amount_usd: Number(fd.get('fixed_trade_amount_usd')),
-        trade_balance_percent: Number(fd.get('trade_balance_percent')),
-      }),
-    });
-    setStatus('profile-trade-amount-feedback', 'Configuración de sizing guardada.', 'ok');
-    await refreshDashboard();
-  } catch (error) {
-    setStatus('profile-trade-amount-feedback', parseApiError(error), 'error');
-  }
-}
 
 async function saveConnector(event) {
   event.preventDefault();
@@ -1149,7 +1212,7 @@ function advisoryForField(formKind, input) {
     }
 
     if (input.name === 'trade_amount_mode') {
-      if (raw === 'inherit' && !state.me) return { severity, message: 'Si vas a heredar sizing, primero asegúrate de tener el perfil de capital configurado.' };
+      if (raw === 'inherit') return { severity: 'ok', message: 'Usará el sizing configurado dentro del conector seleccionado.' };
       return meta?.recommend ? { severity: 'ok', message: meta.recommend } : null;
     }
 
@@ -1269,6 +1332,36 @@ function downloadExecutionLogs() {
   window.open('/api/execution-logs/download?limit=1000', '_blank');
 }
 
+async function runHeartbeatCheck() {
+  try {
+    setStatus('activity-command-feedback', 'Ejecutando heartbeat...', 'ok');
+    state.heartbeat = await api('/api/heartbeat');
+    renderSummary();
+    setStatus('activity-command-feedback', 'Heartbeat completado.', 'ok');
+  } catch (error) {
+    setStatus('activity-command-feedback', parseApiError(error), 'error');
+  }
+}
+
+async function triggerKillSwitchFromDashboard() {
+  try {
+    setStatus('activity-command-feedback', 'Activando kill switch...', 'ok');
+    await api('/api/risk/kill-switch', { method: 'POST', body: JSON.stringify({}) });
+    setStatus('activity-command-feedback', 'Kill switch ejecutado.', 'ok');
+    await refreshDashboard();
+  } catch (error) {
+    setStatus('activity-command-feedback', parseApiError(error), 'error');
+  }
+}
+
+function startAutoRefresh() {
+  window.setInterval(() => {
+    refreshDashboard().catch((error) => {
+      setStatus('activity-command-feedback', `Auto refresh falló: ${parseApiError(error)}`, 'error');
+    });
+  }, 120000);
+}
+
 async function init() {
   initTabs();
   renderStrategyOptions();
@@ -1279,11 +1372,13 @@ async function init() {
   document.getElementById('cancel-connector-edit-btn')?.addEventListener('click', resetConnectorForm);
   document.getElementById('profile-form')?.addEventListener('submit', saveProfile);
   document.getElementById('test-telegram-btn')?.addEventListener('click', testTelegram);
-  document.getElementById('profile-trade-amount-form')?.addEventListener('submit', saveTradeAmountSettings);
   document.getElementById('connector-form')?.addEventListener('submit', saveConnector);
   document.getElementById('run-form')?.addEventListener('submit', runStrategy);
   document.getElementById('activate-bot-btn')?.addEventListener('click', activateBotFromForm);
   document.getElementById('refresh-connector-health-btn')?.addEventListener('click', refreshDashboard);
+  document.getElementById('activity-refresh-btn')?.addEventListener('click', refreshDashboard);
+  document.getElementById('activity-heartbeat-btn')?.addEventListener('click', runHeartbeatCheck);
+  document.getElementById('activity-kill-switch-btn')?.addEventListener('click', triggerKillSwitchFromDashboard);
   document.getElementById('refresh-bot-sessions-btn')?.addEventListener('click', refreshDashboard);
   document.getElementById('refresh-execution-logs-btn')?.addEventListener('click', refreshDashboard);
   document.getElementById('download-execution-logs-btn')?.addEventListener('click', downloadExecutionLogs);
@@ -1292,6 +1387,7 @@ async function init() {
   bindFieldAdvisories('#connector-form', 'connector');
   bindFieldAdvisories('#run-form', 'run');
   await refreshDashboard();
+  startAutoRefresh();
 }
 
 init().catch((error) => {

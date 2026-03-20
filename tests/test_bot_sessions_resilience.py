@@ -277,6 +277,68 @@ def test_list_bot_sessions_uses_session_trade_amount_overrides(monkeypatch):
     assert rows[0]["capital_display_unit"] == "%"
 
 
+def test_list_bot_sessions_uses_connector_sizing_when_session_inherits(monkeypatch):
+    connector = SimpleNamespace(
+        id=47,
+        label="Binance spot principal",
+        platform="binance",
+        mode="live",
+        market_type="spot",
+        config_json={"market_type": "spot", "trade_amount_mode": "fixed_usd", "fixed_trade_amount_usd": 75},
+    )
+    session = SimpleNamespace(
+        id=24,
+        connector_id=47,
+        connector=connector,
+        user=SimpleNamespace(trade_amount_mode="balance_percent", fixed_trade_amount_usd=999, trade_balance_percent=80),
+        strategy_slug="ema_rsi",
+        timeframe="15m",
+        symbols_json={"symbols": ["BTC/USDT"]},
+        interval_minutes=15,
+        risk_per_trade=0.01,
+        trade_amount_mode="inherit",
+        amount_per_trade=None,
+        amount_percentage=None,
+        min_ml_probability=0.55,
+        take_profit_mode="percent",
+        take_profit_value=1.2,
+        stop_loss_mode="percent",
+        stop_loss_value=0.6,
+        trailing_stop_mode="percent",
+        trailing_stop_value=0.4,
+        indicator_exit_enabled=False,
+        indicator_exit_rule="macd_cross",
+        leverage_profile="balanced",
+        max_open_positions=1,
+        compound_growth_enabled=False,
+        atr_volatility_filter_enabled=True,
+        is_active=True,
+        last_run_at=None,
+        next_run_at=None,
+        last_status="queued",
+        last_error=None,
+        created_at=None,
+        market_type="spot",
+    )
+
+    rows = api.list_bot_sessions(db=_FakeDB([session]), user=SimpleNamespace(id=7))
+
+    assert rows[0]["trade_amount_mode"] == "fixed_usd"
+    assert rows[0]["capital_per_operation"] == 75
+    assert rows[0]["capital_display_unit"] == "USDT"
+
+
+def test_resolve_trade_amount_settings_uses_connector_defaults_when_inheriting():
+    connector = SimpleNamespace(config_json={"trade_amount_mode": "balance_percent", "trade_balance_percent": 8.5})
+    payload = SimpleNamespace(trade_amount_mode="inherit", amount_per_trade=None, amount_percentage=None)
+
+    result = api._resolve_trade_amount_settings(SimpleNamespace(trade_amount_mode="fixed_usd"), payload, connector)
+
+    assert result["trade_amount_mode"] == "balance_percent"
+    assert result["amount_percentage"] == 8.5
+    assert result["amount_per_trade"] is None
+
+
 def test_create_bot_session_flushes_and_returns_session_id_without_refresh(monkeypatch):
     connector = SimpleNamespace(
         id=77,

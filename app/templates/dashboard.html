@@ -29,61 +29,38 @@
 </section>
 
 <section id="tab-profile" class="tab-panel active">
-  <div class="grid-2 dashboard-grid-two">
-    <article class="card quantum-command-card">
-      <div class="row-between">
-        <div>
-          <small class="quantum-label">Perfil</small>
-          <h2 id="profile-title">Perfil de usuario</h2>
-        </div>
-        <span class="pill tiny" id="user-config-state">Cargando</span>
+  <article class="card quantum-command-card">
+    <div class="row-between">
+      <div>
+        <small class="quantum-label">Perfil</small>
+        <h2 id="profile-title">Perfil de usuario</h2>
       </div>
-      <form id="profile-form" class="form-grid profile-grid">
-        <label>Nombre<input name="name" id="profile-name" required></label>
-        <label>Email<input name="email" id="profile-email" disabled></label>
-        <label>Teléfono<input name="phone" id="profile-phone" placeholder="+57 300 000 0000"></label>
-        <label>Idioma de alertas
-          <select name="alert_language" id="profile-alert-language">
-            <option value="es">Español</option>
-            <option value="en">English</option>
-            <option value="pt">Português</option>
-            <option value="fr">Français</option>
-          </select>
-        </label>
-        <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram</label>
-        <label>Bot Key de Telegram<input name="telegram_bot_key" id="profile-telegram-bot-key" autocomplete="off" placeholder="123456:ABC..."></label>
-        <label>Chat ID de Telegram<input name="telegram_chat_id" id="profile-telegram-chat-id" autocomplete="off" placeholder="6902163541"></label>
-        <div class="row-wrap">
-          <button class="btn primary" type="submit">Guardar perfil</button>
-          <button class="btn" id="test-telegram-btn" type="button">Probar Telegram</button>
-        </div>
-        <div id="profile-feedback" class="status-msg"></div>
-        <div id="telegram-test-feedback" class="status-msg"></div>
-      </form>
-    </article>
-
-    <article class="card quantum-side-card">
-      <div class="row-between">
-        <div>
-          <small class="quantum-label">Sizing</small>
-          <h2>Configuración de capital</h2>
-        </div>
+      <span class="pill tiny" id="user-config-state">Cargando</span>
+    </div>
+    <form id="profile-form" class="form-grid profile-grid">
+      <label>Nombre<input name="name" id="profile-name" required></label>
+      <label>Email<input name="email" id="profile-email" disabled></label>
+      <label>Teléfono<input name="phone" id="profile-phone" placeholder="+57 300 000 0000"></label>
+      <label>Idioma de alertas
+        <select name="alert_language" id="profile-alert-language">
+          <option value="es">Español</option>
+          <option value="en">English</option>
+          <option value="pt">Português</option>
+          <option value="fr">Français</option>
+        </select>
+      </label>
+      <label class="checkbox"><input name="telegram_alerts_enabled" id="profile-telegram-enabled" type="checkbox"> Activar alertas por Telegram</label>
+      <label>Bot Key de Telegram<input name="telegram_bot_key" id="profile-telegram-bot-key" autocomplete="off" placeholder="123456:ABC..."></label>
+      <label>Chat ID de Telegram<input name="telegram_chat_id" id="profile-telegram-chat-id" autocomplete="off" placeholder="6902163541"></label>
+      <div class="row-wrap">
+        <button class="btn primary" type="submit">Guardar perfil</button>
+        <button class="btn" id="test-telegram-btn" type="button">Probar Telegram</button>
       </div>
-      <form id="profile-trade-amount-form" class="form-grid">
-        <label>Modo de tamaño
-          <select name="trade_amount_mode" id="trade-amount-mode">
-            <option value="fixed_usd">Monto fijo</option>
-            <option value="balance_percent">% de balance</option>
-          </select>
-        </label>
-        <label>Monto fijo USD<input name="fixed_trade_amount_usd" id="fixed-trade-amount-usd" type="number" min="10" step="0.01" value="10"></label>
-        <label>% del balance<input name="trade_balance_percent" id="trade-balance-percent" type="number" min="0.1" max="100" step="0.1" value="10"></label>
-        <button class="btn primary" type="submit">Guardar sizing</button>
-        <div id="profile-trade-amount-feedback" class="status-msg"></div>
-      </form>
-      <div id="user-config-report" class="quantum-report-list" style="margin-top:16px;"></div>
-    </article>
-  </div>
+      <div id="profile-feedback" class="status-msg"></div>
+      <div id="telegram-test-feedback" class="status-msg"></div>
+    </form>
+    <div id="user-config-report" class="quantum-report-list" style="margin-top:16px;"></div>
+  </article>
 </section>
 
 <section id="tab-connectors" class="tab-panel">
@@ -188,7 +165,7 @@
         </label>
         <label>Modo de sizing
           <select name="trade_amount_mode">
-            <option value="inherit">Heredar del perfil</option>
+            <option value="inherit">Usar conector</option>
             <option value="fixed_usd">Monto fijo</option>
             <option value="balance_percent">% de balance</option>
           </select>
@@ -237,6 +214,11 @@
           <small class="quantum-label">Configuración</small>
           <h2>Indicadores rápidos y health</h2>
         </div>
+        <div class="row-wrap">
+          <button class="btn btn-sm" type="button" id="activity-refresh-btn">Refrescar ahora</button>
+          <button class="btn btn-sm" type="button" id="activity-heartbeat-btn">Heartbeat</button>
+          <button class="btn btn-sm" type="button" id="activity-kill-switch-btn">Activar kill switch</button>
+        </div>
       </div>
       <div class="quantum-metrics-grid">
         <div class="quantum-metric"><small>Health</small><strong id="quant-health-score">0%</strong></div>
@@ -244,6 +226,7 @@
         <div class="quantum-metric"><small>Live</small><strong id="quant-live-connectors">0</strong></div>
         <div class="quantum-metric"><small>Último evento</small><strong id="quant-last-heartbeat">--</strong></div>
       </div>
+      <div id="activity-command-feedback" class="status-msg"></div>
       <div id="quant-status-strip" class="quantum-report-list"></div>
     </article>
   </div>
@@ -296,13 +279,13 @@
         <thead>
           <tr>
             <th>Fecha</th>
-            <th>Mercado</th>
-            <th>Cuenta</th>
+            <th>Conector</th>
             <th>Símbolo</th>
             <th>Timeframe</th>
             <th>Señal</th>
+            <th>Estado</th>
             <th>Razón de estado</th>
-            <th>Estados de control</th>
+            <th>Razones operativas</th>
           </tr>
         </thead>
         <tbody></tbody>
