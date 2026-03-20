@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -249,6 +251,25 @@ class BaseConnectorClient:
     def cancel_risk_orders(self, symbol: str) -> dict[str, Any]:
         return {"ok": True, "cancelled": 0, "symbol": symbol}
 
+    def prepare_execution_environment(self, symbol: str, *, leverage_profile: str = "none") -> dict[str, Any]:
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "market_type": getattr(self.connector, "market_type", "spot"),
+            "mode": getattr(self.connector, "mode", "paper"),
+            "applied": [],
+            "warnings": [],
+            "capabilities": {
+                "time_sync": False,
+                "margin_mode": False,
+                "position_mode": False,
+                "set_leverage": False,
+                "internal_transfer": False,
+                "websocket_market_data": False,
+                "websocket_balance": False,
+            },
+        }
+
 
 class BaseExchangeAdapter:
     def __init__(self, connector, config: dict[str, Any]):
@@ -370,6 +391,10 @@ class BaseExchangeAdapter:
 
     def translate_error(self, detail: str) -> str:
         message = str(detail or "").lower()
+        if "-1013" in message or "filter failure" in message:
+            return "exchange_filter_failure"
+        if "-2010" in message:
+            return "exchange_insufficient_balance"
         if "reduceonly" in message or "reduce only" in message:
             return "exchange_reduce_only_rejected"
         if "position side" in message or "positionside" in message or "hedge mode" in message:
@@ -497,10 +522,12 @@ class CCXTConnectorClient(BaseConnectorClient):
             raise RuntimeError("ccxt is not installed")
 
         exchange_class = getattr(ccxt, self.connector.platform)
+        request_timeout_ms = int((self.config or {}).get("request_timeout_ms") or 20000)
         kwargs = {
             "apiKey": self.secrets.get("api_key"),
             "secret": self.secrets.get("secret_key"),
             "enableRateLimit": True,
+            "timeout": request_timeout_ms,
         }
 
         if self.connector.platform == "okx" and self.secrets.get("passphrase"):
@@ -511,8 +538,11 @@ class CCXTConnectorClient(BaseConnectorClient):
         options = {}
         market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
 
+        recv_window = int((self.config or {}).get("recv_window_ms") or 10000)
         if self.connector.platform in {"binance", "bybit", "okx"}:
             options["defaultType"] = "future" if market_type == "futures" else "spot"
+            options["adjustForTimeDifference"] = bool((self.config or {}).get("adjust_for_time_difference", True))
+            options["recvWindow"] = recv_window
 
         if self.config.get("sandbox"):
             options["sandboxMode"] = True
@@ -526,6 +556,152 @@ class CCXTConnectorClient(BaseConnectorClient):
             exchange.set_sandbox_mode(True)
 
         return exchange
+
+    def _time_sync_enabled(self) -> bool:
+        return bool((self.config or {}).get("adjust_for_time_difference", True))
+
+    def _resolve_leverage(self, leverage_profile: str) -> int | None:
+        explicit = (self.config or {}).get("futures_leverage")
+        if explicit not in (None, ""):
+            try:
+                return max(int(explicit), 1)
+            except Exception:
+                return None
+        profile = str(leverage_profile or (self.config or {}).get("leverage_profile") or "none").lower()
+        mapping = {
+            "none": 1,
+            "conservative": 2,
+            "balanced": 3,
+            "aggressive": 5,
+        }
+        return mapping.get(profile, 1)
+
+    def _resolve_margin_mode(self) -> str:
+        return str((self.config or {}).get("futures_margin_mode") or "isolated").lower()
+
+    def _resolve_position_mode(self) -> str:
+        return str((self.config or {}).get("futures_position_mode") or "oneway").lower()
+
+    def _sync_exchange_clock(self, exchange) -> dict[str, Any]:
+        result = {"enabled": self._time_sync_enabled(), "applied": False, "source": None, "server_time": None, "time_difference_ms": None}
+        if not result["enabled"]:
+            return result
+
+        if hasattr(exchange, "load_time_difference"):
+            try:
+                exchange.load_time_difference()
+                result["applied"] = True
+                result["source"] = "load_time_difference"
+                result["time_difference_ms"] = getattr(exchange, "timeDifference", None)
+                return result
+            except Exception as exc:
+                result["warning"] = str(exc)
+
+        if hasattr(exchange, "fetch_time"):
+            try:
+                server_time = exchange.fetch_time()
+                result["server_time"] = server_time
+                result["time_difference_ms"] = int(server_time - (time.time() * 1000))
+                result["applied"] = True
+                result["source"] = "fetch_time"
+            except Exception as exc:
+                result["warning"] = str(exc)
+        return result
+
+    def prepare_execution_environment(self, symbol: str, *, leverage_profile: str = "none") -> dict[str, Any]:
+        market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
+        result = {
+            "ok": True,
+            "symbol": symbol,
+            "market_type": market_type,
+            "mode": self.connector.mode,
+            "recv_window_ms": int((self.config or {}).get("recv_window_ms") or 10000),
+            "request_timeout_ms": int((self.config or {}).get("request_timeout_ms") or 20000),
+            "applied": [],
+            "warnings": [],
+            "capabilities": {
+                "time_sync": self._time_sync_enabled(),
+                "margin_mode": False,
+                "position_mode": False,
+                "set_leverage": False,
+                "internal_transfer": False,
+                "websocket_market_data": False,
+                "websocket_balance": False,
+                "rate_limit_enabled": True,
+            },
+        }
+
+        if self.connector.mode != "live":
+            result["warnings"].append("paper_mode_environment")
+            return result
+
+        exchange = self.build_exchange()
+        result["capabilities"]["internal_transfer"] = bool(hasattr(exchange, "transfer"))
+        result["rate_limit_ms"] = getattr(exchange, "rateLimit", None)
+        result["capabilities"]["websocket_market_data"] = bool(hasattr(exchange, "watch_order_book") or hasattr(exchange, "watch_ticker"))
+        result["capabilities"]["websocket_balance"] = bool(hasattr(exchange, "watch_balance"))
+
+        time_sync = self._sync_exchange_clock(exchange)
+        result["time_sync"] = time_sync
+        if time_sync.get("applied"):
+            result["applied"].append("time_sync")
+        elif time_sync.get("enabled"):
+            result["warnings"].append("time_sync_unavailable")
+
+        try:
+            market = self._market(exchange, symbol)
+            result["market_found"] = bool(market)
+            result["market_rules"] = self.adapter.build_market_rules(exchange, symbol, market).to_dict() if market else {"symbol": symbol, "found": False}
+        except Exception as exc:
+            result["ok"] = False
+            result["warnings"].append(f"market_rules_unavailable:{exc}")
+            return result
+
+        if market_type != "futures":
+            return result
+
+        margin_mode = self._resolve_margin_mode()
+        position_mode = self._resolve_position_mode()
+        leverage = self._resolve_leverage(leverage_profile)
+        result["futures_settings"] = {
+            "margin_mode": margin_mode,
+            "position_mode": position_mode,
+            "leverage": leverage,
+        }
+
+        if hasattr(exchange, "set_margin_mode"):
+            try:
+                exchange.set_margin_mode(margin_mode.upper(), symbol)
+                result["applied"].append(f"margin_mode:{margin_mode}")
+                result["capabilities"]["margin_mode"] = True
+            except Exception as exc:
+                result["warnings"].append(f"margin_mode:{exc}")
+
+        hedged = position_mode in {"hedge", "hedged", "both"}
+        if hasattr(exchange, "set_position_mode"):
+            try:
+                exchange.set_position_mode(hedged, symbol)
+                result["applied"].append(f"position_mode:{'hedge' if hedged else 'oneway'}")
+                result["capabilities"]["position_mode"] = True
+            except TypeError:
+                try:
+                    exchange.set_position_mode(hedged)
+                    result["applied"].append(f"position_mode:{'hedge' if hedged else 'oneway'}")
+                    result["capabilities"]["position_mode"] = True
+                except Exception as exc:
+                    result["warnings"].append(f"position_mode:{exc}")
+            except Exception as exc:
+                result["warnings"].append(f"position_mode:{exc}")
+
+        if leverage and leverage > 0 and hasattr(exchange, "set_leverage"):
+            try:
+                exchange.set_leverage(leverage, symbol)
+                result["applied"].append(f"leverage:{leverage}")
+                result["capabilities"]["set_leverage"] = True
+            except Exception as exc:
+                result["warnings"].append(f"leverage:{exc}")
+
+        return result
 
     def _load_markets(self, exchange) -> dict[str, Any]:
         if self._markets_cache is None:
@@ -975,6 +1151,11 @@ class CCXTConnectorClient(BaseConnectorClient):
             validation=validation,
             extra_params=extra_params,
         )
+        retry_attempts = max(int((self.config or {}).get("retry_attempts") or 2), 1)
+        retry_delay_ms = max(int((self.config or {}).get("retry_delay_ms") or 350), 0)
+        idempotency_key = f"{self.connector.platform}-{getattr(self.connector, 'id', 'na')}-{uuid4().hex[:20]}"
+        order_params.setdefault("clientOrderId", idempotency_key)
+        order_params.setdefault("newClientOrderId", idempotency_key)
 
         logger.info(
             "order_preflight %s",
@@ -1001,30 +1182,62 @@ class CCXTConnectorClient(BaseConnectorClient):
                     "decision": "send",
                     "risk_blocked": validation.get("risk_blocked"),
                     "requires_cost_for_market_buy": validation.get("requires_cost_for_market_buy"),
+                    "retry_attempts": retry_attempts,
+                    "client_order_id": idempotency_key,
                 },
                 ensure_ascii=False,
             ),
         )
 
-        try:
-            if order_params:
-                order = exchange.create_order(
-                    symbol=symbol,
-                    type="market",
-                    side=side,
-                    amount=quantity,
-                    params=order_params,
+        order = None
+        last_exc: Exception | None = None
+        for attempt in range(1, retry_attempts + 1):
+            try:
+                if order_params:
+                    order = exchange.create_order(
+                        symbol=symbol,
+                        type="market",
+                        side=side,
+                        amount=quantity,
+                        params=order_params,
+                    )
+                else:
+                    order = exchange.create_order(
+                        symbol=symbol,
+                        type="market",
+                        side=side,
+                        amount=quantity,
+                    )
+                break
+            except Exception as exc:
+                last_exc = exc
+                category = self._categorize_exchange_error(str(exc))
+                retryable = category in {"exchange_timeout", "exchange_network_error"}
+                logger.warning(
+                    "market_order_attempt_failed %s",
+                    json.dumps(
+                        {
+                            "exchange": self.connector.platform,
+                            "symbol": symbol,
+                            "side": side,
+                            "attempt": attempt,
+                            "retry_attempts": retry_attempts,
+                            "category": category,
+                            "retryable": retryable,
+                            "client_order_id": idempotency_key,
+                            "detail": str(exc),
+                        },
+                        ensure_ascii=False,
+                    ),
                 )
-            else:
-                order = exchange.create_order(
-                    symbol=symbol,
-                    type="market",
-                    side=side,
-                    amount=quantity,
-                )
-        except Exception as exc:
+                if not retryable or attempt >= retry_attempts:
+                    break
+                if retry_delay_ms > 0:
+                    time.sleep(retry_delay_ms / 1000.0)
+
+        if order is None and last_exc is not None:
             self._raise_order_rejection(
-                exc=exc,
+                exc=last_exc,
                 symbol=symbol,
                 side=side,
                 quantity=quantity,
