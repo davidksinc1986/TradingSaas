@@ -218,3 +218,93 @@ def test_update_bot_session_persists_live_name_and_dynamic_scan_settings(tmp_pat
         assert session.symbols_json["dynamic_symbol_limit"] == 12
     finally:
         db.close()
+
+
+def test_create_connector_forces_live_mode_and_repairs_zero_sizing_defaults(tmp_path, monkeypatch):
+    Session = _session_factory(tmp_path)
+    db = Session()
+    monkeypatch.setattr(api, "_notify_user_info", lambda *args, **kwargs: None)
+    try:
+        user = User(email="live@test.dev", name="Live", hashed_password="x", is_active=True)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        payload = api.ConnectorCreate(
+            platform="bybit",
+            label="Bybit principal",
+            mode="paper",
+            market_type="spot",
+            symbols=["ETH/USDT"],
+            config={
+                "trade_amount_mode": "fixed_usd",
+                "fixed_trade_amount_usd": 0,
+                "trade_balance_percent": 7.5,
+            },
+            secrets={},
+        )
+
+        result = api.create_connector(payload=payload, db=db, user=user)
+        connector = db.query(Connector).filter(Connector.id == result["connector_id"]).first()
+
+        assert connector.mode == "live"
+        assert connector.config_json["trade_amount_mode"] == "fixed_usd"
+        assert connector.config_json["fixed_trade_amount_usd"] >= 5
+        assert connector.config_json["trade_balance_percent"] == 7.5
+        assert connector.config_json["sandbox"] is False
+    finally:
+        db.close()
+
+
+def test_list_bot_sessions_repairs_legacy_zero_fixed_amount_and_forces_live_execution(tmp_path, monkeypatch):
+    Session = _session_factory(tmp_path)
+    db = Session()
+    monkeypatch.setattr(api, "_alert_admin_failure", lambda *args, **kwargs: None)
+    try:
+        user, connector = _base_user_and_connector(db, market_type="spot")
+        connector.mode = "paper"
+        connector.symbols_json = {"symbols": ["BTC/USDT"]}
+        connector.config_json = {
+            "market_type": "spot",
+            "trade_amount_mode": "fixed_usd",
+            "fixed_trade_amount_usd": 0,
+            "trade_balance_percent": 0,
+        }
+        session = BotSession(
+            user_id=user.id,
+            connector_id=connector.id,
+            session_name="Momentum BTC",
+            market_type="spot",
+            strategy_slug="ema_rsi_adx_stack",
+            timeframe="15m",
+            symbols_json={"symbols": ["BTC/USDT"]},
+            interval_minutes=15,
+            risk_per_trade=0.01,
+            trade_amount_mode="fixed_usd",
+            amount_per_trade=None,
+            amount_percentage=None,
+            min_ml_probability=0.55,
+            use_live_if_available=False,
+            take_profit_mode="percent",
+            take_profit_value=1.5,
+            stop_loss_mode="percent",
+            stop_loss_value=1.0,
+            trailing_stop_mode="percent",
+            trailing_stop_value=0.8,
+            is_active=True,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        rows = api.list_bot_sessions(db=db, user=user)
+        db.refresh(connector)
+        db.refresh(session)
+
+        assert rows[0]["session_name"] == "Momentum BTC"
+        assert rows[0]["capital_per_operation"] >= 10
+        assert connector.mode == "live"
+        assert session.use_live_if_available is True
+        assert session.amount_per_trade >= 10
+    finally:
+        db.close()
