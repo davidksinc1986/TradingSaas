@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from app.db import commit_with_retry, flush_with_retry
 from app.security import decrypt_payload
 from app.services.connector_state import build_runtime_connector, ensure_connector_market_type_state, resolve_runtime_market_type
 
@@ -1202,7 +1203,7 @@ def run_strategy(
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
-                db.commit()
+                commit_with_retry(db)
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1261,7 +1262,7 @@ def run_strategy(
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
-                db.commit()
+                commit_with_retry(db)
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1295,7 +1296,7 @@ def run_strategy(
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
-                db.commit()
+                commit_with_retry(db)
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1392,7 +1393,7 @@ def run_strategy(
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
-                db.commit()
+                commit_with_retry(db)
                 results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
                 continue
 
@@ -1436,7 +1437,7 @@ def run_strategy(
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
-                db.commit()
+                commit_with_retry(db)
                 send_admin_user_alert_sync(
                     user,
                     format_user_failure_message(
@@ -1491,7 +1492,7 @@ def run_strategy(
                     notes=json.dumps(notes, ensure_ascii=False),
                 )
                 db.add(run)
-                db.commit()
+                commit_with_retry(db)
                 send_admin_user_alert_sync(
                     user,
                     format_user_failure_message(
@@ -1520,7 +1521,7 @@ def run_strategy(
                 notes=json.dumps(notes, ensure_ascii=False),
             )
             db.add(trade_run)
-            db.flush()
+            flush_with_retry(db)
 
             pnl = 0.0
             close_reason = "entry"
@@ -1640,7 +1641,7 @@ def run_strategy(
                     "risk_plan": risk_plan.to_dict(),
                 },
             ))
-            db.commit()
+            commit_with_retry(db)
 
             send_admin_user_alert_sync(
                 user,

@@ -39,11 +39,23 @@ def _load_api_module():
     fastapi_responses.StreamingResponse = _placeholder_class("StreamingResponse")
     sys.modules["fastapi.responses"] = fastapi_responses
 
+    sqlalchemy_exc_module = types.ModuleType("sqlalchemy.exc")
+    sqlalchemy_exc_module.OperationalError = type("OperationalError", (Exception,), {})
+    sqlalchemy_exc_module.PendingRollbackError = type("PendingRollbackError", (Exception,), {})
+    sys.modules["sqlalchemy.exc"] = sqlalchemy_exc_module
+    sqlalchemy_orm_exc_module = types.ModuleType("sqlalchemy.orm.exc")
+    sqlalchemy_orm_exc_module.ObjectDeletedError = type("ObjectDeletedError", (Exception,), {})
+    sys.modules["sqlalchemy.orm.exc"] = sqlalchemy_orm_exc_module
+
     app_module = types.ModuleType("app")
     sys.modules["app"] = app_module
 
     db_module = types.ModuleType("app.db")
     db_module.get_db = lambda: None
+    db_module.commit_with_retry = lambda db, **kwargs: getattr(db, "commit", lambda: None)()
+    db_module.flush_with_retry = lambda db, **kwargs: getattr(db, "flush", lambda: None)()
+    db_module.is_sqlite_locked_error = lambda exc: "database is locked" in str(exc).lower()
+    db_module.rollback_safely = lambda db: getattr(db, "rollback", lambda: None)()
     sys.modules["app.db"] = db_module
     app_module.db = db_module
 
@@ -210,6 +222,13 @@ def _load_main_module():
     sqlalchemy_module.inspect = lambda engine: types.SimpleNamespace(has_table=lambda name: False)
     sqlalchemy_module.text = lambda value: value
     sys.modules["sqlalchemy"] = sqlalchemy_module
+    sqlalchemy_exc_module = types.ModuleType("sqlalchemy.exc")
+    sqlalchemy_exc_module.OperationalError = type("OperationalError", (Exception,), {})
+    sqlalchemy_exc_module.PendingRollbackError = type("PendingRollbackError", (Exception,), {})
+    sys.modules["sqlalchemy.exc"] = sqlalchemy_exc_module
+    sqlalchemy_orm_exc_module = types.ModuleType("sqlalchemy.orm.exc")
+    sqlalchemy_orm_exc_module.ObjectDeletedError = type("ObjectDeletedError", (Exception,), {})
+    sys.modules["sqlalchemy.orm.exc"] = sqlalchemy_orm_exc_module
 
     app_module = types.ModuleType("app")
     sys.modules["app"] = app_module

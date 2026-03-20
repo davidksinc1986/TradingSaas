@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import OperationalError, PendingRollbackError
+from sqlalchemy.orm.exc import ObjectDeletedError
 
-from app.db import get_db
+from app.db import commit_with_retry, flush_with_retry, get_db, is_sqlite_locked_error, rollback_safely
 from app.core import settings
 from app.models import (
     BotSession,
@@ -386,6 +388,17 @@ def _alert_admin_failure(scope: str, detail: str) -> None:
         send_telegram_alert_sync(format_failure_message(scope, detail))
     except Exception:
         logger.exception("Could not notify admin failure for %s", scope)
+
+
+def _raise_db_write_http_error(exc: Exception, *, action: str) -> None:
+    detail = f"No se pudo {action} en este momento. Intenta de nuevo en unos segundos."
+    if isinstance(exc, OperationalError) and is_sqlite_locked_error(exc):
+        raise HTTPException(status_code=503, detail=f"{detail} La base de datos está ocupada temporalmente.")
+    if isinstance(exc, PendingRollbackError):
+        raise HTTPException(status_code=503, detail=f"{detail} La transacción previa quedó inválida y ya fue revertida.")
+    if isinstance(exc, (ObjectDeletedError,)):
+        raise HTTPException(status_code=409, detail=f"{detail} El registro cambió mientras se procesaba la solicitud.")
+    raise
 
 
 def _notify_user_info(user: User | None, *, title: str, detail: str, connector_label: str | None = None,
@@ -1045,72 +1058,79 @@ def list_bot_sessions(db=Depends(get_db), user=Depends(current_user)):
 
 @router.post("/bot-sessions")
 def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depends(current_user)):
-    control = _ensure_strategy_control(db, user.id)
-    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
-    if control.managed_by_admin and payload.strategy_slug not in allowed:
-        raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+    try:
+        control = _ensure_strategy_control(db, user.id)
+        allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+        if control.managed_by_admin and payload.strategy_slug not in allowed:
+            raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
 
-    connector = db.query(Connector).filter(
-        Connector.id == payload.connector_id,
-        Connector.user_id == user.id,
-        Connector.is_enabled.is_(True),
-    ).first()
-    if not connector:
-        raise HTTPException(status_code=404, detail="Enabled connector not found")
+        connector = db.query(Connector).filter(
+            Connector.id == payload.connector_id,
+            Connector.user_id == user.id,
+            Connector.is_enabled.is_(True),
+        ).first()
+        if not connector:
+            raise HTTPException(status_code=404, detail="Enabled connector not found")
 
-    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
+        _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
 
-    risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
-    ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
-    trade_amount_settings = _resolve_trade_amount_settings(user, payload)
-    normalized_amounts = _normalize_session_trade_amount_payload(
-        mode=str(trade_amount_settings["trade_amount_mode"]),
-        amount_per_trade=_safe_float(trade_amount_settings["amount_per_trade"], 0.0) or None,
-        amount_percentage=_safe_float(trade_amount_settings["amount_percentage"], 0.0) or None,
-    )
-    resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
+        risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+        ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+        trade_amount_settings = _resolve_trade_amount_settings(user, payload)
+        normalized_amounts = _normalize_session_trade_amount_payload(
+            mode=str(trade_amount_settings["trade_amount_mode"]),
+            amount_per_trade=_safe_float(trade_amount_settings["amount_per_trade"], 0.0) or None,
+            amount_percentage=_safe_float(trade_amount_settings["amount_percentage"], 0.0) or None,
+        )
+        resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
 
-    normalized_timeframe = _normalize_timeframe(payload.timeframe)
-    session = BotSession(
-        user_id=user.id,
-        connector_id=connector.id,
-        market_type=resolved_market_type,
-        strategy_slug=payload.strategy_slug,
-        timeframe=normalized_timeframe,
-        symbols_json={
-            "symbols": payload.symbols,
-            "symbol_source_mode": payload.symbol_source_mode,
-            "dynamic_symbol_limit": payload.dynamic_symbol_limit,
-        },
-        interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
-        risk_per_trade=risk_value,
-        trade_amount_mode=str(normalized_amounts["trade_amount_mode"]),
-        amount_per_trade=normalized_amounts["amount_per_trade"],
-        amount_percentage=normalized_amounts["amount_percentage"],
-        min_ml_probability=ml_value,
-        use_live_if_available=payload.use_live_if_available,
-        take_profit_mode=payload.take_profit_mode,
-        take_profit_value=payload.take_profit_value,
-        stop_loss_mode=payload.stop_loss_mode,
-        stop_loss_value=payload.stop_loss_value,
-        trailing_stop_mode=payload.trailing_stop_mode,
-        trailing_stop_value=payload.trailing_stop_value,
-        indicator_exit_enabled=payload.indicator_exit_enabled,
-        indicator_exit_rule=payload.indicator_exit_rule,
-        leverage_profile=payload.leverage_profile,
-        max_open_positions=payload.max_open_positions,
-        compound_growth_enabled=payload.compound_growth_enabled,
-        atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
-        is_active=True,
-        last_status="queued",
-        next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS),
-    )
-    db.add(session)
-    db.flush()
-    session_id = session.id
-    strategy_slug = session.strategy_slug
-    timeframe = session.timeframe
-    db.commit()
+        normalized_timeframe = _normalize_timeframe(payload.timeframe)
+        session = BotSession(
+            user_id=user.id,
+            connector_id=connector.id,
+            market_type=resolved_market_type,
+            strategy_slug=payload.strategy_slug,
+            timeframe=normalized_timeframe,
+            symbols_json={
+                "symbols": payload.symbols,
+                "symbol_source_mode": payload.symbol_source_mode,
+                "dynamic_symbol_limit": payload.dynamic_symbol_limit,
+            },
+            interval_minutes=_interval_from_timeframe(normalized_timeframe, payload.interval_minutes),
+            risk_per_trade=risk_value,
+            trade_amount_mode=str(normalized_amounts["trade_amount_mode"]),
+            amount_per_trade=normalized_amounts["amount_per_trade"],
+            amount_percentage=normalized_amounts["amount_percentage"],
+            min_ml_probability=ml_value,
+            use_live_if_available=payload.use_live_if_available,
+            take_profit_mode=payload.take_profit_mode,
+            take_profit_value=payload.take_profit_value,
+            stop_loss_mode=payload.stop_loss_mode,
+            stop_loss_value=payload.stop_loss_value,
+            trailing_stop_mode=payload.trailing_stop_mode,
+            trailing_stop_value=payload.trailing_stop_value,
+            indicator_exit_enabled=payload.indicator_exit_enabled,
+            indicator_exit_rule=payload.indicator_exit_rule,
+            leverage_profile=payload.leverage_profile,
+            max_open_positions=payload.max_open_positions,
+            compound_growth_enabled=payload.compound_growth_enabled,
+            atr_volatility_filter_enabled=payload.atr_volatility_filter_enabled,
+            is_active=True,
+            last_status="queued",
+            next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS),
+        )
+        db.add(session)
+        flush_with_retry(db)
+        session_id = session.id
+        strategy_slug = session.strategy_slug
+        timeframe = session.timeframe
+        commit_with_retry(db)
+    except HTTPException:
+        rollback_safely(db)
+        raise
+    except Exception as exc:
+        rollback_safely(db)
+        _raise_db_write_http_error(exc, action="crear la sesión automática")
 
     _notify_user_info(
         user,
@@ -1125,87 +1145,95 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
 
 @router.put("/bot-sessions/{session_id}")
 def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(get_db), user=Depends(current_user)):
-    session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Bot session not found")
+    try:
+        session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Bot session not found")
 
-    control = _ensure_strategy_control(db, user.id)
-    allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
+        control = _ensure_strategy_control(db, user.id)
+        allowed = (control.allowed_strategies_json or {}).get("items", ALL_STRATEGIES)
 
-    if payload.is_active is not None:
-        session.is_active = payload.is_active
-    if payload.symbols is not None:
-        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
-        current_symbols_json["symbols"] = payload.symbols
-        session.symbols_json = current_symbols_json
-    if payload.symbol_source_mode is not None:
-        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
-        current_symbols_json["symbol_source_mode"] = payload.symbol_source_mode
-        session.symbols_json = current_symbols_json
-    if payload.dynamic_symbol_limit is not None:
-        current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
-        current_symbols_json["dynamic_symbol_limit"] = payload.dynamic_symbol_limit
-        session.symbols_json = current_symbols_json
-    if payload.strategy_slug is not None:
-        if control.managed_by_admin and payload.strategy_slug not in allowed:
-            raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
-        _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
-        session.strategy_slug = payload.strategy_slug
-    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
-    if payload.market_type is not None and connector is not None:
-        session.market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
-    if payload.timeframe is not None:
-        normalized_timeframe = _normalize_timeframe(payload.timeframe)
-        session.timeframe = normalized_timeframe
-        session.interval_minutes = _interval_from_timeframe(normalized_timeframe, payload.interval_minutes or session.interval_minutes)
-    elif payload.interval_minutes is not None:
-        session.interval_minutes = payload.interval_minutes
+        if payload.is_active is not None:
+            session.is_active = payload.is_active
+        if payload.symbols is not None:
+            current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+            current_symbols_json["symbols"] = payload.symbols
+            session.symbols_json = current_symbols_json
+        if payload.symbol_source_mode is not None:
+            current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+            current_symbols_json["symbol_source_mode"] = payload.symbol_source_mode
+            session.symbols_json = current_symbols_json
+        if payload.dynamic_symbol_limit is not None:
+            current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+            current_symbols_json["dynamic_symbol_limit"] = payload.dynamic_symbol_limit
+            session.symbols_json = current_symbols_json
+        if payload.strategy_slug is not None:
+            if control.managed_by_admin and payload.strategy_slug not in allowed:
+                raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
+            _validate_strategy_connectors(db, user_id=user.id, connector_ids=[session.connector_id], strategy_slug=payload.strategy_slug)
+            session.strategy_slug = payload.strategy_slug
+        connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+        if payload.market_type is not None and connector is not None:
+            session.market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
+        if payload.timeframe is not None:
+            normalized_timeframe = _normalize_timeframe(payload.timeframe)
+            session.timeframe = normalized_timeframe
+            session.interval_minutes = _interval_from_timeframe(normalized_timeframe, payload.interval_minutes or session.interval_minutes)
+        elif payload.interval_minutes is not None:
+            session.interval_minutes = payload.interval_minutes
 
-    if payload.risk_per_trade is not None:
-        session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
-    if payload.trade_amount_mode is not None or payload.amount_per_trade is not None or payload.amount_percentage is not None:
-        normalized_amounts = _normalize_session_trade_amount_payload(
-            mode=payload.trade_amount_mode,
-            amount_per_trade=payload.amount_per_trade,
-            amount_percentage=payload.amount_percentage,
-            current_mode=getattr(session, "trade_amount_mode", "inherit"),
-            current_amount_per_trade=getattr(session, "amount_per_trade", None),
-            current_amount_percentage=getattr(session, "amount_percentage", None),
-        )
-        session.trade_amount_mode = str(normalized_amounts["trade_amount_mode"])
-        session.amount_per_trade = normalized_amounts["amount_per_trade"]
-        session.amount_percentage = normalized_amounts["amount_percentage"]
-    if payload.min_ml_probability is not None:
-        session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
-    if payload.use_live_if_available is not None:
-        session.use_live_if_available = payload.use_live_if_available
-    if payload.take_profit_mode is not None:
-        session.take_profit_mode = payload.take_profit_mode
-    if payload.take_profit_value is not None:
-        session.take_profit_value = payload.take_profit_value
-    if payload.stop_loss_mode is not None:
-        session.stop_loss_mode = payload.stop_loss_mode
-    if payload.stop_loss_value is not None:
-        session.stop_loss_value = payload.stop_loss_value
-    if payload.trailing_stop_mode is not None:
-        session.trailing_stop_mode = payload.trailing_stop_mode
-    if payload.trailing_stop_value is not None:
-        session.trailing_stop_value = payload.trailing_stop_value
-    if payload.indicator_exit_enabled is not None:
-        session.indicator_exit_enabled = payload.indicator_exit_enabled
-    if payload.indicator_exit_rule is not None:
-        session.indicator_exit_rule = payload.indicator_exit_rule
-    if payload.leverage_profile is not None:
-        session.leverage_profile = payload.leverage_profile
-    if payload.max_open_positions is not None:
-        session.max_open_positions = payload.max_open_positions
-    if payload.compound_growth_enabled is not None:
-        session.compound_growth_enabled = payload.compound_growth_enabled
-    if payload.atr_volatility_filter_enabled is not None:
-        session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
+        if payload.risk_per_trade is not None:
+            session.risk_per_trade = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
+        if payload.trade_amount_mode is not None or payload.amount_per_trade is not None or payload.amount_percentage is not None:
+            normalized_amounts = _normalize_session_trade_amount_payload(
+                mode=payload.trade_amount_mode,
+                amount_per_trade=payload.amount_per_trade,
+                amount_percentage=payload.amount_percentage,
+                current_mode=getattr(session, "trade_amount_mode", "inherit"),
+                current_amount_per_trade=getattr(session, "amount_per_trade", None),
+                current_amount_percentage=getattr(session, "amount_percentage", None),
+            )
+            session.trade_amount_mode = str(normalized_amounts["trade_amount_mode"])
+            session.amount_per_trade = normalized_amounts["amount_per_trade"]
+            session.amount_percentage = normalized_amounts["amount_percentage"]
+        if payload.min_ml_probability is not None:
+            session.min_ml_probability = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
+        if payload.use_live_if_available is not None:
+            session.use_live_if_available = payload.use_live_if_available
+        if payload.take_profit_mode is not None:
+            session.take_profit_mode = payload.take_profit_mode
+        if payload.take_profit_value is not None:
+            session.take_profit_value = payload.take_profit_value
+        if payload.stop_loss_mode is not None:
+            session.stop_loss_mode = payload.stop_loss_mode
+        if payload.stop_loss_value is not None:
+            session.stop_loss_value = payload.stop_loss_value
+        if payload.trailing_stop_mode is not None:
+            session.trailing_stop_mode = payload.trailing_stop_mode
+        if payload.trailing_stop_value is not None:
+            session.trailing_stop_value = payload.trailing_stop_value
+        if payload.indicator_exit_enabled is not None:
+            session.indicator_exit_enabled = payload.indicator_exit_enabled
+        if payload.indicator_exit_rule is not None:
+            session.indicator_exit_rule = payload.indicator_exit_rule
+        if payload.leverage_profile is not None:
+            session.leverage_profile = payload.leverage_profile
+        if payload.max_open_positions is not None:
+            session.max_open_positions = payload.max_open_positions
+        if payload.compound_growth_enabled is not None:
+            session.compound_growth_enabled = payload.compound_growth_enabled
+        if payload.atr_volatility_filter_enabled is not None:
+            session.atr_volatility_filter_enabled = payload.atr_volatility_filter_enabled
 
-    db.commit()
-    connector = connector or db.query(Connector).filter(Connector.id == session.connector_id).first()
+        commit_with_retry(db)
+        connector = connector or db.query(Connector).filter(Connector.id == session.connector_id).first()
+    except HTTPException:
+        rollback_safely(db)
+        raise
+    except Exception as exc:
+        rollback_safely(db)
+        _raise_db_write_http_error(exc, action="actualizar la sesión automática")
+
     _notify_user_info(
         user,
         title="Bot actualizado",
@@ -1218,13 +1246,23 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
 
 @router.delete("/bot-sessions/{session_id}")
 def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current_user)):
-    session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Bot session not found")
-    connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
-    detail = f"Se eliminó la sesión #{session.id} con estrategia {session.strategy_slug}."
-    db.delete(session)
-    db.commit()
+    try:
+        session = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Bot session not found")
+        connector = db.query(Connector).filter(Connector.id == session.connector_id).first()
+        detail = f"Se eliminó la sesión #{session.id} con estrategia {session.strategy_slug}."
+        session.is_active = False
+        commit_with_retry(db)
+        db.delete(session)
+        commit_with_retry(db)
+    except HTTPException:
+        rollback_safely(db)
+        raise
+    except Exception as exc:
+        rollback_safely(db)
+        _raise_db_write_http_error(exc, action="eliminar la sesión automática")
+
     _notify_user_info(
         user,
         title="Bot eliminado",
@@ -1237,54 +1275,62 @@ def delete_bot_session(session_id: int, db=Depends(get_db), user=Depends(current
 
 @router.post("/bot-sessions/{session_id}/copy")
 def copy_bot_session(session_id: int, payload: BotSessionCopyPayload, db=Depends(get_db), user=Depends(current_user)):
-    source = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
-    if not source:
-        raise HTTPException(status_code=404, detail="Bot session not found")
+    try:
+        source = db.query(BotSession).filter(BotSession.id == session_id, BotSession.user_id == user.id).first()
+        if not source:
+            raise HTTPException(status_code=404, detail="Bot session not found")
 
-    target_connector_id = payload.connector_id or source.connector_id
-    connector = db.query(Connector).filter(Connector.id == target_connector_id, Connector.user_id == user.id, Connector.is_enabled.is_(True)).first()
-    if not connector:
-        raise HTTPException(status_code=404, detail="Enabled connector not found")
+        target_connector_id = payload.connector_id or source.connector_id
+        connector = db.query(Connector).filter(Connector.id == target_connector_id, Connector.user_id == user.id, Connector.is_enabled.is_(True)).first()
+        if not connector:
+            raise HTTPException(status_code=404, detail="Enabled connector not found")
 
-    source_symbols_json = _safe_json_object(getattr(source, "symbols_json", {}))
-    _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=source.strategy_slug)
-    cloned = BotSession(
-        user_id=user.id,
-        connector_id=connector.id,
-        market_type=resolve_runtime_market_type(connector, requested_market_type=getattr(source, "market_type", None)),
-        strategy_slug=source.strategy_slug,
-        timeframe=source.timeframe,
-        symbols_json={
-            **source_symbols_json,
-            "symbols": payload.symbols if payload.symbols is not None else (source_symbols_json.get("symbols", [])),
-        },
-        interval_minutes=source.interval_minutes,
-        risk_per_trade=source.risk_per_trade,
-        trade_amount_mode=getattr(source, "trade_amount_mode", "inherit"),
-        amount_per_trade=getattr(source, "amount_per_trade", None),
-        amount_percentage=getattr(source, "amount_percentage", None),
-        min_ml_probability=source.min_ml_probability,
-        use_live_if_available=source.use_live_if_available,
-        take_profit_mode=source.take_profit_mode,
-        take_profit_value=source.take_profit_value,
-        stop_loss_mode=source.stop_loss_mode,
-        stop_loss_value=source.stop_loss_value,
-        trailing_stop_mode=source.trailing_stop_mode,
-        trailing_stop_value=source.trailing_stop_value,
-        indicator_exit_enabled=source.indicator_exit_enabled,
-        indicator_exit_rule=source.indicator_exit_rule,
-        leverage_profile=getattr(source, "leverage_profile", "none"),
-        max_open_positions=max(int(getattr(source, "max_open_positions", 1) or 1), 1),
-        compound_growth_enabled=bool(getattr(source, "compound_growth_enabled", False)),
-        atr_volatility_filter_enabled=bool(getattr(source, "atr_volatility_filter_enabled", True)),
-        is_active=bool(source.is_active),
-        last_status="cloned",
-        next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS) if bool(source.is_active) else None,
-    )
-    db.add(cloned)
-    db.flush()
-    cloned_id = cloned.id
-    db.commit()
+        source_symbols_json = _safe_json_object(getattr(source, "symbols_json", {}))
+        _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=source.strategy_slug)
+        cloned = BotSession(
+            user_id=user.id,
+            connector_id=connector.id,
+            market_type=resolve_runtime_market_type(connector, requested_market_type=getattr(source, "market_type", None)),
+            strategy_slug=source.strategy_slug,
+            timeframe=source.timeframe,
+            symbols_json={
+                **source_symbols_json,
+                "symbols": payload.symbols if payload.symbols is not None else (source_symbols_json.get("symbols", [])),
+            },
+            interval_minutes=source.interval_minutes,
+            risk_per_trade=source.risk_per_trade,
+            trade_amount_mode=getattr(source, "trade_amount_mode", "inherit"),
+            amount_per_trade=getattr(source, "amount_per_trade", None),
+            amount_percentage=getattr(source, "amount_percentage", None),
+            min_ml_probability=source.min_ml_probability,
+            use_live_if_available=source.use_live_if_available,
+            take_profit_mode=source.take_profit_mode,
+            take_profit_value=source.take_profit_value,
+            stop_loss_mode=source.stop_loss_mode,
+            stop_loss_value=source.stop_loss_value,
+            trailing_stop_mode=source.trailing_stop_mode,
+            trailing_stop_value=source.trailing_stop_value,
+            indicator_exit_enabled=source.indicator_exit_enabled,
+            indicator_exit_rule=source.indicator_exit_rule,
+            leverage_profile=getattr(source, "leverage_profile", "none"),
+            max_open_positions=max(int(getattr(source, "max_open_positions", 1) or 1), 1),
+            compound_growth_enabled=bool(getattr(source, "compound_growth_enabled", False)),
+            atr_volatility_filter_enabled=bool(getattr(source, "atr_volatility_filter_enabled", True)),
+            is_active=bool(source.is_active),
+            last_status="cloned",
+            next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS) if bool(source.is_active) else None,
+        )
+        db.add(cloned)
+        flush_with_retry(db)
+        cloned_id = cloned.id
+        commit_with_retry(db)
+    except HTTPException:
+        rollback_safely(db)
+        raise
+    except Exception as exc:
+        rollback_safely(db)
+        _raise_db_write_http_error(exc, action="duplicar la sesión automática")
+
     _notify_user_info(
         user,
         title="Bot clonado",

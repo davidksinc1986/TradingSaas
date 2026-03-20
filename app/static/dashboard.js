@@ -142,6 +142,11 @@ const state = {
   botSessions: [],
   executionLogs: [],
   editingConnectorId: null,
+  pendingActions: {
+    runStrategy: false,
+    activateBot: false,
+    saveConnector: false,
+  },
 };
 
 const REPORT_STATE_LABELS = {
@@ -207,6 +212,92 @@ function prettyPlatform(value) {
   const raw = String(value || '').trim().toLowerCase();
   const labels = { binance: 'Binance', bybit: 'Bybit', okx: 'OKX', mt5: 'MT5', ctrader: 'cTrader', tradingview: 'TradingView' };
   return labels[raw] || prettyLabel(value, '-');
+}
+
+function displaySymbol(value) {
+  const raw = String(value || '').trim().toUpperCase();
+  if (!raw) return '-';
+  return raw.replace('/USDT', '').replace('USDT', '').replace('/', '') || raw;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function svgLineChart(items = [], { color = '#f0b90b', fill = 'rgba(240,185,11,.12)' } = {}) {
+  const normalized = Array.isArray(items) ? items : [];
+  if (!normalized.length) return '<div class="chart-empty">Sin datos suficientes todavía.</div>';
+  const values = normalized.map((item) => Number(item?.value || 0));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const width = 100;
+  const height = 36;
+  const points = normalized.map((item, index) => {
+    const x = normalized.length === 1 ? width / 2 : (index / (normalized.length - 1)) * width;
+    const y = height - (((Number(item?.value || 0) - min) / range) * (height - 4)) - 2;
+    return `${x},${y}`;
+  });
+  const areaPoints = [`0,${height}`, ...points, `${width},${height}`].join(' ');
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="activity-chart" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points="${areaPoints}" fill="${fill}"></polygon>
+      <polyline points="${points.join(' ')}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </svg>
+  `;
+}
+
+function activitySummaryCard(title, value, tone = 'neutral') {
+  return `
+    <article class="activity-mini-card tone-${escapeHtml(tone)}">
+      <small>${escapeHtml(title)}</small>
+      <strong>${escapeHtml(value)}</strong>
+    </article>
+  `;
+}
+
+function formatTradeAmountMode(mode) {
+  const normalized = String(mode || 'inherit').toLowerCase();
+  const labels = {
+    inherit: 'Heredar',
+    fixed_usd: 'Monto fijo',
+    balance_percent: '% balance',
+  };
+  return labels[normalized] || prettyLabel(mode, 'Heredar');
+}
+
+function formatSessionCapital(session) {
+  const configuredMode = String(session.configured_trade_amount_mode || session.trade_amount_mode || 'inherit').toLowerCase();
+  if (configuredMode === 'fixed_usd') {
+    return `${Number(session.configured_amount_per_trade || session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}`;
+  }
+  if (configuredMode === 'balance_percent') {
+    return `${Number(session.configured_amount_percentage || session.capital_per_operation || 0).toFixed(2)}%`;
+  }
+  const effectiveLabel = formatTradeAmountMode(session.trade_amount_mode || 'fixed_usd');
+  const effectiveValue = session.trade_amount_mode === 'balance_percent'
+    ? `${Number(session.capital_per_operation || 0).toFixed(2)}%`
+    : `${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}`;
+  return `Perfil (${effectiveLabel}: ${effectiveValue})`;
+}
+
+function percentFromStoredValue(value) {
+  const numeric = Number(value || 0);
+  return numeric > 1 ? numeric : numeric * 100;
+}
+
+function setButtonsBusy(buttons, isBusy, busyLabel = 'Guardando...') {
+  (Array.isArray(buttons) ? buttons : [buttons]).filter(Boolean).forEach((button) => {
+    if (!button.dataset.defaultLabel) button.dataset.defaultLabel = button.textContent.trim();
+    button.disabled = isBusy;
+    button.classList.toggle('is-loading', isBusy);
+    button.textContent = isBusy ? busyLabel : button.dataset.defaultLabel;
+  });
 }
 
 function connectorFieldDefinitions(platform, marketType = null) {
@@ -483,7 +574,7 @@ function renderBotSessions() {
     return;
   }
   panel.innerHTML = state.botSessions.map((session) => `
-    <article class="connector-item fade-in-up">
+    <article class="connector-item fade-in-up bot-session-card ${session.is_active ? 'is-active' : 'is-paused'}">
       <div class="row-between">
         <div>
           <strong>${prettyLabel(session.strategy_slug, 'strategy')}</strong>
@@ -492,38 +583,69 @@ function renderBotSessions() {
             <span>${prettyPlatform(session.platform)}</span>
             <span>${prettyMarketType(session.market_type, session.connector_id)}</span>
           </div>
-          <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
         </div>
         <span class="pill tiny ${session.is_active ? 'pill-on' : 'pill-off'}">${session.is_active ? 'Activo' : 'Pausado'}</span>
       </div>
-      <div class="chip-wrap">
-        <span class="chip chip-static">${session.timeframe}</span>
-        <span class="chip chip-static">${session.trade_amount_mode || 'inherit'}</span>
-        <span class="chip chip-static">Capital ref ${Number(session.capital_per_operation || 0).toFixed(2)} ${session.capital_currency || 'USDT'}</span>
+      <div class="bot-session-card-grid">
+        <div class="bot-session-stat">
+          <small>Timeframe</small>
+          <strong>${prettyLabel(session.timeframe, '5m')}</strong>
+        </div>
+        <div class="bot-session-stat">
+          <small>Riesgo</small>
+          <strong>${percentFromStoredValue(session.risk_per_trade).toFixed(2)}%</strong>
+        </div>
+        <div class="bot-session-stat">
+          <small>ML mínima</small>
+          <strong>${percentFromStoredValue(session.min_ml_probability).toFixed(2)}%</strong>
+        </div>
+        <div class="bot-session-stat">
+          <small>Modo sizing</small>
+          <strong>${formatTradeAmountMode(session.configured_trade_amount_mode || 'inherit')}</strong>
+        </div>
+        <div class="bot-session-stat bot-session-stat-wide">
+          <small>Capital</small>
+          <strong>${formatSessionCapital(session)}</strong>
+        </div>
+        <div class="bot-session-stat bot-session-stat-wide">
+          <small>Símbolos</small>
+          <strong>${(session.symbols || []).join(', ') || 'Sin símbolos'}</strong>
+        </div>
       </div>
       <small class="hint">Próxima corrida: ${formatDate(session.next_run_at)} · Último estado: ${session.last_status || '-'}${session.last_error ? ` · ${session.last_error}` : ''}</small>
-      <form class="bot-session-form form-grid" data-session-id="${session.id}" style="margin-top:12px;">
-        <label>Estrategia
+      <div class="row-wrap bot-session-actions">
+        <button class="btn btn-sm" type="button" data-bot-action="edit" data-id="${session.id}">Editar</button>
+        <button class="btn btn-sm" type="button" data-bot-action="copy" data-id="${session.id}">Duplicar</button>
+        <button class="btn btn-sm" type="button" data-bot-action="delete" data-id="${session.id}">Eliminar</button>
+      </div>
+      <form class="bot-session-form form-grid hidden" data-session-id="${session.id}" style="margin-top:12px;">
+        <label class="compact-field">Estrategia
           <select name="strategy_slug">${STRATEGIES.map((slug) => `<option value="${slug}" ${slug === session.strategy_slug ? 'selected' : ''}>${slug}</option>`).join('')}</select>
         </label>
-        <label>Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
-        <label>Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
-        <label>Riesgo por trade (%)<input name="risk_per_trade" type="number" min="0.1" max="100" step="0.1" value="${Number(session.risk_per_trade || 0) * 100}"></label>
-        <label>Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${Number(session.min_ml_probability || 0) * 100}"></label>
-        <label>Modo sizing
+        <label class="compact-field">Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
+        <label class="compact-field compact-field-wide">Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
+        <label class="compact-field">Riesgo por trade (%)<input name="risk_per_trade" type="number" min="0.1" max="100" step="0.1" value="${percentFromStoredValue(session.risk_per_trade)}"></label>
+        <label class="compact-field">Prob. mínima ML (%)<input name="min_ml_probability" type="number" min="0" max="100" step="1" value="${percentFromStoredValue(session.min_ml_probability)}"></label>
+        <label class="compact-field">Modo sizing
           <select name="trade_amount_mode">
-            <option value="inherit" ${session.trade_amount_mode === 'inherit' ? 'selected' : ''}>Heredar</option>
-            <option value="fixed_usd" ${session.trade_amount_mode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
-            <option value="balance_percent" ${session.trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
+            <option value="inherit" ${session.configured_trade_amount_mode === 'inherit' ? 'selected' : ''}>Heredar</option>
+            <option value="fixed_usd" ${session.configured_trade_amount_mode === 'fixed_usd' ? 'selected' : ''}>Monto fijo</option>
+            <option value="balance_percent" ${session.configured_trade_amount_mode === 'balance_percent' ? 'selected' : ''}>% balance</option>
           </select>
         </label>
-        <label>Use live
+        <label class="compact-field sizing-value-field ${session.configured_trade_amount_mode === 'fixed_usd' ? '' : 'hidden'}" data-mode-field="fixed_usd">Monto por trade
+          <input name="amount_per_trade" type="number" min="0.01" step="0.01" value="${session.configured_amount_per_trade ?? ''}">
+        </label>
+        <label class="compact-field sizing-value-field ${session.configured_trade_amount_mode === 'balance_percent' ? '' : 'hidden'}" data-mode-field="balance_percent">% por trade
+          <input name="amount_percentage" type="number" min="0.1" max="100" step="0.1" value="${session.configured_amount_percentage ?? ''}">
+        </label>
+        <label class="compact-field">Use live
           <select name="use_live_if_available">
             <option value="true" ${session.use_live_if_available ? 'selected' : ''}>Sí</option>
             <option value="false" ${!session.use_live_if_available ? 'selected' : ''}>No</option>
           </select>
         </label>
-        <label>Estado
+        <label class="compact-field">Estado
           <select name="is_active">
             <option value="true" ${session.is_active ? 'selected' : ''}>Activo</option>
             <option value="false" ${!session.is_active ? 'selected' : ''}>Pausado</option>
@@ -531,19 +653,36 @@ function renderBotSessions() {
         </label>
         <div class="row-wrap">
           <button class="btn btn-sm primary" type="submit">Guardar sesión</button>
-          <button class="btn btn-sm" type="button" data-bot-action="copy" data-id="${session.id}">Duplicar</button>
-          <button class="btn btn-sm" type="button" data-bot-action="delete" data-id="${session.id}">Eliminar</button>
+          <button class="btn btn-sm" type="button" data-bot-action="cancel-edit" data-id="${session.id}">Cancelar</button>
         </div>
       </form>
     </article>
   `).join('');
 
   panel.querySelectorAll('.bot-session-form').forEach((form) => {
+    const modeSelect = form.querySelector('[name="trade_amount_mode"]');
+    const syncSizingFields = () => {
+      const currentMode = String(modeSelect?.value || 'inherit');
+      form.querySelectorAll('.sizing-value-field').forEach((field) => {
+        const active = field.dataset.modeField === currentMode;
+        field.classList.toggle('hidden', !active);
+        const input = field.querySelector('input');
+        if (input) {
+          input.disabled = !active;
+          if (!active) input.value = '';
+        }
+      });
+    };
+    modeSelect?.addEventListener('change', syncSizingFields);
+    syncSizingFields();
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
       const id = Number(form.dataset.sessionId);
+      const submitButton = form.querySelector('button[type="submit"]');
       try {
+        setButtonsBusy(submitButton, true, 'Guardando...');
         await api(`/api/bot-sessions/${id}`, {
           method: 'PUT',
           body: JSON.stringify({
@@ -553,6 +692,8 @@ function renderBotSessions() {
             risk_per_trade: Number(fd.get('risk_per_trade')),
             min_ml_probability: Number(fd.get('min_ml_probability')),
             trade_amount_mode: fd.get('trade_amount_mode'),
+            amount_per_trade: fd.get('trade_amount_mode') === 'fixed_usd' ? Number(fd.get('amount_per_trade')) : null,
+            amount_percentage: fd.get('trade_amount_mode') === 'balance_percent' ? Number(fd.get('amount_percentage')) : null,
             use_live_if_available: fd.get('use_live_if_available') === 'true',
             is_active: fd.get('is_active') === 'true',
           }),
@@ -561,6 +702,8 @@ function renderBotSessions() {
         await refreshDashboard();
       } catch (error) {
         setStatus('bot-session-feedback', parseApiError(error), 'error');
+      } finally {
+        setButtonsBusy(submitButton, false);
       }
     });
   });
@@ -568,7 +711,20 @@ function renderBotSessions() {
   panel.querySelectorAll('button[data-bot-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       const id = Number(button.dataset.id);
+      const card = button.closest('.bot-session-card');
+      const form = card?.querySelector('.bot-session-form');
       try {
+        if (button.dataset.botAction === 'edit') {
+          form?.classList.remove('hidden');
+          button.classList.add('hidden');
+          return;
+        }
+        if (button.dataset.botAction === 'cancel-edit') {
+          form?.classList.add('hidden');
+          card?.querySelector('[data-bot-action="edit"]')?.classList.remove('hidden');
+          return;
+        }
+        setButtonsBusy(button, true, button.dataset.botAction === 'copy' ? 'Duplicando...' : 'Eliminando...');
         if (button.dataset.botAction === 'copy') {
           await api(`/api/bot-sessions/${id}/copy`, { method: 'POST', body: JSON.stringify({}) });
         } else {
@@ -577,6 +733,8 @@ function renderBotSessions() {
         await refreshDashboard();
       } catch (error) {
         setStatus('bot-session-feedback', parseApiError(error), 'error');
+      } finally {
+        if (!['edit', 'cancel-edit'].includes(button.dataset.botAction || '')) setButtonsBusy(button, false);
       }
     });
   });
@@ -770,11 +928,15 @@ async function saveTradeAmountSettings(event) {
 
 async function saveConnector(event) {
   event.preventDefault();
+  if (state.pendingActions.saveConnector) return;
   const form = event.currentTarget;
   const fd = new FormData(form);
   const platform = String(fd.get('platform'));
   const { config, secrets } = readConnectorFriendlyFields(form, platform);
+  const submitButton = document.getElementById('connector-submit-btn');
   try {
+    state.pendingActions.saveConnector = true;
+    setButtonsBusy(submitButton, true, 'Guardando...');
     const isEditing = Boolean(state.editingConnectorId);
     await api(isEditing ? `/api/connectors/${state.editingConnectorId}` : '/api/connectors', {
       method: isEditing ? 'PUT' : 'POST',
@@ -793,6 +955,9 @@ async function saveConnector(event) {
     await refreshDashboard();
   } catch (error) {
     setStatus('connector-feedback', parseApiError(error), 'error');
+  } finally {
+    state.pendingActions.saveConnector = false;
+    setButtonsBusy(submitButton, false);
   }
 }
 
@@ -1061,27 +1226,42 @@ function bindFieldAdvisories(formSelector, formKind) {
 
 async function runStrategy(event) {
   event.preventDefault();
+  if (state.pendingActions.runStrategy) return;
   try {
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
+    const submitButton = document.getElementById('run-strategy-btn');
+    state.pendingActions.runStrategy = true;
+    setStatus('run-feedback', 'Ejecutando estrategia...', 'ok');
+    setButtonsBusy([submitButton, document.getElementById('activate-bot-btn')], true, 'Procesando...');
     await api('/api/strategies/run', { method: 'POST', body: JSON.stringify(buildRunPayload(form)) });
     setStatus('run-feedback', 'Estrategia ejecutada correctamente.', 'ok');
     await refreshDashboard();
   } catch (error) {
     setStatus('run-feedback', parseApiError(error), 'error');
+  } finally {
+    state.pendingActions.runStrategy = false;
+    setButtonsBusy([document.getElementById('run-strategy-btn'), document.getElementById('activate-bot-btn')], false);
   }
 }
 
 async function activateBotFromForm() {
+  if (state.pendingActions.activateBot) return;
   try {
     const form = document.getElementById('run-form');
     if (!form?.reportValidity()) return;
+    state.pendingActions.activateBot = true;
+    setStatus('run-feedback', 'Creando estrategia automática...', 'ok');
+    setButtonsBusy([document.getElementById('activate-bot-btn'), document.getElementById('run-strategy-btn')], true, 'Procesando...');
     const payload = buildRunPayload(form);
     await api('/api/bot-sessions', { method: 'POST', body: JSON.stringify(payload) });
     setStatus('run-feedback', 'Bot 24/7 activado correctamente.', 'ok');
     await refreshDashboard();
   } catch (error) {
     setStatus('run-feedback', parseApiError(error), 'error');
+  } finally {
+    state.pendingActions.activateBot = false;
+    setButtonsBusy([document.getElementById('activate-bot-btn'), document.getElementById('run-strategy-btn')], false);
   }
 }
 
