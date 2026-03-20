@@ -92,6 +92,10 @@ def ensure_schema_updates(db):
         "atr_volatility_filter_enabled": "ALTER TABLE bot_sessions ADD COLUMN atr_volatility_filter_enabled BOOLEAN DEFAULT 1",
     })
 
+    if inspector.has_table("connectors"):
+        db.execute(text("UPDATE connectors SET mode = 'live' WHERE mode IS NULL OR LOWER(mode) <> 'live'"))
+    if inspector.has_table("bot_sessions"):
+        db.execute(text("UPDATE bot_sessions SET use_live_if_available = 1 WHERE use_live_if_available IS NULL OR use_live_if_available = 0"))
     db.commit()
 
 

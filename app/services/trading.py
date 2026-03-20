@@ -1074,7 +1074,7 @@ def run_strategy(
 ):
     import json
 
-    from app.models import Connector, OpenPosition, TradeLog, TradeRun, User
+    from app.models import BotSession, Connector, OpenPosition, TradeLog, TradeRun, User
     from app.services.alerts import (
         format_user_execution_message,
         format_user_failure_message,
@@ -1092,6 +1092,9 @@ def run_strategy(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise RuntimeError(f"user {user_id} not found")
+    bot_session = None
+    if bot_session_id is not None:
+        bot_session = db.query(BotSession).filter(BotSession.id == bot_session_id, BotSession.user_id == user_id).first()
     trade_amount_config = _resolve_trade_amount_config(
         user,
         trade_amount_mode=trade_amount_mode,
@@ -1137,6 +1140,11 @@ def run_strategy(
                 },
                 "run_source": run_source,
                 "bot_session_id": bot_session_id,
+                "bot_session_name": getattr(bot_session, "session_name", None) if bot_session is not None else None,
+                "bot_session_display_name": (
+                    getattr(bot_session, "session_name", None)
+                    or f"{strategy_slug} · {connector.label}"
+                ) if bot_session_id is not None else None,
                 "scanner": scanner_meta,
                 "sync": sync_meta,
                 "lifecycle": lifecycle_meta,

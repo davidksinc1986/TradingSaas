@@ -22,7 +22,7 @@ class ConnectorCreate(BaseModel):
     user_id: int | None = None
     platform: PLATFORMS
     label: str
-    mode: Literal["paper", "live", "signal"] = "paper"
+    mode: Literal["paper", "live", "signal"] = "live"
     market_type: MARKET_TYPES = "spot"
     symbols: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -87,7 +87,7 @@ class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
     strategy_slug: STRATEGY_LITERAL = "ema_rsi"
     risk_per_trade: float = Field(default=1, gt=0, le=100)
     min_ml_probability: float = Field(default=55, ge=0, le=100)
-    use_live_if_available: bool = False
+    use_live_if_available: bool = True
     take_profit_mode: Literal["percent", "usdt"] = "percent"
     take_profit_value: float = Field(default=1.5, gt=0)
     stop_loss_mode: Literal["percent", "usdt"] = "percent"
@@ -113,7 +113,7 @@ class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     strategy_slug: STRATEGY_LITERAL = "ema_rsi"
     risk_per_trade: float = Field(default=1, gt=0, le=100)
     min_ml_probability: float = Field(default=55, ge=0, le=100)
-    use_live_if_available: bool = False
+    use_live_if_available: bool = True
     interval_minutes: int = Field(default=5, ge=1, le=1440)
     take_profit_mode: Literal["percent", "usdt"] = "percent"
     take_profit_value: float = Field(default=1.5, gt=0)
