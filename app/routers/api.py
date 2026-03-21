@@ -1364,8 +1364,9 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
             raise HTTPException(status_code=404, detail="Enabled connector not found")
 
         # Final backend safety validation
-        if payload.platform and payload.platform != connector.platform:
-            raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload.platform}' pero el conector es '{connector.platform}'.")
+        payload_platform = getattr(payload, "platform", None)
+        if payload_platform and payload_platform != connector.platform:
+            raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload_platform}' pero el conector es '{connector.platform}'.")
         
         resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
         if normalize_market_type(payload.market_type) != resolved_market_type:
