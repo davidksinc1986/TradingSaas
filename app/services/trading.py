@@ -1081,6 +1081,48 @@ def _resolve_order_price_context(
     }
 
 
+def _connector_supported_symbols(client, connector_market_type: str) -> set[str]:
+    if not hasattr(client, "build_exchange") or not hasattr(client, "_load_markets"):
+        return set()
+    try:
+        exchange = client.build_exchange()
+        markets = client._load_markets(exchange)
+    except Exception:
+        return set()
+
+    normalized_market_type = str(connector_market_type or "").lower()
+    supported: set[str] = set()
+    for symbol, market in (markets or {}).items():
+        if not market.get("active", True):
+            continue
+        if normalized_market_type == "spot" and not market.get("spot"):
+            continue
+        if normalized_market_type == "futures" and not (market.get("future") or market.get("swap")):
+            continue
+        supported.add(str(symbol).strip().upper())
+    return supported
+
+
+def _filter_supported_symbols(symbols: list[str], supported_symbols: set[str]) -> tuple[list[str], list[str]]:
+    if not supported_symbols:
+        normalized = [str(item).strip().upper() for item in symbols if str(item).strip()]
+        return normalized, []
+
+    accepted: list[str] = []
+    rejected: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        candidate = str(symbol).strip().upper()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate in supported_symbols:
+            accepted.append(candidate)
+        else:
+            rejected.append(candidate)
+    return accepted, rejected
+
+
 def sync_positions_with_exchange(db, connector, symbols: list[str] | None = None) -> dict[str, Any]:
     from app.services.position_lifecycle import reconcile_positions_with_exchange
 
@@ -1172,17 +1214,51 @@ def run_strategy(
         )
 
         client = get_connector_client(runtime_connector)
+        supported_symbols = _connector_supported_symbols(client, connector_market_type)
+        effective_fallback_symbols, unsupported_requested_symbols = _filter_supported_symbols(symbols, supported_symbols)
         lifecycle_meta = run_position_lifecycle(db, connector_ids=[connector.id])
+        scanner_cfg = dict(connector.config_json or {})
+        scanner_universe = (scanner_cfg.get("scanner_universe") or scanner_cfg.get("smart_scanner_universe") or [])
+        if supported_symbols and scanner_universe:
+            filtered_universe, unsupported_universe_symbols = _filter_supported_symbols(
+                scanner_universe if isinstance(scanner_universe, list) else str(scanner_universe).split(","),
+                supported_symbols,
+            )
+            if isinstance(scanner_universe, str):
+                scanner_cfg["scanner_universe"] = filtered_universe
+            elif scanner_cfg.get("scanner_universe") is not None:
+                scanner_cfg["scanner_universe"] = filtered_universe
+            else:
+                scanner_cfg["smart_scanner_universe"] = filtered_universe
+        else:
+            unsupported_universe_symbols = []
         selected_symbols, scanner_meta = select_symbols_for_run(
             connector_id=connector.id,
             timeframe=timeframe,
-            fallback_symbols=symbols,
-            cfg=connector.config_json or {},
+            fallback_symbols=effective_fallback_symbols,
+            cfg=scanner_cfg,
             connector=connector,
             force_dynamic=str(symbol_source_mode or "manual").lower() == "dynamic",
             max_symbols_override=dynamic_symbol_limit,
         )
+        selected_symbols, unsupported_scanner_symbols = _filter_supported_symbols(selected_symbols, supported_symbols)
         sync_meta = sync_positions_with_exchange(db, runtime_connector, selected_symbols)
+        scanner_meta["selected_symbols"] = list(selected_symbols)
+        scanner_meta["selected_count"] = len(selected_symbols)
+        scanner_meta["unsupported_symbols"] = sorted({
+            *unsupported_requested_symbols,
+            *unsupported_universe_symbols,
+            *unsupported_scanner_symbols,
+        })
+
+        if not selected_symbols:
+            results.append({
+                "connector_id": connector.id,
+                "status": "skipped",
+                "reason": "no_supported_symbols",
+                "unsupported_symbols": scanner_meta["unsupported_symbols"],
+            })
+            continue
 
         for symbol in selected_symbols:
             decision_reasons: list[str] = []
@@ -1454,6 +1530,8 @@ def run_strategy(
             else:
                 quantity = risk_plan.approved_qty
 
+            quantity_semantics = "contracts" if connector_market_type == "futures" and reduce_only else "base"
+
             if not risk_plan.approved and signal != "sell":
                 decision_reasons.extend(risk_plan.block_reasons or ["risk_engine_blocked"])
             notes["order_preview"] = {
@@ -1514,6 +1592,7 @@ def run_strategy(
                 risk_context=risk_context,
                 analysis_price=price,
                 connector_context=connector_context,
+                quantity_semantics=quantity_semantics,
             )
             notes["pretrade"] = pretrade
             if not pretrade.get("ok"):
@@ -1556,6 +1635,7 @@ def run_strategy(
                     quantity=pretrade["normalized_quantity"],
                     price_hint=price,
                     reduce_only=reduce_only,
+                    quantity_semantics="exchange",
                 )
                 notes["execution_raw"] = result.raw
                 risk_orders = {}

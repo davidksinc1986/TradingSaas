@@ -81,6 +81,7 @@ class BaseConnectorClient:
         risk_context: dict[str, Any] | None = None,
         connector_context: dict[str, Any] | None = None,
         analysis_price: float | None = None,
+        quantity_semantics: str = "base",
     ) -> dict[str, Any]:
         execution_reference = self.resolve_execution_reference_price(
             symbol,
@@ -102,6 +103,7 @@ class BaseConnectorClient:
             market_rules=MarketRules(**market_rules),
             risk_context=risk_context,
             connector_context=connector_context,
+            quantity_semantics=quantity_semantics,
         )
         return decision.to_dict()
 
@@ -113,6 +115,7 @@ class BaseConnectorClient:
         price_hint: float,
         reduce_only: bool = False,
         extra_params: dict[str, Any] | None = None,
+        quantity_semantics: str = "base",
     ) -> ExecutionResult:
         return ExecutionResult(
             status="paper-filled",
@@ -124,6 +127,7 @@ class BaseConnectorClient:
                 "platform": self.connector.platform,
                 "market_type": getattr(self.connector, "market_type", "spot"),
                 "reduce_only": reduce_only,
+                "quantity_semantics": quantity_semantics,
                 "extra_params": extra_params or {},
             },
         )
@@ -148,6 +152,7 @@ class BaseConnectorClient:
         risk_context: dict[str, Any] | None = None,
         analysis_price: float | None = None,
         connector_context: dict[str, Any] | None = None,
+        quantity_semantics: str = "base",
     ) -> dict[str, Any]:
         decision = self.validate_and_adjust_order(
             symbol,
@@ -159,6 +164,7 @@ class BaseConnectorClient:
             risk_context=risk_context,
             connector_context=connector_context,
             analysis_price=analysis_price if analysis_price is not None else price_hint,
+            quantity_semantics=quantity_semantics,
         )
         return {
             "ok": bool(decision["is_valid"]),
@@ -543,6 +549,8 @@ class CCXTConnectorClient(BaseConnectorClient):
             options["defaultType"] = "future" if market_type == "futures" else "spot"
             options["adjustForTimeDifference"] = bool((self.config or {}).get("adjust_for_time_difference", True))
             options["recvWindow"] = recv_window
+        if self.connector.platform == "bybit" and market_type == "futures":
+            options.setdefault("fetchCurrencies", False)
 
         if self.config.get("sandbox"):
             options["sandboxMode"] = True
@@ -867,6 +875,7 @@ class CCXTConnectorClient(BaseConnectorClient):
         risk_context: dict[str, Any] | None = None,
         connector_context: dict[str, Any] | None = None,
         analysis_price: float | None = None,
+        quantity_semantics: str = "base",
     ) -> dict[str, Any]:
         decision = build_validation_decision(
             exchange=self.connector.platform,
@@ -886,8 +895,21 @@ class CCXTConnectorClient(BaseConnectorClient):
             market_rules=MarketRules(**self.resolve_market_rules(symbol)),
             risk_context=risk_context,
             connector_context=connector_context,
+            quantity_semantics=quantity_semantics,
         )
         return decision.to_dict()
+
+    @staticmethod
+    def _is_auxiliary_heartbeat_error(detail: str) -> bool:
+        message = str(detail or "").lower()
+        return any(
+            fragment in message
+            for fragment in (
+                "/v5/asset/coin/query-info",
+                "asset/coin/query-info",
+                "coin/query-info",
+            )
+        )
 
     def _normalize_amount(self, exchange, symbol: str, quantity: float) -> float:
         try:
@@ -1124,6 +1146,7 @@ class CCXTConnectorClient(BaseConnectorClient):
         price_hint: float,
         reduce_only: bool = False,
         extra_params: dict[str, Any] | None = None,
+        quantity_semantics: str = "base",
     ) -> ExecutionResult:
         if self.connector.mode != "live":
             return super().execute_market(
@@ -1133,6 +1156,7 @@ class CCXTConnectorClient(BaseConnectorClient):
                 price_hint=price_hint,
                 reduce_only=reduce_only,
                 extra_params=extra_params,
+                quantity_semantics=quantity_semantics,
             )
 
         exchange = self.build_exchange()
@@ -1150,6 +1174,7 @@ class CCXTConnectorClient(BaseConnectorClient):
                 "price_guardrails": (self.config or {}).get("price_guardrails") or {},
                 "connector_mode": self.connector.mode,
             },
+            quantity_semantics=quantity_semantics,
         )
 
         if not validation.get("is_valid"):
@@ -1456,18 +1481,34 @@ class CCXTConnectorClient(BaseConnectorClient):
             return {"ok": True, "mode": self.connector.mode, "note": "paper/signal mode"}
 
         exchange = self.build_exchange()
-        markets = exchange.load_markets()
+        warnings: list[str] = []
+        try:
+            markets = exchange.load_markets()
+        except Exception as exc:
+            if self.connector.platform == "bybit" and self._is_auxiliary_heartbeat_error(str(exc)):
+                warnings.append(f"auxiliary_asset_info_unavailable:{exc}")
+                options = getattr(exchange, "options", {}) or {}
+                options["fetchCurrencies"] = False
+                exchange.options = options
+                markets = exchange.load_markets()
+            else:
+                raise
         balance = None
         try:
             balance = exchange.fetch_balance()
         except Exception as exc:
-            balance = {"error": str(exc)}
+            if self.connector.platform == "bybit" and self._is_auxiliary_heartbeat_error(str(exc)):
+                warnings.append(f"auxiliary_asset_info_unavailable:{exc}")
+                balance = {"warning": str(exc), "auxiliary": True}
+            else:
+                balance = {"error": str(exc)}
 
         return {
             "ok": True,
             "platform": self.connector.platform,
             "markets_loaded": len(markets),
             "balance_preview": balance,
+            "warnings": warnings,
         }
 
 
@@ -1611,6 +1652,7 @@ class MT5ConnectorClient(BaseConnectorClient):
         price_hint: float,
         reduce_only: bool = False,
         extra_params: dict[str, Any] | None = None,
+        quantity_semantics: str = "base",
     ) -> ExecutionResult:
         if self.connector.mode != "live":
             return super().execute_market(
@@ -1620,6 +1662,7 @@ class MT5ConnectorClient(BaseConnectorClient):
                 price_hint=price_hint,
                 reduce_only=reduce_only,
                 extra_params=extra_params,
+                quantity_semantics=quantity_semantics,
             )
 
         self._ensure_session()
@@ -1779,6 +1822,7 @@ class CTraderConnectorClient(BaseConnectorClient):
         price_hint: float,
         reduce_only: bool = False,
         extra_params: dict[str, Any] | None = None,
+        quantity_semantics: str = "base",
     ) -> ExecutionResult:
         if self.connector.mode != "live":
             return super().execute_market(
@@ -1788,6 +1832,7 @@ class CTraderConnectorClient(BaseConnectorClient):
                 price_hint=price_hint,
                 reduce_only=reduce_only,
                 extra_params=extra_params,
+                quantity_semantics=quantity_semantics,
             )
 
         bridge_url = self._bridge_url()

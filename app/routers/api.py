@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import OperationalError, PendingRollbackError
+from sqlalchemy import or_
 from sqlalchemy.orm.exc import ObjectDeletedError
 
 from app.db import commit_with_retry, flush_with_retry, get_db, is_sqlite_locked_error, rollback_safely
@@ -2121,17 +2122,78 @@ def list_trades(db=Depends(get_db), user=Depends(current_user)):
 
 
 @router.get("/execution-logs")
-def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_user)):
+def execution_logs(
+    limit: int = 200,
+    offset: int = 0,
+    q: str | None = None,
+    status: str | None = None,
+    connector: str | None = None,
+    market_type: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db=Depends(get_db),
+    user=Depends(current_user),
+):
     target = min(max(limit, 1), 500)
-    runs = db.query(TradeRun).filter(TradeRun.user_id == user.id).order_by(TradeRun.created_at.desc()).limit(target).all()
+    skip = max(offset, 0)
+    query = db.query(TradeRun, Connector).outerjoin(Connector, Connector.id == TradeRun.connector_id).filter(TradeRun.user_id == user.id)
+
+    search_value = str(q or "").strip()
+    if search_value:
+        token = f"%{search_value}%"
+        query = query.filter(or_(
+            TradeRun.symbol.ilike(token),
+            TradeRun.strategy_slug.ilike(token),
+            TradeRun.signal.ilike(token),
+            TradeRun.status.ilike(token),
+            TradeRun.timeframe.ilike(token),
+            TradeRun.notes.ilike(token),
+            Connector.label.ilike(token),
+            Connector.platform.ilike(token),
+        ))
+
+    normalized_status = str(status or "").strip()
+    if normalized_status:
+        query = query.filter(TradeRun.status == normalized_status)
+
+    normalized_connector = str(connector or "").strip()
+    if normalized_connector:
+        if normalized_connector.isdigit():
+            query = query.filter(TradeRun.connector_id == int(normalized_connector))
+        else:
+            query = query.filter(Connector.label == normalized_connector)
+
+    normalized_market_type = _normalize_market_type(market_type) if market_type else ""
+    if normalized_market_type:
+        query = query.filter(Connector.market_type == normalized_market_type)
+
+    parsed_start = None
+    if start_date:
+        try:
+            parsed_start = datetime.fromisoformat(str(start_date).strip())
+            query = query.filter(TradeRun.created_at >= parsed_start)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="start_date debe tener formato ISO válido")
+
+    parsed_end = None
+    if end_date:
+        try:
+            parsed_end = datetime.fromisoformat(str(end_date).strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="end_date debe tener formato ISO válido")
+        if parsed_end.time() == datetime.min.time():
+            parsed_end = parsed_end + timedelta(days=1)
+        query = query.filter(TradeRun.created_at < parsed_end)
+
+    total = query.count()
+    rows = query.order_by(TradeRun.created_at.desc()).offset(skip).limit(target).all()
     payload = []
-    for run in runs:
+    for run, connector in rows:
         note = run.notes or ""
         try:
             parsed_note = json.loads(note) if note else {}
         except json.JSONDecodeError:
             parsed_note = {"raw_notes": note}
-        connector = db.query(Connector).filter(Connector.id == run.connector_id).first()
         reason_codes = _trade_run_reason_codes(run, parsed_note)
         reason_code = reason_codes[0] if reason_codes else "ok"
         connector_meta = _trade_run_connector_snapshot(connector, parsed_note)
@@ -2160,7 +2222,21 @@ def execution_logs(limit: int = 200, db=Depends(get_db), user=Depends(current_us
             "notes": parsed_note,
             "candle": parsed_note.get("candle") or (parsed_note.get("scanner") or {}).get("candle"),
         })
-    return payload
+    return {
+        "items": payload,
+        "total": total,
+        "limit": target,
+        "offset": skip,
+        "has_more": skip + len(payload) < total,
+        "filters": {
+            "q": search_value,
+            "status": normalized_status or None,
+            "connector": normalized_connector or None,
+            "market_type": normalized_market_type or None,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    }
 
 
 @router.post("/webhooks/tradingview")

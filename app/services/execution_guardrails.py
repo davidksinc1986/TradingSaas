@@ -68,6 +68,39 @@ def quantize_to_precision(value: Decimal, precision: int | None, rounding=ROUND_
     return value.quantize(quant, rounding=rounding)
 
 
+def _normalize_qty_semantics(value: Any, default: str = "base") -> str:
+    normalized = str(value or "").strip().lower()
+    aliases = {
+        "contract": "contracts",
+        "contracts": "contracts",
+        "base": "base",
+        "exchange": "exchange",
+    }
+    return aliases.get(normalized, default)
+
+
+def _convert_quantity_semantics(
+    quantity: Decimal,
+    *,
+    input_semantics: str,
+    target_semantics: str,
+    contract_size: Decimal,
+) -> Decimal:
+    normalized_input = _normalize_qty_semantics(input_semantics, default=target_semantics)
+    normalized_target = _normalize_qty_semantics(target_semantics, default="base")
+    if normalized_input == "exchange":
+        normalized_input = normalized_target
+    if normalized_input == normalized_target:
+        return quantity
+    if contract_size <= _DECIMAL_ZERO:
+        return quantity
+    if normalized_input == "base" and normalized_target == "contracts":
+        return quantity / contract_size
+    if normalized_input == "contracts" and normalized_target == "base":
+        return quantity * contract_size
+    return quantity
+
+
 @dataclass
 class MarketRules:
     exchange: str
@@ -157,6 +190,7 @@ def build_validation_decision(
     market_rules: MarketRules,
     risk_context: dict[str, Any] | None = None,
     connector_context: dict[str, Any] | None = None,
+    quantity_semantics: str = "base",
 ) -> ValidationDecision:
     risk_context = risk_context or {}
     connector_context = connector_context or {}
@@ -172,6 +206,21 @@ def build_validation_decision(
     analysis_dec = _decimal(analysis_price) if analysis_price is not None else None
     exec_price = _decimal(execution_reference.value)
     contract_size = _decimal(market_rules.contract_size or 1)
+    contract_multiplier = contract_size if contract_size > _DECIMAL_ZERO else _DECIMAL_ONE
+    exchange_qty_semantics = _normalize_qty_semantics(market_rules.qty_semantics, default="base")
+    input_qty_semantics = _normalize_qty_semantics(quantity_semantics, default=exchange_qty_semantics)
+    execution_qty = _convert_quantity_semantics(
+        raw_qty,
+        input_semantics=input_qty_semantics,
+        target_semantics=exchange_qty_semantics,
+        contract_size=contract_size,
+    )
+    diagnostics["quantity_semantics"] = {
+        "input": input_qty_semantics,
+        "exchange": exchange_qty_semantics,
+        "raw_qty_input": _float_or_none(raw_qty),
+        "execution_qty_pre_filters": _float_or_none(execution_qty),
+    }
 
     if raw_qty <= _DECIMAL_ZERO or not _is_valid_number(desired_qty):
         return ValidationDecision(
@@ -306,8 +355,7 @@ def build_validation_decision(
     if price_step <= _DECIMAL_ZERO and market_rules.price_precision is not None:
         price_step = precision_to_step(market_rules.price_precision)
 
-    # raw_qty is already normalized by trading.py's _apply_exchange_filters
-    normalized_qty = raw_qty if _is_valid_number(raw_qty) and _decimal(raw_qty) > _DECIMAL_ZERO else _DECIMAL_ZERO
+    normalized_qty = execution_qty if _is_valid_number(execution_qty) and execution_qty > _DECIMAL_ZERO else _DECIMAL_ZERO
 
     if normalized_qty <= _DECIMAL_ZERO:
         return ValidationDecision(            is_valid=False,
@@ -350,6 +398,13 @@ def build_validation_decision(
     min_cost = _decimal(market_rules.min_cost)
     max_cost = _decimal(market_rules.max_cost)
     max_qty_allowed = _decimal(risk_context.get("max_qty")) if risk_context.get("max_qty") is not None else _DECIMAL_ZERO
+    if max_qty_allowed > _DECIMAL_ZERO:
+        max_qty_allowed = _convert_quantity_semantics(
+            max_qty_allowed,
+            input_semantics=input_qty_semantics,
+            target_semantics=exchange_qty_semantics,
+            contract_size=contract_size,
+        )
     max_cost_allowed = _decimal(risk_context.get("max_cost")) if risk_context.get("max_cost") is not None else _DECIMAL_ZERO
     allow_adjust_up = bool(risk_context.get("allow_adjust_up", False))
     adjusted_for_minimums = False
@@ -381,7 +436,7 @@ def build_validation_decision(
                 amount_step=market_rules.amount_step,
                 price_step=market_rules.price_step,
                 min_cost=market_rules.min_cost,
-                final_cost=float(normalized_qty * normalized_price * max(contract_size, _DECIMAL_ONE)),
+                final_cost=float(normalized_qty * normalized_price * contract_multiplier),
                 contract_size=market_rules.contract_size,
                 adjusted_for_minimums=False,
                 risk_blocked=False,
@@ -391,11 +446,13 @@ def build_validation_decision(
                 diagnostics=diagnostics,
             )
 
-    final_cost = normalized_qty * normalized_price * max(contract_size, _DECIMAL_ONE)
+    final_cost = normalized_qty * normalized_price * contract_multiplier
     diagnostics["projected_notional"] = float(final_cost)
+    diagnostics["execution_qty_post_filters"] = float(normalized_qty)
+    diagnostics["risk_max_qty_exchange_semantics"] = float(max_qty_allowed) if max_qty_allowed > _DECIMAL_ZERO else None
 
     if min_cost > _DECIMAL_ZERO and final_cost < min_cost:
-        required_qty = min_cost / max(normalized_price * max(contract_size, _DECIMAL_ONE), Decimal("0.00000001"))
+        required_qty = min_cost / max(normalized_price * contract_multiplier, Decimal("0.00000001"))
         diagnostics["required_min_qty_for_notional"] = float(required_qty)
         if allow_adjust_up:
             normalized_qty = required_qty
@@ -405,7 +462,7 @@ def build_validation_decision(
                 normalized_qty = amount_min
             if market_rules.amount_precision is not None:
                 normalized_qty = quantize_to_precision(normalized_qty, market_rules.amount_precision, rounding=ROUND_UP)
-            final_cost = normalized_qty * normalized_price * max(contract_size, _DECIMAL_ONE)
+            final_cost = normalized_qty * normalized_price * contract_multiplier
             adjusted_for_minimums = True
         else:
             return ValidationDecision(
