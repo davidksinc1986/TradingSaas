@@ -766,9 +766,8 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
     }
 
 
-@router.api_route("/me/telegram/test", methods=["GET", "POST"])
-def me_telegram_test(db=Depends(get_db), user=Depends(current_user)):
-    _ = db
+@router.post("/me/telegram/test")
+def me_telegram_test(user=Depends(current_user)):
     try:
         ok = send_user_telegram_test_alert(user, raise_on_error=True)
     except TelegramDeliveryError as exc:
@@ -1092,13 +1091,27 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
-    connectors = _validate_strategy_connectors(db, user_id=user.id, connector_ids=payload.connector_ids, strategy_slug=payload.strategy_slug)
-    trade_amount_settings = _resolve_trade_amount_settings(user, payload, connectors[0] if connectors else None)
+    connectors = _validate_strategy_connectors(db, user_id=user.id, connector_ids=[payload.connector_id], strategy_slug=payload.strategy_slug)
+    
+    if not connectors:
+        raise HTTPException(status_code=400, detail="Conector inválido, deshabilitado o no encontrado.")
+    
+    connector = connectors[0]
+    
+    # Final backend safety validation
+    if payload.platform and payload.platform != connector.platform:
+        raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload.platform}' pero el conector es '{connector.platform}'.")
+    
+    resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
+    if normalize_market_type(payload.market_type) != resolved_market_type:
+         raise HTTPException(status_code=400, detail=f"Error de mercado: se envió '{payload.market_type}' pero el tipo resuelto para el conector es '{resolved_market_type}'.")
+
+    trade_amount_settings = _resolve_trade_amount_settings(user, payload, connector)
 
     result = run_strategy(
         db=db,
         user_id=user.id,
-        connector_ids=payload.connector_ids,
+        connector_ids=[payload.connector_id],
         symbols=payload.symbols,
         timeframe=payload.timeframe,
         strategy_slug=payload.strategy_slug,
@@ -1350,6 +1363,14 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
         if not connector:
             raise HTTPException(status_code=404, detail="Enabled connector not found")
 
+        # Final backend safety validation
+        if payload.platform and payload.platform != connector.platform:
+            raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload.platform}' pero el conector es '{connector.platform}'.")
+        
+        resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
+        if normalize_market_type(payload.market_type) != resolved_market_type:
+            raise HTTPException(status_code=400, detail=f"Error de mercado: se envió '{payload.market_type}' pero el tipo resuelto para el conector es '{resolved_market_type}'.")
+
         _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
 
         risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
@@ -1364,9 +1385,8 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
             normalized_amounts["amount_per_trade"] = _recommended_fixed_trade_amount_usd(
                 platform=connector.platform,
                 symbols=payload.symbols,
-                market_type=payload.market_type or connector.market_type,
+                market_type=resolved_market_type,
             )
-        resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
 
         normalized_timeframe = _normalize_timeframe(payload.timeframe)
         session = BotSession(

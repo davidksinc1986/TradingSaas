@@ -1124,6 +1124,11 @@ function buildRunPayload(form) {
   const fd = new FormData(form);
   const connectorId = Number(fd.get('connector_id'));
   const connector = getConnectorById(connectorId);
+
+  if (!connector) {
+    throw new Error('Debes seleccionar un conector válido antes de continuar.');
+  }
+  
   const parseOptionalNumber = (value) => {
     const normalized = String(value ?? '').trim();
     if (!normalized) return null;
@@ -1135,9 +1140,7 @@ function buildRunPayload(form) {
     if (parsed === null) throw new Error(`Debes completar ${label}.`);
     return parsed;
   };
-  if (!connector) {
-    throw new Error('Debes seleccionar un conector válido antes de continuar.');
-  }
+
   const symbols = String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean);
   if (!symbols.length) {
     throw new Error('Debes indicar al menos un símbolo.');
@@ -1151,16 +1154,26 @@ function buildRunPayload(form) {
   if (tradeAmountMode === 'balance_percent' && (!amountPercentage || amountPercentage <= 0)) {
     throw new Error('Debes indicar un porcentaje por trade válido.');
   }
+
+  // Frontend validation for consistency
+  const strategySlug = fd.get('strategy_slug');
+  const selectedMarketType = connector?.market_type || 'spot';
+  const strategyRule = getStrategyRule(strategySlug);
+  const allowedMarketTypes = (strategyRule.market_types || ['spot', 'futures']).map(t => normalizeMarketType(t));
+  if (!allowedMarketTypes.includes(normalizeMarketType(selectedMarketType))) {
+      throw new Error(`La estrategia ${strategySlug} no es compatible con el mercado ${selectedMarketType} del conector ${connector.label}.`);
+  }
+
   return {
-    connector_ids: [connectorId],
     connector_id: connectorId,
+    platform: connector.platform,
     session_name: String(fd.get('session_name') || '').trim() || null,
-    market_type: connector?.market_type || 'spot',
+    market_type: selectedMarketType,
     symbols,
     symbol_source_mode: fd.get('symbol_source_mode') || 'manual',
     dynamic_symbol_limit: Number(fd.get('dynamic_symbol_limit') || 10),
     timeframe: fd.get('timeframe'),
-    strategy_slug: fd.get('strategy_slug'),
+    strategy_slug: strategySlug,
     risk_per_trade: parseRequiredNumber(fd.get('risk_per_trade_percent'), 'el riesgo por trade'),
     min_ml_probability: parseRequiredNumber(fd.get('min_ml_probability_percent'), 'la probabilidad mínima ML'),
     take_profit_mode: fd.get('take_profit_mode'),
