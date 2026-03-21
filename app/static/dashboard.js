@@ -831,101 +831,84 @@ function renderExecutionLogs() {
   const board = document.getElementById('execution-logs-board');
   if (!board) return;
   if (!state.executionLogs.length) {
-    board.innerHTML = '<article class="log-market-card"><small class="hint">Sin logs todavía.</small></article>';
+    board.innerHTML = '<div class="log-table-compact"><small class="hint" style="padding: 12px; display: block;">Sin logs todavía.</small></div>';
     return;
   }
-  const groups = new Map();
-  state.executionLogs.forEach((item) => {
-    const strategyName = prettyLabel(item.bot_session_display_name || item.bot_session_name, item.strategy_slug || 'Sesión');
-    const connectorLabel = prettyLabel(item.connector_label, `Conector #${item.connector_id || '?'}`);
-    const key = [strategyName, connectorLabel, prettyPlatform(item.platform), prettyMarketType(item.market_type, item.connector_id)].join('||');
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
-  });
 
-  board.innerHTML = Array.from(groups.entries()).map(([key, rows]) => {
-    const [strategyName, connectorLabel, platform, marketType] = key.split('||');
-    const lead = rows[0] || {};
-    const leadDetail = buildLogDetails(lead);
-    const detailId = `log-group-${lead.id}`;
-    const itemsMarkup = rows.map((item) => {
-      const states = Array.isArray(item.operational_states) && item.operational_states.length ? item.operational_states : ['operativa_normal'];
-      const detail = buildLogDetails(item);
-      return `
-        <article class="log-entry-card">
-          <div class="row-between log-entry-card-head">
-            <div>
-              <strong>${escapeHtml(item.display_symbol || displaySymbol(item.symbol))}</strong>
-              <div class="connector-meta">
-                <span>${formatDate(item.created_at)}</span>
-                <span>${escapeHtml(item.timeframe || '-')}</span>
-                <span>${escapeHtml(item.signal || '-')}</span>
-              </div>
-            </div>
-            <div class="log-entry-status-stack">
-              <span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span>
-              <small>${escapeHtml(detail.summary)}</small>
-            </div>
-          </div>
-          <div class="chip-wrap">
-            ${states.map((stateCode) => `<span class="chip chip-static">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
-          </div>
-          <section class="log-detail-card">
-            <div class="log-detail-grid">
-              <div>
-                <strong>Razones claras</strong>
-                <ul class="log-reason-list">
-                  ${detail.reasonDetails.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
-                </ul>
-              </div>
-              <div>
-                <strong>Contexto de la estrategia</strong>
-                <ul class="log-reason-list">
-                  ${detail.highlights.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
-                </ul>
-              </div>
-            </div>
-            <div class="log-technical-block">
-              <strong>Detalle técnico</strong>
-              <pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>
-            </div>
-          </section>
-        </article>
-      `;
-    }).join('');
+  const header = `
+    <div class="log-header-compact">
+      <div class="log-col-date">Fecha / Hora</div>
+      <div class="log-col-connector">Conector</div>
+      <div class="log-col-market">Mercado</div>
+      <div class="log-col-symbol">Símbolo</div>
+      <div class="log-col-action">Acción</div>
+      <div class="log-col-status">Estado / Razón</div>
+    </div>
+  `;
+
+  const rows = state.executionLogs.map((item) => {
+    const detail = buildLogDetails(item);
+    const detailId = `log-detail-${item.id}`;
+    const symbol = displaySymbol(item.display_symbol || item.symbol);
+    const connector = prettyLabel(item.connector_label, `ID:${item.connector_id}`);
+    const market = prettyMarketType(item.market_type, item.connector_id);
+    const platform = prettyPlatform(item.platform);
+    const states = Array.isArray(item.operational_states) && item.operational_states.length ? item.operational_states : ['operativa_normal'];
+
     return `
-      <section class="log-market-card" data-log-toggle="${detailId}">
-        <div class="row-between log-market-card-head">
+      <div class="log-row-compact" data-log-toggle="${detailId}">
+        <div class="log-col-date">${formatDate(item.created_at)}</div>
+        <div class="log-col-connector" title="${escapeHtml(platform)}">${escapeHtml(connector)}</div>
+        <div class="log-col-market">${escapeHtml(market)}</div>
+        <div class="log-col-symbol"><strong>${escapeHtml(symbol)}</strong></div>
+        <div class="log-col-action">${escapeHtml(item.signal || '-')}</div>
+        <div class="log-col-status">
+          <span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span>
+        </div>
+      </div>
+      <section class="log-details-expanded hidden" id="${detailId}">
+        <div class="chip-wrap" style="margin-top:0; margin-bottom:12px;">
+          ${states.map((stateCode) => `<span class="chip chip-static tiny">${escapeHtml(REPORT_STATE_LABELS[stateCode] || prettyLabel(stateCode, stateCode))}</span>`).join('')}
+        </div>
+        <div class="log-detail-grid">
           <div>
-            <strong>${escapeHtml(strategyName)}</strong>
-            <div class="connector-meta">
-              <span>${escapeHtml(connectorLabel)}</span>
-              <span>${escapeHtml(platform)} · ${escapeHtml(marketType)}</span>
-              <span>${rows.length} evento(s)</span>
-            </div>
+            <strong>Razones</strong>
+            <ul class="log-reason-list">
+              ${detail.reasonDetails.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}
+            </ul>
           </div>
-          <div class="log-entry-status-stack">
-            <span class="pill tiny ${statusPillClass(lead.status)}">${escapeHtml(lead.status || '-')}</span>
-            <small>${escapeHtml(leadDetail.summary)}</small>
+          <div>
+            <strong>Highlights</strong>
+            <ul class="log-reason-list">
+              ${detail.highlights.map((row) => `<li>${escapeHtml(row)}</li>`).join('')}
+            </ul>
           </div>
         </div>
-        <div class="log-entry-stack hidden" id="${detailId}">
-          ${itemsMarkup}
+        <div class="log-technical-block" style="margin-top:10px;">
+          <strong>Detalle técnico</strong>
+          <pre>${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>
         </div>
       </section>
     `;
   }).join('');
-  board.querySelectorAll('[data-log-toggle]').forEach((card) => {
-    card.addEventListener('click', (event) => {
-      const detail = card.querySelector(`#${card.dataset.logToggle}`);
-      if (event.target.closest('pre') || event.target.closest('.log-entry-card')) return;
+
+  board.innerHTML = `<div class="log-table-compact">${header}${rows}</div>`;
+
+  board.querySelectorAll('.log-row-compact').forEach((row) => {
+    row.addEventListener('click', () => {
+      const detailId = row.dataset.logToggle;
+      const detail = document.getElementById(detailId);
+      const isExpanded = row.classList.contains('is-expanded');
+      
+      // Close others if needed (optional, keeping it simple for now)
+      row.classList.toggle('is-expanded');
       detail?.classList.toggle('hidden');
     });
   });
+
   const meta = document.getElementById('execution-logs-refresh-meta');
   if (meta) meta.textContent = `Mostrando ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
 }
-
 function renderActivity() {
   const activity = state.activity || {};
   const summary = activity.summary || {};

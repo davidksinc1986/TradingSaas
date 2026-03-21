@@ -361,17 +361,28 @@ select[multiple]{min-height:120px}
 .strategy-wizard-card textarea{width:100%;min-height:110px;background:#0f1217;color:#f8fafc;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px}
 .strategy-wizard-card label{display:grid;gap:6px}
 .strategy-wizard-card .modal-list li{margin-bottom:6px}
-.execution-logs-board{display:grid;gap:14px}
-.log-market-card{padding:14px;border:1px solid rgba(255,255,255,.09);border-radius:16px;background:linear-gradient(180deg,rgba(17,24,39,.92),rgba(15,15,15,.98));display:grid;gap:12px}
-.log-market-card-head{cursor:pointer}
-.log-entry-stack{display:grid;gap:10px}
-.log-entry-card{padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#0f1319;display:grid;gap:10px}
-.log-entry-card:hover{border-color:rgba(240,185,11,.35)}
-.log-entry-card-head{align-items:flex-start;gap:12px}
-.log-entry-status-stack{display:grid;justify-items:end;gap:4px;text-align:right}
-.log-detail-card{padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:#0b0f14}
-.log-detail-card pre{max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word}
-@media (max-width: 720px){.log-entry-card-head{grid-template-columns:1fr;display:grid}.log-entry-status-stack{justify-items:start;text-align:left}}
+.execution-logs-board{display:grid;gap:8px}
+.log-table-compact{display:grid;gap:4px;width:100%}
+.log-header-compact{display:grid;grid-template-columns:120px 100px 80px 1fr 100px 140px;gap:12px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:.05em}
+.log-row-compact{display:grid;grid-template-columns:120px 100px 80px 1fr 100px 140px;gap:12px;padding:10px 12px;background:rgba(25,25,25,.4);border:1px solid rgba(255,255,255,.06);border-radius:10px;font-size:13px;cursor:pointer;align-items:center;transition:all .2s ease}
+.log-row-compact:hover{background:rgba(255,255,255,.06);border-color:rgba(240,185,11,.3)}
+.log-row-compact.is-expanded{border-bottom-left-radius:0;border-bottom-right-radius:0;background:rgba(255,255,255,.08);border-color:rgba(240,185,11,.4)}
+.log-details-expanded{background:rgba(15,15,15,.95);border:1px solid rgba(255,255,255,.08);border-top:none;border-bottom-left-radius:12px;border-bottom-right-radius:12px;padding:14px;margin-bottom:8px;font-size:13px;animation:fadeInDown .2s ease-out}
+.log-details-expanded pre{margin-top:8px;background:#000;padding:10px;border-radius:8px;font-size:12px;overflow:auto;max-height:300px;color:#cbd5e1;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+.log-col-status{text-align:right}
+
+.admin-logs-nav{display:flex;gap:6px;margin-bottom:12px}
+.admin-log-tab-pill{padding:6px 12px;border-radius:999px;border:1px solid var(--line);font-size:11px;font-weight:700;cursor:pointer;color:var(--muted);background:#111;text-transform:uppercase;transition:all .2s ease}
+.admin-log-tab-pill.active{background:rgba(240,185,11,.15);border-color:var(--accent);color:var(--accent)}
+
+@keyframes fadeInDown{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+
+@media (max-width:850px){
+  .log-header-compact{display:none}
+  .log-row-compact{grid-template-columns:1fr 1fr;gap:8px}
+  .log-row-compact > div:nth-child(4){grid-column:1/-1}
+  .log-row-compact > div:nth-child(6){grid-column:1/-1;text-align:left}
+}
 
 /* Dashboard redesign v2: cleaner visual hierarchy and stronger attraction */
 .dashboard-redesign{

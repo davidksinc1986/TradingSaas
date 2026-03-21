@@ -46,8 +46,14 @@
         <div id="admin-platform-health" class="quantum-report-list" style="margin-top:10px;"></div>
       </article>
       <article class="admin-mini-card">
-        <strong>Eventos recientes</strong>
-        <div id="admin-recent-events" class="quantum-report-list" style="margin-top:10px;"></div>
+        <div class="row-between" style="margin-bottom: 10px;">
+          <strong>Eventos recientes</strong>
+          <div class="admin-logs-nav" id="admin-logs-tabs">
+            <span class="admin-log-tab-pill active" data-tab="activity">Actividad</span>
+            <span class="admin-log-tab-pill" data-tab="system">Errores/Sistema</span>
+          </div>
+        </div>
+        <div id="admin-recent-events" class="log-table-compact" style="margin-top:10px;"></div>
       </article>
     </div>
   </article>

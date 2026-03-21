@@ -46,10 +46,105 @@ function activitySummaryCard(title, value, tone = 'neutral') {
   `;
 }
 
+let currentAdminLogTab = 'activity';
+
+function isSystemError(item) {
+  const status = String(item.status || '').toLowerCase();
+  const reason = String(item.reason || item.status_reason || '').toLowerCase();
+  const errorMarkers = ['error', 'failed', 'skipped', 'insufficient', 'locked', 'timeout', 'invalid', 'rejected', 'danger'];
+  return errorMarkers.some((m) => status.includes(m) || reason.includes(m));
+}
+
+function statusPillClass(kind) {
+  const normalized = String(kind || '').toLowerCase();
+  if (['error', 'failed', 'danger'].includes(normalized)) return 'pill-danger';
+  if (['warning', 'skipped', 'paused'].includes(normalized)) return 'pill-warning';
+  return 'pill-ok';
+}
+
+function displaySymbol(value) {
+  const raw = String(value || '').trim().toUpperCase();
+  if (!raw) return '-';
+  return raw.replace('/USDT', '').replace('USDT', '').replace('/', '') || raw;
+}
+
+function renderAdminEvents() {
+  const eventsWrap = document.getElementById('admin-recent-events');
+  if (!eventsWrap) return;
+  const overview = adminOverviewState || {};
+  
+  // Combine runs and trades for a unified log view if needed, or focus on 'events' (runs)
+  const allEvents = (overview.events || []).map(e => ({...e, type: 'run'}));
+  const trades = (overview.trade_logs || []).map(t => ({...t, type: 'trade', signal: t.side, reason: t.platform}));
+  const unified = [...allEvents, ...trades].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  const filtered = unified.filter((item) => {
+    const isErr = isSystemError(item);
+    return currentAdminLogTab === 'system' ? isErr : !isErr;
+  });
+
+  if (!filtered.length) {
+    eventsWrap.innerHTML = `<small class="hint">No hay ${currentAdminLogTab === 'system' ? 'errores' : 'actividad'} reciente.</small>`;
+    return;
+  }
+
+  const header = `
+    <div class="log-header-compact">
+      <div class="log-col-date">Fecha / Hora</div>
+      <div class="log-col-connector">Conector</div>
+      <div class="log-col-market">Mercado</div>
+      <div class="log-col-symbol">Símbolo</div>
+      <div class="log-col-action">Acción</div>
+      <div class="log-col-status">Estado</div>
+    </div>
+  `;
+
+  const rows = filtered.map((item) => {
+    const detailId = `admin-log-detail-${item.id}-${item.type}`;
+    const symbol = displaySymbol(item.symbol);
+    const connector = item.connector_id ? `ID:${item.connector_id}` : '-';
+    
+    return `
+      <div class="log-row-compact" data-log-toggle="${detailId}">
+        <div class="log-col-date">${formatDate(item.created_at)}</div>
+        <div class="log-col-connector">${escapeHtml(connector)}</div>
+        <div class="log-col-market">${escapeHtml(item.market_type || '-')}</div>
+        <div class="log-col-symbol"><strong>${escapeHtml(symbol)}</strong></div>
+        <div class="log-col-action">${escapeHtml(item.signal || item.side || '-')}</div>
+        <div class="log-col-status">
+          <span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span>
+        </div>
+      </div>
+      <section class="log-details-expanded hidden" id="${detailId}">
+        <div class="log-detail-grid">
+          <div>
+            <strong>Razón / Info</strong>
+            <p>${escapeHtml(item.reason || item.status_reason || 'Sin detalles adicionales.')}</p>
+          </div>
+          <div>
+            <strong>Metadatos</strong>
+            <pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+          </div>
+        </div>
+      </section>
+    `;
+  }).join('');
+
+  eventsWrap.innerHTML = header + rows;
+
+  eventsWrap.querySelectorAll('.log-row-compact').forEach((row) => {
+    row.addEventListener('click', () => {
+      const targetId = row.dataset.logToggle;
+      const target = document.getElementById(targetId);
+      row.classList.toggle('is-expanded');
+      target?.classList.toggle('hidden');
+    });
+  });
+}
+
 function renderAdminOverview() {
   const metricsWrap = document.getElementById('admin-overview-metrics');
   const platformWrap = document.getElementById('admin-platform-health');
-  const eventsWrap = document.getElementById('admin-recent-events');
   const overview = adminOverviewState || {};
   const metrics = overview.metrics || {};
   if (metricsWrap) {
@@ -83,21 +178,16 @@ function renderAdminOverview() {
     `).join('');
     platformWrap.innerHTML = [platformCards, marketCards, connectorCards].filter(Boolean).join('') || '<small class="hint">Sin plataformas registradas.</small>';
   }
-  if (eventsWrap) {
-    const runEvents = (overview.events || []).map((item) => `
-      <article class="quantum-report-item">
-        <strong>${item.symbol} · ${item.status}</strong>
-        <small>${item.reason} · ${formatDate(item.created_at)}</small>
-      </article>
-    `).join('');
-    const tradeEvents = (overview.trade_logs || []).map((item) => `
-      <article class="quantum-report-item">
-        <strong>${item.symbol} · ${item.side} · ${item.status}</strong>
-        <small>${item.platform} · ${formatDate(item.created_at)}</small>
-      </article>
-    `).join('');
-    eventsWrap.innerHTML = [runEvents, tradeEvents].filter(Boolean).join('') || '<small class="hint">Sin eventos recientes.</small>';
-  }
+  renderAdminEvents();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 async function adminUserHeartbeat() {
@@ -588,6 +678,16 @@ async function init() {
     renderUserList();
     await refreshSelectedUserProfile();
   });
+
+  document.getElementById('admin-logs-tabs')?.addEventListener('click', (e) => {
+    const pill = e.target.closest('.admin-log-tab-pill');
+    if (!pill) return;
+    currentAdminLogTab = pill.dataset.tab;
+    document.querySelectorAll('#admin-logs-tabs .admin-log-tab-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    renderAdminEvents();
+  });
+
   await refreshAdmin();
 }
 
