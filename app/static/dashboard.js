@@ -1155,14 +1155,8 @@ function buildRunPayload(form) {
     throw new Error('Debes indicar un porcentaje por trade válido.');
   }
 
-  // Frontend validation for consistency
   const strategySlug = fd.get('strategy_slug');
   const selectedMarketType = connector?.market_type || 'spot';
-  const strategyRule = getStrategyRule(strategySlug);
-  const allowedMarketTypes = (strategyRule.market_types || ['spot', 'futures']).map(t => normalizeMarketType(t));
-  if (!allowedMarketTypes.includes(normalizeMarketType(selectedMarketType))) {
-      throw new Error(`La estrategia ${strategySlug} no es compatible con el mercado ${selectedMarketType} del conector ${connector.label}.`);
-  }
 
   return {
     connector_id: connectorId,
