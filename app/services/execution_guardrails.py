@@ -306,15 +306,11 @@ def build_validation_decision(
     if price_step <= _DECIMAL_ZERO and market_rules.price_precision is not None:
         price_step = precision_to_step(market_rules.price_precision)
 
-    normalized_qty = raw_qty
-    if amount_step > _DECIMAL_ZERO:
-        normalized_qty = floor_to_step(normalized_qty, amount_step)
-    if market_rules.amount_precision is not None:
-        normalized_qty = quantize_to_precision(normalized_qty, market_rules.amount_precision, rounding=ROUND_DOWN)
+    # raw_qty is already normalized by trading.py's _apply_exchange_filters
+    normalized_qty = raw_qty if _is_valid_number(raw_qty) and _decimal(raw_qty) > _DECIMAL_ZERO else _DECIMAL_ZERO
 
     if normalized_qty <= _DECIMAL_ZERO:
-        return ValidationDecision(
-            is_valid=False,
+        return ValidationDecision(            is_valid=False,
             exchange=exchange,
             symbol=symbol,
             market_type=market_type,
