@@ -49,17 +49,17 @@ const COMMON_CONNECTOR_CONFIG_FIELDS = [
 ];
 
 const STRATEGIES = [
-  'ema_rsi',
-  'mean_reversion_zscore',
-  'momentum_breakout',
-  'ema_rsi_adx_stack',
-  'volatility_compression_breakout',
-  'macd_trend_pullback',
-  'adx_trend_follow',
-  'supertrend_volatility',
-  'kalman_trend_filter',
-  'atr_channel_breakout',
-  'volatility_breakout',
+  { slug: 'ema_rsi', label: 'EMA RSI (Spot)', market_types: ['spot'] },
+  { slug: 'mean_reversion_zscore', label: 'Mean Reversion Z-Score (Spot)', market_types: ['spot'] },
+  { slug: 'ema_rsi_adx_stack', label: 'EMA RSI ADX Stack (Spot/Futures)', market_types: ['spot', 'futures'] },
+  { slug: 'volatility_compression_breakout', label: 'Volatility Compression Breakout (Spot/Futures)', market_types: ['spot', 'futures'] },
+  { slug: 'momentum_breakout', label: 'Momentum Breakout (Futures)', market_types: ['futures'] },
+  { slug: 'macd_trend_pullback', label: 'MACD Trend Pullback (Futures)', market_types: ['futures'] },
+  { slug: 'adx_trend_follow', label: 'ADX Trend Follow (Futures)', market_types: ['futures'] },
+  { slug: 'supertrend_volatility', label: 'Supertrend Volatility (Futures)', market_types: ['futures'] },
+  { slug: 'kalman_trend_filter', label: 'Kalman Trend Filter (Futures)', market_types: ['futures'] },
+  { slug: 'atr_channel_breakout', label: 'ATR Channel Breakout (Futures)', market_types: ['futures'] },
+  { slug: 'volatility_breakout', label: 'Volatility Breakout (Futures)', market_types: ['futures'] },
 ];
 
 const FIELD_ADVISORY_CONFIG = {
@@ -415,10 +415,28 @@ function initTabs() {
   activateTab(savedTab);
 }
 
-function renderStrategyOptions() {
+function normalizeMarketType(value) {
+  const raw = String(value || 'spot').trim().toLowerCase();
+  return raw === 'future' ? 'futures' : raw;
+}
+
+function renderStrategyOptions(marketType = null) {
   const select = document.getElementById('strategy-select');
   if (!select) return;
-  select.innerHTML = STRATEGIES.map((slug) => `<option value="${slug}">${slug}</option>`).join('');
+
+  const oldValue = select.value;
+  const normalizedMarketType = normalizeMarketType(marketType);
+
+  const filtered = STRATEGIES.filter((s) => !marketType || s.market_types.includes(normalizedMarketType));
+  select.innerHTML = filtered.map((s) => `<option value="${s.slug}">${s.label}</option>`).join('');
+
+  const newValues = filtered.map(s => s.slug);
+  if (oldValue && newValues.includes(oldValue)) {
+    select.value = oldValue;
+  } else if (oldValue && filtered.length > 0) {
+    select.value = newValues[0] || '';
+    setStatus('run-feedback', 'La estrategia anterior no es compatible con este conector y fue reiniciada.', 'warning');
+  }
 }
 
 function renderConnectorFields() {
@@ -560,7 +578,12 @@ function renderConnectors() {
   const panel = document.getElementById('connector-health-panel');
   const runSelect = document.getElementById('run-connector-select');
   if (runSelect) {
+    const oldValue = runSelect.value;
     runSelect.innerHTML = state.connectors.filter((c) => c.is_enabled).map((c) => `<option value="${c.id}">${c.label} · ${prettyPlatform(c.platform)} · ${prettyMarketType(c.market_type, c.id)}</option>`).join('');
+    if (oldValue && Array.from(runSelect.options).some(o => o.value === oldValue)) {
+      runSelect.value = oldValue;
+    }
+    runSelect.dispatchEvent(new Event('change'));
   }
   if (panel) {
     panel.innerHTML = state.connectors.length ? reportMarkup(state.connectors.map((c) => ({
@@ -688,7 +711,7 @@ function renderBotSessions() {
           <input name="session_name" value="${session.session_name ?? ''}" placeholder="Momentum Binance principal">
         </label>
         <label class="compact-field">Estrategia
-          <select name="strategy_slug">${STRATEGIES.map((slug) => `<option value="${slug}" ${slug === session.strategy_slug ? 'selected' : ''}>${slug}</option>`).join('')}</select>
+          <select name="strategy_slug">${STRATEGIES.filter(s => s.market_types.includes(normalizeMarketType(session.market_type))).map((s) => `<option value="${s.slug}" ${s.slug === session.strategy_slug ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
         </label>
         <label class="compact-field">Timeframe<input name="timeframe" value="${session.timeframe || '15m'}"></label>
         <label class="compact-field compact-field-wide">Símbolos<input name="symbols" value="${(session.symbols || []).join(', ')}"></label>
@@ -1480,8 +1503,12 @@ function startAutoRefresh() {
 
 async function init() {
   initTabs();
-  renderStrategyOptions();
   resetConnectorForm();
+  document.getElementById('run-connector-select')?.addEventListener('change', () => {
+    const connectorId = document.getElementById('run-connector-select').value;
+    const connector = getConnectorById(connectorId);
+    renderStrategyOptions(connector?.market_type);
+  });
   document.getElementById('connector-platform')?.addEventListener('change', renderConnectorFields);
   document.getElementById('connector-market-type')?.addEventListener('change', renderConnectorFields);
   document.getElementById('reset-connector-form-btn')?.addEventListener('click', resetConnectorForm);
