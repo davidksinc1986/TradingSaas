@@ -406,6 +406,7 @@ def execute_close_position(
                 price_hint=price_hint,
                 reduce_only=reduce_only,
                 extra_params={"close_reason": reason, "close_attempt": attempt, "urgency": urgency},
+                quantity_semantics="contracts" if reduce_only else "base",
             )
             verification = client.fetch_position_context(position.symbol)
             attempt_payload["execution"] = result.raw

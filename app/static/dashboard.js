@@ -147,6 +147,14 @@ const state = {
     status: '',
     connector: '',
     marketType: '',
+    startDate: '',
+    endDate: '',
+  },
+  executionLogsMeta: {
+    total: 0,
+    limit: 25,
+    offset: 0,
+    hasMore: false,
   },
   heartbeat: null,
   activity: null,
@@ -877,50 +885,50 @@ function renderBotSessions() {
 }
 
 function executionLogFilterOptions(key) {
-  const values = Array.from(new Set(
-    (state.executionLogs || [])
-      .map((item) => {
-        if (key === 'status') return prettyLabel(item.status, '');
-        if (key === 'connector') return prettyLabel(item.connector_label, '');
-        if (key === 'marketType') return prettyMarketType(item.market_type, item.connector_id);
-        return '';
-      })
-      .filter(Boolean),
-  ));
-  return values.sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+  if (key === 'status') {
+    const values = Array.from(new Set((state.executionLogs || []).map((item) => prettyLabel(item.status, '')).filter(Boolean)));
+    return values.sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+  }
+  if (key === 'connector') {
+    return (state.connectors || [])
+      .filter((item) => item?.id)
+      .map((item) => ({ value: String(item.id), label: prettyLabel(item.label, `Conector ${item.id}`) }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
+  }
+  if (key === 'marketType') {
+    const values = Array.from(new Set((state.connectors || []).map((item) => normalizeMarketType(item.market_type)).filter(Boolean)));
+    return values.sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+  }
+  return [];
 }
 
-function normalizeExecutionLogSearchValue(item) {
-  return [
-    item.connector_label,
-    item.platform,
-    item.market_type,
-    item.symbol,
-    item.display_symbol,
-    item.strategy_slug,
-    item.signal,
-    item.status,
-    item.status_reason,
-    item.bot_session_name,
-    item.bot_session_display_name,
-    ...(Array.isArray(item.reason_codes) ? item.reason_codes : []),
-  ].map((value) => String(value || '').trim().toLowerCase()).join(' ');
-}
-
-function filteredExecutionLogs() {
+function buildExecutionLogsQuery() {
   const filters = state.executionLogFilters || {};
-  const query = String(filters.query || '').trim().toLowerCase();
-  const status = String(filters.status || '').trim().toLowerCase();
-  const connector = String(filters.connector || '').trim().toLowerCase();
-  const marketType = String(filters.marketType || '').trim().toLowerCase();
+  const meta = state.executionLogsMeta || {};
+  const params = new URLSearchParams();
+  params.set('limit', String(meta.limit || 25));
+  params.set('offset', String(meta.offset || 0));
+  if (filters.query) params.set('q', String(filters.query).trim());
+  if (filters.status) params.set('status', String(filters.status).trim());
+  if (filters.connector) params.set('connector', String(filters.connector).trim());
+  if (filters.marketType) params.set('market_type', String(filters.marketType).trim());
+  if (filters.startDate) params.set('start_date', String(filters.startDate).trim());
+  if (filters.endDate) params.set('end_date', String(filters.endDate).trim());
+  return params.toString();
+}
 
-  return (state.executionLogs || []).filter((item) => {
-    if (status && String(item.status || '').trim().toLowerCase() !== status) return false;
-    if (connector && String(item.connector_label || '').trim().toLowerCase() !== connector) return false;
-    if (marketType && prettyMarketType(item.market_type, item.connector_id).trim().toLowerCase() !== marketType) return false;
-    if (query && !normalizeExecutionLogSearchValue(item).includes(query)) return false;
-    return true;
-  });
+async function refreshExecutionLogs({ resetOffset = false } = {}) {
+  if (resetOffset) {
+    state.executionLogsMeta = { ...(state.executionLogsMeta || {}), offset: 0 };
+  }
+  const payload = await api(`/api/execution-logs?${buildExecutionLogsQuery()}`);
+  state.executionLogs = Array.isArray(payload?.items) ? payload.items : [];
+  state.executionLogsMeta = {
+    total: Number(payload?.total || 0),
+    limit: Number(payload?.limit || state.executionLogsMeta?.limit || 25),
+    offset: Number(payload?.offset || 0),
+    hasMore: Boolean(payload?.has_more),
+  };
 }
 
 function renderExecutionLogFilterBar() {
@@ -938,26 +946,42 @@ function renderExecutionLogFilterBar() {
       <select id="execution-log-filter-status"><option value="">Estado</option></select>
       <select id="execution-log-filter-connector"><option value="">Conector</option></select>
       <select id="execution-log-filter-market"><option value="">Mercado</option></select>
+      <input id="execution-log-filter-start-date" type="date" aria-label="Fecha inicial">
+      <input id="execution-log-filter-end-date" type="date" aria-label="Fecha final">
       <button class="btn btn-sm" type="button" id="execution-log-filter-clear">Limpiar</button>
     `;
     board.parentNode?.insertBefore(bar, board);
   }
   if (bar.dataset.bound !== 'true') {
-    const syncFiltersFromDom = () => {
+    let debounceHandle = null;
+    const syncFiltersFromDom = (inputType) => {
       state.executionLogFilters = {
         query: document.getElementById('execution-log-filter-query')?.value || '',
         status: document.getElementById('execution-log-filter-status')?.value || '',
         connector: document.getElementById('execution-log-filter-connector')?.value || '',
         marketType: document.getElementById('execution-log-filter-market')?.value || '',
+        startDate: document.getElementById('execution-log-filter-start-date')?.value || '',
+        endDate: document.getElementById('execution-log-filter-end-date')?.value || '',
       };
-      renderExecutionLogs();
+      window.clearTimeout(debounceHandle);
+      const runFetch = () => refreshExecutionLogs({ resetOffset: true }).then(() => renderExecutionLogs()).catch((error) => {
+        setStatus('run-feedback', `No se pudieron filtrar los logs: ${parseApiError(error)}`, 'error');
+      });
+      if (inputType === 'input') {
+        debounceHandle = window.setTimeout(runFetch, 250);
+      } else {
+        runFetch();
+      }
     };
     bar.querySelectorAll('input, select').forEach((input) => {
-      input.addEventListener(input.tagName === 'INPUT' ? 'input' : 'change', syncFiltersFromDom);
+      const eventName = input.tagName === 'INPUT' && input.type === 'search' ? 'input' : 'change';
+      input.addEventListener(eventName, () => syncFiltersFromDom(eventName));
     });
     document.getElementById('execution-log-filter-clear')?.addEventListener('click', () => {
-      state.executionLogFilters = { query: '', status: '', connector: '', marketType: '' };
-      renderExecutionLogs();
+      state.executionLogFilters = { query: '', status: '', connector: '', marketType: '', startDate: '', endDate: '' };
+      refreshExecutionLogs({ resetOffset: true }).then(() => renderExecutionLogs()).catch((error) => {
+        setStatus('run-feedback', `No se pudieron reiniciar los filtros: ${parseApiError(error)}`, 'error');
+      });
     });
     bar.dataset.bound = 'true';
   }
@@ -967,23 +991,35 @@ function renderExecutionLogFilterBar() {
   const statusSelect = document.getElementById('execution-log-filter-status');
   const connectorSelect = document.getElementById('execution-log-filter-connector');
   const marketSelect = document.getElementById('execution-log-filter-market');
+  const startDateInput = document.getElementById('execution-log-filter-start-date');
+  const endDateInput = document.getElementById('execution-log-filter-end-date');
   if (queryInput && queryInput.value !== filters.query) queryInput.value = filters.query || '';
+  if (startDateInput && startDateInput.value !== (filters.startDate || '')) startDateInput.value = filters.startDate || '';
+  if (endDateInput && endDateInput.value !== (filters.endDate || '')) endDateInput.value = filters.endDate || '';
 
   const applyOptions = (select, options, value, defaultLabel) => {
     if (!select) return;
     const currentValue = value || '';
-    select.innerHTML = [`<option value="">${defaultLabel}</option>`, ...options.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`)].join('');
-    select.value = options.includes(currentValue) ? currentValue : '';
+    const normalizedOptions = options.map((option) => (typeof option === 'string' ? { value: option, label: option } : option));
+    select.innerHTML = [`<option value="">${defaultLabel}</option>`, ...normalizedOptions.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)].join('');
+    select.value = normalizedOptions.some((option) => option.value === currentValue) ? currentValue : '';
   };
 
   applyOptions(statusSelect, executionLogFilterOptions('status'), filters.status, 'Estado');
   applyOptions(connectorSelect, executionLogFilterOptions('connector'), filters.connector, 'Conector');
-  applyOptions(marketSelect, executionLogFilterOptions('marketType'), filters.marketType, 'Mercado');
+  applyOptions(
+    marketSelect,
+    executionLogFilterOptions('marketType').map((value) => ({ value, label: prettyMarketType(value) })),
+    filters.marketType,
+    'Mercado',
+  );
   state.executionLogFilters = {
     query: queryInput?.value || '',
     status: statusSelect?.value || '',
     connector: connectorSelect?.value || '',
     marketType: marketSelect?.value || '',
+    startDate: startDateInput?.value || '',
+    endDate: endDateInput?.value || '',
   };
 
   return bar;
@@ -993,17 +1029,24 @@ function renderExecutionLogs() {
   const board = document.getElementById('execution-logs-board');
   if (!board) return;
   renderExecutionLogFilterBar();
-  if (!state.executionLogs.length) {
+  const logs = Array.isArray(state.executionLogs) ? state.executionLogs : [];
+  const metaState = state.executionLogsMeta || {};
+  const total = Number(metaState.total || 0);
+  const offset = Number(metaState.offset || 0);
+  const limit = Number(metaState.limit || 25);
+  const filters = state.executionLogFilters || {};
+  const hasActiveFilters = Boolean(filters.query || filters.status || filters.connector || filters.marketType || filters.startDate || filters.endDate);
+
+  if (!logs.length && total === 0 && !hasActiveFilters) {
     board.innerHTML = '<div class="log-table-compact"><small class="hint" style="padding: 12px; display: block;">Sin logs todavía.</small></div>';
     const meta = document.getElementById('execution-logs-refresh-meta');
     if (meta) meta.textContent = `Mostrando 0 logs. Última actualización: ${new Date().toLocaleTimeString()}`;
     return;
   }
-  const visibleLogs = filteredExecutionLogs();
-  if (!visibleLogs.length) {
+  if (!logs.length) {
     board.innerHTML = '<div class="log-table-compact"><small class="hint" style="padding: 12px; display: block;">Sin resultados.</small></div>';
     const meta = document.getElementById('execution-logs-refresh-meta');
-    if (meta) meta.textContent = `Mostrando 0 de ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
+    if (meta) meta.textContent = `Mostrando 0 de ${total} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
     return;
   }
 
@@ -1018,7 +1061,7 @@ function renderExecutionLogs() {
     </div>
   `;
 
-  const rows = visibleLogs.map((item) => {
+  const rows = logs.map((item) => {
     const detail = buildLogDetails(item);
     const detailId = `log-detail-${item.id}`;
     const symbol = displaySymbol(item.display_symbol || item.symbol);
@@ -1064,7 +1107,17 @@ function renderExecutionLogs() {
     `;
   }).join('');
 
-  board.innerHTML = `<div class="log-table-compact">${header}${rows}</div>`;
+  const pagination = `
+    <div class="row-wrap" style="justify-content:space-between; align-items:center; margin-top:10px;">
+      <small class="hint">Página ${Math.floor(offset / limit) + 1} · ${Math.min(offset + 1, total)}-${Math.min(offset + logs.length, total)} de ${total}</small>
+      <div class="row-wrap">
+        <button class="btn btn-sm" type="button" id="execution-logs-prev-page" ${offset <= 0 ? 'disabled' : ''}>Anterior</button>
+        <button class="btn btn-sm" type="button" id="execution-logs-next-page" ${metaState.hasMore ? '' : 'disabled'}>Siguiente</button>
+      </div>
+    </div>
+  `;
+
+  board.innerHTML = `<div class="log-table-compact">${header}${rows}</div>${pagination}`;
 
   board.querySelectorAll('.log-row-compact').forEach((row) => {
     row.addEventListener('click', () => {
@@ -1075,8 +1128,19 @@ function renderExecutionLogs() {
     });
   });
 
+  document.getElementById('execution-logs-prev-page')?.addEventListener('click', async () => {
+    state.executionLogsMeta = { ...metaState, offset: Math.max(offset - limit, 0) };
+    await refreshExecutionLogs();
+    renderExecutionLogs();
+  });
+  document.getElementById('execution-logs-next-page')?.addEventListener('click', async () => {
+    state.executionLogsMeta = { ...metaState, offset: offset + limit };
+    await refreshExecutionLogs();
+    renderExecutionLogs();
+  });
+
   const meta = document.getElementById('execution-logs-refresh-meta');
-  if (meta) meta.textContent = `Mostrando ${visibleLogs.length} de ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
+  if (meta) meta.textContent = `Mostrando ${logs.length} de ${total} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
 }
 function renderActivity() {
   const activity = state.activity || {};
@@ -1168,7 +1232,7 @@ async function refreshDashboard() {
     api('/api/dashboard'),
     api('/api/connectors'),
     api('/api/bot-sessions'),
-    api('/api/execution-logs?limit=25'),
+    refreshExecutionLogs().then(() => ({ items: state.executionLogs, meta: state.executionLogsMeta })),
     api('/api/activity/performance'),
   ]);
   const labels = ['perfil', 'dashboard', 'conectores', 'bots', 'logs', 'actividad'];
@@ -1183,7 +1247,10 @@ async function refreshDashboard() {
   state.summary = summary || state.summary || {};
   state.connectors = Array.isArray(connectors) ? connectors : (state.connectors || []);
   state.botSessions = Array.isArray(botSessions) ? botSessions : (state.botSessions || []);
-  state.executionLogs = Array.isArray(executionLogs) ? executionLogs : (state.executionLogs || []);
+  if (executionLogs?.items) {
+    state.executionLogs = executionLogs.items;
+    state.executionLogsMeta = executionLogs.meta || state.executionLogsMeta;
+  }
   state.activity = activity || state.activity || null;
   renderProfile();
   renderConnectors();
