@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.core import settings
 from app.db import get_db
+from app.models import PlanConfig, PricingConfig
 from app.i18n import SUPPORTED_LOCALES, detect_locale, translate
 from app.routers.deps import admin_user, current_user
 from app.services.policies import ensure_user_grants
@@ -28,8 +29,11 @@ def base_context(request: Request, **kwargs):
 
 
 @router.get("/")
-def home(request: Request):
-    return templates.TemplateResponse("index.html", base_context(request, title="Home"))
+def home(request: Request, db=Depends(get_db)):
+    pricing = db.query(PricingConfig).first()
+    plans = db.query(PlanConfig).filter(PlanConfig.is_active.is_(True)).order_by(PlanConfig.sort_order.asc(), PlanConfig.id.asc()).all()
+    default_quote = estimate_monthly_cost(pricing, apps=3, symbols=15, daily_movements=20) if pricing else None
+    return templates.TemplateResponse("index.html", base_context(request, title="Home", plans=plans, default_quote=default_quote))
 
 
 @router.get("/dashboard")

@@ -411,20 +411,18 @@ def _trade_run_primary_reason(run: TradeRun | None) -> str:
 def _trade_run_connector_snapshot(connector: Connector | None, parsed_note: dict | None = None) -> dict[str, str | int | None]:
     parsed = parsed_note if isinstance(parsed_note, dict) else {}
     snapshot = parsed.get("connector") or {}
-    platform = connector.platform if connector else str(snapshot.get("platform") or "-")
-    fallback_connector_id = getattr(connector, "id", None) if connector else snapshot.get("id")
-    label = connector.label if connector and connector.label else str(snapshot.get("label") or f"Conector #{fallback_connector_id or '-'}")
-    market_type = (
-        ensure_connector_market_type_state(connector, persist=False) if connector
-        else _normalize_market_type(
-            snapshot.get("market_type")
-            or parsed.get("market_type")
-            or (parsed.get("execution_environment") or {}).get("market_type")
-            or "spot"
-        )
+    snapshot_connector_id = snapshot.get("id")
+    fallback_connector_id = snapshot_connector_id or (getattr(connector, "id", None) if connector else None)
+    platform = str(snapshot.get("platform") or (connector.platform if connector else "-") or "-")
+    label = str(snapshot.get("label") or (connector.label if connector and connector.label else f"Conector #{fallback_connector_id or '-'}"))
+    market_type = _normalize_market_type(
+        snapshot.get("market_type")
+        or parsed.get("market_type")
+        or (parsed.get("execution_environment") or {}).get("market_type")
+        or (ensure_connector_market_type_state(connector, persist=False) if connector else "spot")
     )
     return {
-        "connector_id": getattr(connector, "id", None) if connector else snapshot.get("id"),
+        "connector_id": snapshot_connector_id or (getattr(connector, "id", None) if connector else None),
         "connector_label": label or "-",
         "platform": platform or "-",
         "market_type": market_type or "spot",
@@ -1091,7 +1089,10 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         raise HTTPException(status_code=403, detail="Strategy is managed by admin for this user")
     risk_value = payload.risk_per_trade / 100 if payload.risk_per_trade > 1 else payload.risk_per_trade
     ml_value = payload.min_ml_probability / 100 if payload.min_ml_probability > 1 else payload.min_ml_probability
-    connectors = _validate_strategy_connectors(db, user_id=user.id, connector_ids=[payload.connector_id], strategy_slug=payload.strategy_slug)
+    connector_ids = [int(item) for item in (getattr(payload, "connector_ids", None) or [])]
+    if not connector_ids:
+        raise HTTPException(status_code=400, detail="Debes indicar al menos un conector válido.")
+    connectors = _validate_strategy_connectors(db, user_id=user.id, connector_ids=connector_ids, strategy_slug=payload.strategy_slug)
     
     if not connectors:
         raise HTTPException(status_code=400, detail="Conector inválido, deshabilitado o no encontrado.")
@@ -1099,19 +1100,20 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
     connector = connectors[0]
     
     # Final backend safety validation
-    if payload.platform and payload.platform != connector.platform:
-        raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload.platform}' pero el conector es '{connector.platform}'.")
+    payload_platform = getattr(payload, "platform", None)
+    if payload_platform and payload_platform != connector.platform:
+        raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload_platform}' pero el conector es '{connector.platform}'.")
     
     resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
-    if normalize_market_type(payload.market_type) != resolved_market_type:
-         raise HTTPException(status_code=400, detail=f"Error de mercado: se envió '{payload.market_type}' pero el tipo resuelto para el conector es '{resolved_market_type}'.")
+    if payload.market_type is not None and normalize_market_type(payload.market_type) != resolved_market_type:
+        raise HTTPException(status_code=400, detail=f"Error de mercado: se envió '{payload.market_type}' pero el tipo resuelto para el conector es '{resolved_market_type}'.")
 
     trade_amount_settings = _resolve_trade_amount_settings(user, payload, connector)
 
     result = run_strategy(
         db=db,
         user_id=user.id,
-        connector_ids=[payload.connector_id],
+        connector_ids=connector_ids,
         symbols=payload.symbols,
         timeframe=payload.timeframe,
         strategy_slug=payload.strategy_slug,
@@ -1133,13 +1135,13 @@ def run_strategy_endpoint(payload: StrategyRequest, db=Depends(get_db), user=Dep
         symbol_source_mode=payload.symbol_source_mode,
         dynamic_symbol_limit=payload.dynamic_symbol_limit,
         run_source="manual",
-        market_type=payload.market_type,
+        market_type=resolved_market_type,
         trade_amount_mode=trade_amount_settings["trade_amount_mode"],
         fixed_trade_amount_usd=trade_amount_settings["amount_per_trade"],
         trade_balance_percent=trade_amount_settings["amount_percentage"],
     )
     active_connectors = db.query(Connector).filter(
-        Connector.id.in_(payload.connector_ids),
+        Connector.id.in_(connector_ids),
         Connector.user_id == user.id,
     ).all()
     status_counts: dict[str, int] = {}
@@ -1369,7 +1371,7 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
             raise HTTPException(status_code=400, detail=f"Error de plataforma: se envió '{payload_platform}' pero el conector es '{connector.platform}'.")
         
         resolved_market_type = resolve_runtime_market_type(connector, requested_market_type=payload.market_type)
-        if normalize_market_type(payload.market_type) != resolved_market_type:
+        if payload.market_type is not None and normalize_market_type(payload.market_type) != resolved_market_type:
             raise HTTPException(status_code=400, detail=f"Error de mercado: se envió '{payload.market_type}' pero el tipo resuelto para el conector es '{resolved_market_type}'.")
 
         _validate_strategy_connectors(db, user_id=user.id, connector_ids=[connector.id], strategy_slug=payload.strategy_slug)
