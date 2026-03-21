@@ -336,11 +336,7 @@ def _close_side(position: OpenPosition) -> str:
 def _position_quantity(position: OpenPosition, context: dict[str, Any]) -> float:
     market_type = str(position.market_type or "spot").lower()
     if market_type == "spot":
-        return max(
-            _safe_float(context.get("spot_base_free"), 0.0),
-            _safe_float(context.get("spot_base_total"), 0.0),
-            _safe_float(position.current_qty, 0.0),
-        )
+        return _safe_float(context.get("spot_base_free"), 0.0)
     return max(abs(_safe_float(context.get("net_contracts"), 0.0)), _safe_float(position.current_qty, 0.0))
 
 

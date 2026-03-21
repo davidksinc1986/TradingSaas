@@ -2307,8 +2307,8 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
                 "label": connector.label,
                 "platform": connector.platform,
                 "market_type": ensure_connector_market_type_state(connector, persist=True, db=db),
-                "ok": True,
-                "message": "Conector validado",
+                "ok": raw.get("ok", True) if isinstance(raw, dict) else True,
+                "message": "Conector validado" if (isinstance(raw, dict) and raw.get("ok", True)) else "Conector reporta estado incompleto",
                 "raw": raw,
             })
         except Exception as exc:
@@ -2702,8 +2702,8 @@ def admin_user_heartbeat(user_id: int, db=Depends(get_db), _: User = Depends(adm
                 "label": connector.label,
                 "platform": connector.platform,
                 "market_type": ensure_connector_market_type_state(connector, persist=True, db=db),
-                "ok": True,
-                "message": "Conector validado",
+                "ok": raw.get("ok", True) if isinstance(raw, dict) else True,
+                "message": "Conector validado" if (isinstance(raw, dict) and raw.get("ok", True)) else "Conector reporta estado incompleto",
                 "raw": raw,
             })
         except Exception as exc:

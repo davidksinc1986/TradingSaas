@@ -960,12 +960,8 @@ function renderExecutionLogFilterBar() {
     bar.style.marginTop = '12px';
     bar.style.marginBottom = '8px';
     bar.innerHTML = `
-      <input id="execution-log-filter-query" type="search" placeholder="Buscar símbolo, estado o razón" style="min-width:240px;">
-      <select id="execution-log-filter-status"><option value="">Estado</option></select>
-      <select id="execution-log-filter-connector"><option value="">Conector</option></select>
-      <select id="execution-log-filter-market"><option value="">Mercado</option></select>
-      <input id="execution-log-filter-start-date" type="date" aria-label="Fecha inicial">
-      <input id="execution-log-filter-end-date" type="date" aria-label="Fecha final">
+      <input id="execution-log-filter-query" type="search" placeholder="Buscar símbolo, estado o razón" style="min-width:240px; border-radius:6px; border:1px solid rgba(255,255,255,0.1); padding:6px 10px; background:rgba(0,0,0,0.2); color:#fff; font-size:13px;">
+      <select id="execution-log-filter-status" style="border-radius:6px; border:1px solid rgba(255,255,255,0.1); padding:6px 10px; background:rgba(0,0,0,0.2); color:#fff; font-size:13px;"><option value="">Estado</option></select>
       <button class="btn btn-sm" type="button" id="execution-log-filter-clear">Limpiar</button>
     `;
     board.parentNode?.insertBefore(bar, board);
@@ -1097,6 +1093,7 @@ function renderExecutionLogs() {
         <div class="log-col-action">${escapeHtml(item.signal || '-')}</div>
         <div class="log-col-status">
           <span class="pill tiny ${statusPillClass(item.status)}">${escapeHtml(item.status || '-')}</span>
+          <small style="display:block; margin-top:6px; font-size:11px; color:var(--muted); line-height:1.2; font-weight:500;">${escapeHtml(detail.summary || '')}</small>
         </div>
       </div>
       <section class="log-details-expanded hidden" id="${detailId}">

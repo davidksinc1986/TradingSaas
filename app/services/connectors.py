@@ -834,7 +834,19 @@ class CCXTConnectorClient(BaseConnectorClient):
         market_type = (getattr(self.connector, "market_type", None) or self.config.get("market_type") or "spot").lower()
         quote_asset = str(self.config.get("quote_asset", "USDT")).upper()
 
-        balance = exchange.fetch_balance()
+        try:
+            balance = exchange.fetch_balance()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "mode": "live",
+                "market_type": market_type,
+                "quote_asset": quote_asset,
+                "available_balance": 0.0,
+                "total_balance": 0.0,
+                "source": "exchange_fetch_failed",
+                "error": str(exc),
+            }
 
         if market_type == "spot":
             asset_row = (balance or {}).get(quote_asset) or {}
@@ -1011,7 +1023,10 @@ class CCXTConnectorClient(BaseConnectorClient):
             }
 
         if market_type == "spot":
-            balance = exchange.fetch_balance()
+            try:
+                balance = exchange.fetch_balance()
+            except Exception as exc:
+                return {"ok": False, "error": f"balance fetch failed: {exc}"}
             ticker = {}
             try:
                 ticker = exchange.fetch_ticker(symbol)
@@ -1038,8 +1053,8 @@ class CCXTConnectorClient(BaseConnectorClient):
 
         try:
             positions = exchange.fetch_positions([symbol])
-        except Exception:
-            positions = []
+        except Exception as exc:
+            return {"ok": False, "error": f"positions fetch failed: {exc}"}
 
         net_contracts = 0.0
         detected_side = None

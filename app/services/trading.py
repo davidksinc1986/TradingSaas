@@ -375,7 +375,10 @@ class CCXTConnectorClient(BaseConnectorClient):
             }
 
         if market_type == "spot":
-            balance = exchange.fetch_balance()
+            try:
+                balance = exchange.fetch_balance()
+            except Exception as exc:
+                return {"ok": False, "error": f"balance fetch failed: {exc}"}
             base = market.get("base")
             asset_row = (balance or {}).get(base) or {}
             free_qty = float(asset_row.get("free") or 0.0)
@@ -396,8 +399,8 @@ class CCXTConnectorClient(BaseConnectorClient):
 
         try:
             positions = exchange.fetch_positions([symbol])
-        except Exception:
-            positions = []
+        except Exception as exc:
+            return {"ok": False, "error": f"positions fetch failed: {exc}"}
 
         net_contracts = 0.0
         detected_side = None
@@ -1390,6 +1393,26 @@ def run_strategy(
             position_context = client.fetch_position_context(normalized_symbol)
             notes["position_context"] = position_context
 
+            if position_context.get("ok") is False:
+                decision_reasons.append("position_context_unavailable")
+                _annotate_decision(notes, decision_reasons, decision="skipped_position_context")
+                run = TradeRun(
+                    user_id=user.id,
+                    connector_id=connector.id,
+                    strategy_slug=strategy_slug,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    signal=signal,
+                    ml_probability=ml_probability,
+                    quantity=0.0,
+                    status=_status_from_reasons(decision_reasons),
+                    notes=json.dumps(notes, ensure_ascii=False),
+                )
+                db.add(run)
+                commit_with_retry(db)
+                results.append({"connector_id": connector.id, "symbol": normalized_symbol, "status": "skipped", "reasons": decision_reasons})
+                continue
+
             open_positions = db.query(OpenPosition).filter(
                 OpenPosition.connector_id == connector.id,
                 OpenPosition.is_open.is_(True),
@@ -1518,10 +1541,7 @@ def run_strategy(
                     reduce_only_reason = f"close_{current_side}_before_reentry"
 
             if connector_market_type != "futures" and signal == "sell":
-                quantity = max(
-                    _safe_float(position_context.get("spot_base_free"), 0.0),
-                    _safe_float(position_context.get("spot_base_total"), 0.0),
-                )
+                quantity = _safe_float(position_context.get("spot_base_free"), 0.0)
             elif reduce_only:
                 quantity = max(
                     abs(_safe_float(position_context.get("net_contracts"), 0.0)),
