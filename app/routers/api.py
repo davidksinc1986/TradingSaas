@@ -601,7 +601,11 @@ def _validate_strategy_connectors(db, *, user_id: int, connector_ids: list[int],
     allowed_market_types = {normalize_market_type(item) for item in strategy_rule.get("market_types", ["spot", "futures"])}
     incompatible = []
     for connector in connectors:
-        connector_market_type = ensure_connector_market_type_state(connector, persist=False)
+        connector_market_type = _resolve_connector_market_type(
+            platform=connector.platform,
+            market_type=connector.market_type,
+            config=connector.config_json
+        )
         if connector_market_type not in allowed_market_types:
             incompatible.append(f"{connector.label} ({connector_market_type})")
 
@@ -659,12 +663,12 @@ def _ensure_strategy_control(db, user_id: int) -> UserStrategyControl:
     if not control:
         control = UserStrategyControl(user_id=user_id, managed_by_admin=False, allowed_strategies_json={"items": ALL_STRATEGIES})
         db.add(control)
-        db.commit()
+        commit_with_retry(db)
         db.refresh(control)
     allowed = (control.allowed_strategies_json or {}).get("items")
     if not allowed or (not control.managed_by_admin and set(allowed) != set(ALL_STRATEGIES)):
         control.allowed_strategies_json = {"items": ALL_STRATEGIES}
-        db.commit()
+        commit_with_retry(db)
     return control
 
 @router.get("/me")
@@ -744,7 +748,7 @@ def me_update(payload: dict, db=Depends(get_db), user=Depends(current_user)):
             raise HTTPException(status_code=400, detail="trade_balance_percent debe estar entre 0 y 100")
         user.trade_balance_percent = percent
 
-    db.commit()
+    commit_with_retry(db)
     return {
         "ok": True,
         "id": user.id,
@@ -854,7 +858,7 @@ def list_connectors(db=Depends(get_db), user=Depends(current_user)):
 
     if serialization_errors:
         _alert_admin_failure("API /api/connectors serialization", " | ".join(serialization_errors)[:1500])
-    db.commit()
+    commit_with_retry(db)
     return payload
 
 
@@ -928,7 +932,7 @@ def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = 
     )
     ensure_connector_market_type_state(connector)
     db.add(connector)
-    db.commit()
+    commit_with_retry(db)
     db.refresh(connector)
     _notify_user_info(
         target_user,
@@ -977,7 +981,7 @@ def update_connector(connector_id: int, payload: ConnectorUpdate, db=Depends(get
         connector.encrypted_secret_blob = encrypt_payload(payload.secrets)
     if payload.is_enabled is not None:
         connector.is_enabled = payload.is_enabled
-    db.commit()
+    commit_with_retry(db)
     _notify_user_info(
         owner,
         title="Conector actualizado",
@@ -998,7 +1002,7 @@ def delete_connector(connector_id: int, db=Depends(get_db), user: User = Depends
     owner = db.query(User).filter(User.id == connector.user_id).first()
     detail = f"Se eliminó el conector {connector.label} ({connector.platform})."
     db.delete(connector)
-    db.commit()
+    commit_with_retry(db)
     if owner:
         _notify_user_info(owner, title="Conector eliminado", detail=detail)
     return {"ok": True}
@@ -1069,7 +1073,7 @@ def update_connector_credentials(connector_id: int, payload: ConnectorUpdate, db
     connector.mode = _normalize_connector_mode(getattr(connector, "mode", None))
     ensure_connector_market_type_state(connector, persist=True, db=db)
 
-    db.commit()
+    commit_with_retry(db)
     _notify_user_info(
         user,
         title="Credenciales actualizadas",
@@ -1176,7 +1180,7 @@ def update_strategy_control(payload: StrategyControlUpdate, db=Depends(get_db), 
     allowed = [s for s in payload.allowed_strategies if s in ALL_STRATEGIES]
     control.allowed_strategies_json = {"items": allowed or ALL_STRATEGIES}
     db.add(control)
-    db.commit()
+    commit_with_retry(db)
     return {
         "ok": True,
         "managed_by_admin": control.managed_by_admin,
@@ -1400,13 +1404,12 @@ def create_bot_session(payload: BotSessionCreate, db=Depends(get_db), user=Depen
             last_status="queued",
             next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS),
         )
-        db.add(session)
-        flush_with_retry(db)
         _sanitize_session_runtime_state(session, connector)
+        db.add(session)
+        commit_with_retry(db)
         session_id = session.id
         strategy_slug = session.strategy_slug
         timeframe = session.timeframe
-        commit_with_retry(db)
     except HTTPException:
         rollback_safely(db)
         raise
@@ -1803,7 +1806,7 @@ def create_strategy_template(payload: StrategyTemplateCreate, db=Depends(get_db)
         config_json=config,
     )
     db.add(tpl)
-    db.commit()
+    commit_with_retry(db)
     db.refresh(tpl)
     return {"ok": True, "template_id": tpl.id}
 
@@ -1825,7 +1828,7 @@ def copy_strategy_template(template_id: int, db=Depends(get_db), user=Depends(cu
         config_json=source.config_json or {},
     )
     db.add(clone)
-    db.commit()
+    commit_with_retry(db)
     db.refresh(clone)
     return {"ok": True, "template_id": clone.id}
 
@@ -1875,11 +1878,10 @@ def apply_strategy_template(template_id: int, payload: StrategyTemplateApplyPayl
         last_status="from_template",
         next_run_at=datetime.utcnow() + timedelta(seconds=BOT_SESSION_INITIAL_DELAY_SECONDS) if payload.is_active else None,
     )
-    db.add(session)
-    db.flush()
     _sanitize_session_runtime_state(session, connector)
+    db.add(session)
+    commit_with_retry(db)
     session_id = session.id
-    db.commit()
     return {"ok": True, "session_id": session_id}
 
 
@@ -2178,7 +2180,7 @@ def tradingview_webhook(payload: TradingViewWebhook, db=Depends(get_db)):
         pnl=0.0,
         meta_json=meta,
     ))
-    db.commit()
+    commit_with_retry(db)
     owner = db.query(User).filter(User.id == connector.user_id).first()
     if owner:
         _notify_user_info(
@@ -2324,7 +2326,7 @@ def admin_update_user(user_id: int, payload: AdminUserUpdate, db=Depends(get_db)
     if payload.is_admin is not None:
         user.is_admin = payload.is_admin
 
-    db.commit()
+    commit_with_retry(db)
     _notify_user_info(
         user,
         title="Perfil actualizado por administración",
@@ -2346,7 +2348,7 @@ def admin_delete_user(user_id: int, db=Depends(get_db), actor: User = Depends(ad
     detail = f"Cuenta eliminada por admin. Usuario={user.name} email={user.email}"
     send_admin_user_alert_sync(user, format_failure_message("Admin User Delete", detail), scope="admin-user-delete")
     db.delete(user)
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
 
 
@@ -2647,9 +2649,9 @@ def admin_create_user(payload: AdminUserCreate, db=Depends(get_db), actor: User 
             is_admin=False,
         )
         db.add(user)
-        db.flush()
+        flush_with_retry(db)
         ensure_user_grants(db, user)
-        db.commit()
+        commit_with_retry(db)
         db.refresh(user)
         return {"ok": True, "user_id": user.id}
     except HTTPException as exc:
@@ -2688,7 +2690,7 @@ def admin_update_policy(platform: str, payload: AdminPolicyUpdate, db=Depends(ge
     if payload.top_symbols is not None:
         policy.top_symbols_json = {"symbols": payload.top_symbols}
     policy.allowed_symbols_json = {"symbols": []}
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
 
 
@@ -2723,7 +2725,7 @@ def admin_update_pricing_config(payload: AdminPricingConfigUpdate, db=Depends(ge
     pricing.cost_per_gb_disk_usd = payload.cost_per_gb_disk_usd
     pricing.suggested_ram_per_app_gb = payload.suggested_ram_per_app_gb
     pricing.suggested_disk_per_app_gb = payload.suggested_disk_per_app_gb
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
 
 
@@ -2748,7 +2750,7 @@ def admin_list_plans(db=Depends(get_db), _: User = Depends(admin_user)):
 def admin_create_plan(payload: AdminPlanConfigPayload, db=Depends(get_db), _: User = Depends(admin_user)):
     plan = PlanConfig(**payload.model_dump())
     db.add(plan)
-    db.commit()
+    commit_with_retry(db)
     db.refresh(plan)
     return {"ok": True, "id": plan.id}
 
@@ -2760,7 +2762,7 @@ def admin_update_plan(plan_id: int, payload: AdminPlanConfigPayload, db=Depends(
         raise HTTPException(status_code=404, detail="Plan not found")
     for key, value in payload.model_dump().items():
         setattr(plan, key, value)
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
 
 
@@ -2770,7 +2772,7 @@ def admin_delete_plan(plan_id: int, db=Depends(get_db), _: User = Depends(admin_
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     db.delete(plan)
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
 
 
@@ -2801,7 +2803,7 @@ def admin_upsert_grant(payload: AdminGrantUpdate, db=Depends(get_db), _: User = 
     grant.max_symbols = payload.max_symbols
     grant.max_daily_movements = payload.max_daily_movements
     grant.notes = payload.notes
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
 
 
@@ -2814,5 +2816,5 @@ def admin_update_strategy_control(user_id: int, payload: AdminStrategyControlUpd
     control.managed_by_admin = payload.managed_by_admin
     allowed = [s for s in payload.allowed_strategies if s in ALL_STRATEGIES]
     control.allowed_strategies_json = {"items": allowed or ALL_STRATEGIES}
-    db.commit()
+    commit_with_retry(db)
     return {"ok": True}
