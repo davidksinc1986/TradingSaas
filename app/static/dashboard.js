@@ -316,14 +316,15 @@ function connectorSizingSummary(connector = {}) {
 
 function statusPillClass(kind) {
   const normalized = String(kind || '').toLowerCase();
-  if (['error', 'failed', 'danger'].includes(normalized)) return 'pill-danger';
-  if (['warning', 'skipped', 'paused'].includes(normalized)) return 'pill-warning';
+  const errorMarkers = ['error', 'failed', 'danger', 'rejected', 'invalid'];
+  if (errorMarkers.some(m => normalized.includes(m))) return 'pill-danger';
+  if (['warning', 'skipped', 'paused'].some(m => normalized.includes(m))) return 'pill-warning';
   return 'pill-ok';
 }
 
 function formatDecisionReason(reason) {
   const normalized = String(reason || '').trim();
-  if (!normalized) return 'operativa_normal';
+  if (!normalized || normalized.toLowerCase() === 'ok') return 'operativa_normal';
   return normalized.replace(/^circuit_breaker:\s*/i, '').replaceAll('_', ' ');
 }
 
@@ -332,9 +333,17 @@ function buildLogDetails(item) {
   const decision = notes.decision_summary || {};
   const strategyConfig = notes.strategy_config || {};
   const scanner = notes.scanner || {};
-  const reasonDetails = Array.isArray(decision.reason_details) && decision.reason_details.length
+  
+  const rawDetails = Array.isArray(decision.reason_details) && decision.reason_details.length
     ? decision.reason_details
-    : [formatDecisionReason(item.status_reason || item.status_reason_code || item.status)];
+    : [item.status_reason || item.status_reason_code || item.status];
+    
+  const reasonDetails = rawDetails.map(d => {
+    if (!d) return null;
+    if (typeof d === 'object') return d.message || d.code || JSON.stringify(d);
+    return formatDecisionReason(d);
+  }).filter(Boolean);
+
   const highlights = [];
   if (strategyConfig.configured_symbol_count) highlights.push(`La estrategia tiene ${strategyConfig.configured_symbol_count} símbolo(s) configurados.`);
   if (scanner.selected_count) highlights.push(`En esta corrida se evaluaron ${scanner.selected_count} símbolo(s).`);
@@ -343,7 +352,8 @@ function buildLogDetails(item) {
   if (notes.execution_error) highlights.push(`Error reportado por el exchange: ${notes.execution_error}`);
   if ((notes.execution_raw || {}).message) highlights.push(`Respuesta del exchange: ${notes.execution_raw.message}`);
   if (!highlights.length) highlights.push('Sin explicación adicional reportada.');
-  return { summary: reasonDetails[0], reasonDetails, highlights, raw: notes };
+  
+  return { summary: reasonDetails[0] || 'operativa normal', reasonDetails, highlights, raw: notes };
 }
 
 function percentFromStoredValue(value) {
@@ -1180,7 +1190,8 @@ function renderSummary() {
   document.getElementById('stat-enabled').textContent = Number(summary.enabled_connectors || 0);
   document.getElementById('stat-trades').textContent = Number(summary.total_trades || 0);
   document.getElementById('stat-pnl').textContent = Number(summary.realized_pnl || 0).toFixed(2);
-  const healthScore = heartbeatHealth ?? Number(summary?.risk_summary?.health_score || 0);
+  const riskHealth = Number(summary?.risk_summary?.health_score || 0);
+  const healthScore = heartbeatHealth !== null ? Math.min(heartbeatHealth, riskHealth) : riskHealth;
   document.getElementById('quant-health-score').textContent = `${Math.round(healthScore)}%`;
   document.getElementById('quant-sync-status').textContent = formatDecisionReason(currentSync);
   document.getElementById('quant-live-connectors').textContent = state.connectors.filter((c) => c.mode === 'live' && c.is_enabled).length;
