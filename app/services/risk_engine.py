@@ -235,7 +235,12 @@ def summarize_portfolio_risk(db, user_id: int, *, lookback_days: int = 30) -> di
             daily_realized_pnl += pnl
 
     degraded_data_runs = 0
+    execution_failures = 0
     for run in recent_runs:
+        status = str(run.status or "").lower()
+        if status not in {"ok", "filled", "queued", "hold", "skipped_strategy_hold"}:
+            execution_failures += 1
+
         note = getattr(run, "notes", None)
         if isinstance(note, str) and ("synthetic_fallback" in note or "stale_feed" in note or "market_data_anomaly" in note):
             degraded_data_runs += 1
@@ -260,12 +265,16 @@ def summarize_portfolio_risk(db, user_id: int, *, lookback_days: int = 30) -> di
     if daily_realized_pnl < 0 and abs(daily_realized_pnl) / total_capital_proxy >= guardrails.max_daily_loss:
         alerts.append("daily_loss_limit_breached")
         suggestions.append("Activar kill switch temporal y hacer cooldown operativo.")
+    if execution_failures > 5:
+        alerts.append("high_execution_failure_rate")
+        suggestions.append("Revisar configuración de conectores y parámetros de estrategia.")
 
     health_score = 100.0
     health_score -= min(worst_drawdown * 100.0 * 1.2, 35.0)
     health_score -= min((estimated_open_risk / total_capital_proxy) * 100.0 * 1.5, 30.0)
     health_score -= min(largest_position_pct * 100.0 * 0.8, 20.0)
     health_score -= min(degraded_data_runs * 7.5, 15.0)
+    health_score -= min(execution_failures * 2.0, 20.0)
     health_score = max(round(health_score, 2), 0.0)
 
     by_symbol = []
