@@ -108,6 +108,7 @@ class MarketRules:
     market_type: str
     amount_min: float | None = None
     amount_max: float | None = None
+    market_amount_max: float | None = None
     amount_step: float | None = None
     price_min: float | None = None
     price_max: float | None = None
@@ -395,6 +396,7 @@ def build_validation_decision(
 
     amount_min = _decimal(market_rules.amount_min)
     amount_max = _decimal(market_rules.amount_max)
+    market_amount_max = _decimal(market_rules.market_amount_max)
     min_cost = _decimal(market_rules.min_cost)
     max_cost = _decimal(market_rules.max_cost)
     max_qty_allowed = _decimal(risk_context.get("max_qty")) if risk_context.get("max_qty") is not None else _DECIMAL_ZERO
@@ -493,7 +495,11 @@ def build_validation_decision(
                 diagnostics=diagnostics,
             )
 
-    if amount_max > _DECIMAL_ZERO and normalized_qty > amount_max:
+    effective_amount_max = amount_max
+    if order_type.lower() == "market" and market_amount_max > _DECIMAL_ZERO:
+        effective_amount_max = market_amount_max
+
+    if effective_amount_max > _DECIMAL_ZERO and normalized_qty > effective_amount_max:
         return ValidationDecision(
             is_valid=False,
             exchange=exchange,

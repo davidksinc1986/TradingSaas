@@ -450,27 +450,30 @@ function renderStrategyOptions(marketType = null) {
   const oldValue = select.value;
   const connectorId = document.getElementById('run-connector-select')?.value;
   const connector = getConnectorById(connectorId);
+  
   if (!connector && !marketType) {
     select.innerHTML = '';
     select.value = '';
     syncRunStrategyAvailability(false);
     return;
   }
+
   const normalizedMarketType = normalizeMarketType(marketType || connector?.market_type);
   const filtered = STRATEGIES.filter((s) => s.market_types.includes(normalizedMarketType));
+  
   select.innerHTML = filtered.map((s) => `<option value="${s.slug}">${s.label}</option>`).join('');
-  syncRunStrategyAvailability(filtered.length > 0);
 
-  const newValues = filtered.map(s => s.slug);
-  if (oldValue && newValues.includes(oldValue)) {
+  if (filtered.some((s) => s.slug === oldValue)) {
     select.value = oldValue;
-  } else if (oldValue && filtered.length > 0) {
-    select.value = newValues[0] || '';
-    setStatus('run-feedback', 'La estrategia anterior no es compatible con este conector y fue reiniciada.', 'warning');
-  } else if (!filtered.length) {
+  } else if (filtered.length > 0) {
+    select.value = filtered[0].slug;
+    if (oldValue) {
+        setStatus('run-feedback', 'La estrategia seleccionada se reinició por compatibilidad con el conector.', 'warning');
+    }
+  } else {
     select.value = '';
-    setStatus('run-feedback', `No hay estrategias compatibles para ${prettyMarketType(normalizedMarketType)}.`, 'warning');
   }
+  syncRunStrategyAvailability(filtered.length > 0);
 }
 
 function renderConnectorFields() {
@@ -886,8 +889,13 @@ function renderBotSessions() {
 
 function executionLogFilterOptions(key) {
   if (key === 'status') {
-    const values = Array.from(new Set((state.executionLogs || []).map((item) => prettyLabel(item.status, '')).filter(Boolean)));
-    return values.sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+    return [
+      { value: 'ok', label: 'Operativa normal' },
+      { value: 'error', label: 'Error de ejecución' },
+      { value: 'skipped', label: 'Omitido / Filtros' },
+      { value: 'rejected', label: 'Rechazado' },
+      { value: 'warning', label: 'Aviso' },
+    ];
   }
   if (key === 'connector') {
     return (state.connectors || [])

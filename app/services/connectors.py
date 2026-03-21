@@ -461,10 +461,13 @@ class BinanceExchangeAdapter(BaseExchangeAdapter):
         source_parts = {"markets", "limits", "precision", "adapter"}
         for item in filters:
             filter_type = str(item.get("filterType") or "").upper()
-            if filter_type in {"LOT_SIZE", "MARKET_LOT_SIZE"}:
+            if filter_type == "LOT_SIZE":
                 rules.amount_min = self._safe_float(item.get("minQty"), rules.amount_min)
                 rules.amount_max = self._safe_float(item.get("maxQty"), rules.amount_max)
                 rules.amount_step = self._safe_float(item.get("stepSize"), rules.amount_step)
+                source_parts.add("filters")
+            elif filter_type == "MARKET_LOT_SIZE":
+                rules.market_amount_max = self._safe_float(item.get("maxQty"), rules.market_amount_max)
                 source_parts.add("filters")
             elif filter_type == "PRICE_FILTER":
                 rules.price_min = self._safe_float(item.get("minPrice"), rules.price_min)
@@ -772,16 +775,41 @@ class CCXTConnectorClient(BaseConnectorClient):
         markets = self._load_markets(exchange)
         candidate = (symbol or "").strip().upper()
 
+        alt = candidate.replace("/", "")
+        # First check if the candidate (with or without slashes) is directly in markets
         if candidate in markets:
             market = markets[candidate]
             return {
                 "input_symbol": symbol,
                 "normalized_symbol": candidate,
-                "exchange_symbol": market.get("id") or candidate.replace("/", ""),
+                "exchange_symbol": market.get("id") or alt,
                 "found": True,
             }
 
-        alt = candidate.replace("/", "")
+        if alt in markets:
+            market = markets[alt]
+            return {
+                "input_symbol": symbol,
+                "normalized_symbol": alt,
+                "exchange_symbol": market.get("id") or alt,
+                "found": True,
+            }
+
+        # Handle missing slashes if not found directly
+        if "/" not in candidate and self.connector.platform in {"binance", "bybit", "okx"}:
+            for quote in ["USDT", "USDC", "BTC", "ETH", "EUR", "DAI", "BUSD"]:
+                if candidate.endswith(quote):
+                    try_symbol = candidate[:-len(quote)] + "/" + quote
+                    if try_symbol in markets:
+                        market = markets[try_symbol]
+                        return {
+                            "input_symbol": symbol,
+                            "normalized_symbol": try_symbol,
+                            "exchange_symbol": market.get("id") or alt,
+                            "found": True,
+                        }
+
+        # Original loop as fallback
         for market_symbol, market in markets.items():
             if (market.get("id") or "").upper() == alt:
                 return {
@@ -1490,10 +1518,15 @@ class CCXTConnectorClient(BaseConnectorClient):
                 options = getattr(exchange, "options", {}) or {}
                 options["fetchCurrencies"] = False
                 exchange.options = options
-                markets = exchange.load_markets()
+                try:
+                    markets = exchange.load_markets()
+                except Exception as exc2:
+                    warnings.append(f"markets_load_retry_failed:{exc2}")
+                    markets = {} # Fallback to empty instead of crashing heartbeat
             else:
                 raise
         balance = None
+        ok = True
         try:
             balance = exchange.fetch_balance()
         except Exception as exc:
@@ -1502,9 +1535,10 @@ class CCXTConnectorClient(BaseConnectorClient):
                 balance = {"warning": str(exc), "auxiliary": True}
             else:
                 balance = {"error": str(exc)}
+                ok = False
 
         return {
-            "ok": True,
+            "ok": ok,
             "platform": self.connector.platform,
             "markets_loaded": len(markets),
             "balance_preview": balance,
