@@ -142,6 +142,12 @@ const state = {
   connectorBalances: {},
   botSessions: [],
   executionLogs: [],
+  executionLogFilters: {
+    query: '',
+    status: '',
+    connector: '',
+    marketType: '',
+  },
   heartbeat: null,
   activity: null,
   editingConnectorId: null,
@@ -420,15 +426,32 @@ function normalizeMarketType(value) {
   return raw === 'future' ? 'futures' : raw;
 }
 
+function syncRunStrategyAvailability(hasOptions) {
+  const select = document.getElementById('strategy-select');
+  const runButton = document.getElementById('run-strategy-btn');
+  const activateButton = document.getElementById('activate-bot-btn');
+  if (select) select.disabled = !hasOptions;
+  if (runButton) runButton.disabled = !hasOptions;
+  if (activateButton) activateButton.disabled = !hasOptions;
+}
+
 function renderStrategyOptions(marketType = null) {
   const select = document.getElementById('strategy-select');
   if (!select) return;
 
   const oldValue = select.value;
-  const normalizedMarketType = normalizeMarketType(marketType);
-
-  const filtered = STRATEGIES.filter((s) => !marketType || s.market_types.includes(normalizedMarketType));
+  const connectorId = document.getElementById('run-connector-select')?.value;
+  const connector = getConnectorById(connectorId);
+  if (!connector && !marketType) {
+    select.innerHTML = '';
+    select.value = '';
+    syncRunStrategyAvailability(false);
+    return;
+  }
+  const normalizedMarketType = normalizeMarketType(marketType || connector?.market_type);
+  const filtered = STRATEGIES.filter((s) => s.market_types.includes(normalizedMarketType));
   select.innerHTML = filtered.map((s) => `<option value="${s.slug}">${s.label}</option>`).join('');
+  syncRunStrategyAvailability(filtered.length > 0);
 
   const newValues = filtered.map(s => s.slug);
   if (oldValue && newValues.includes(oldValue)) {
@@ -436,6 +459,9 @@ function renderStrategyOptions(marketType = null) {
   } else if (oldValue && filtered.length > 0) {
     select.value = newValues[0] || '';
     setStatus('run-feedback', 'La estrategia anterior no es compatible con este conector y fue reiniciada.', 'warning');
+  } else if (!filtered.length) {
+    select.value = '';
+    setStatus('run-feedback', `No hay estrategias compatibles para ${prettyMarketType(normalizedMarketType)}.`, 'warning');
   }
 }
 
@@ -850,11 +876,134 @@ function renderBotSessions() {
   });
 }
 
+function executionLogFilterOptions(key) {
+  const values = Array.from(new Set(
+    (state.executionLogs || [])
+      .map((item) => {
+        if (key === 'status') return prettyLabel(item.status, '');
+        if (key === 'connector') return prettyLabel(item.connector_label, '');
+        if (key === 'marketType') return prettyMarketType(item.market_type, item.connector_id);
+        return '';
+      })
+      .filter(Boolean),
+  ));
+  return values.sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+}
+
+function normalizeExecutionLogSearchValue(item) {
+  return [
+    item.connector_label,
+    item.platform,
+    item.market_type,
+    item.symbol,
+    item.display_symbol,
+    item.strategy_slug,
+    item.signal,
+    item.status,
+    item.status_reason,
+    item.bot_session_name,
+    item.bot_session_display_name,
+    ...(Array.isArray(item.reason_codes) ? item.reason_codes : []),
+  ].map((value) => String(value || '').trim().toLowerCase()).join(' ');
+}
+
+function filteredExecutionLogs() {
+  const filters = state.executionLogFilters || {};
+  const query = String(filters.query || '').trim().toLowerCase();
+  const status = String(filters.status || '').trim().toLowerCase();
+  const connector = String(filters.connector || '').trim().toLowerCase();
+  const marketType = String(filters.marketType || '').trim().toLowerCase();
+
+  return (state.executionLogs || []).filter((item) => {
+    if (status && String(item.status || '').trim().toLowerCase() !== status) return false;
+    if (connector && String(item.connector_label || '').trim().toLowerCase() !== connector) return false;
+    if (marketType && prettyMarketType(item.market_type, item.connector_id).trim().toLowerCase() !== marketType) return false;
+    if (query && !normalizeExecutionLogSearchValue(item).includes(query)) return false;
+    return true;
+  });
+}
+
+function renderExecutionLogFilterBar() {
+  const board = document.getElementById('execution-logs-board');
+  if (!board) return null;
+  let bar = document.getElementById('execution-log-filters');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'execution-log-filters';
+    bar.className = 'row-wrap';
+    bar.style.marginTop = '12px';
+    bar.style.marginBottom = '8px';
+    bar.innerHTML = `
+      <input id="execution-log-filter-query" type="search" placeholder="Buscar símbolo, estado o razón" style="min-width:240px;">
+      <select id="execution-log-filter-status"><option value="">Estado</option></select>
+      <select id="execution-log-filter-connector"><option value="">Conector</option></select>
+      <select id="execution-log-filter-market"><option value="">Mercado</option></select>
+      <button class="btn btn-sm" type="button" id="execution-log-filter-clear">Limpiar</button>
+    `;
+    board.parentNode?.insertBefore(bar, board);
+  }
+  if (bar.dataset.bound !== 'true') {
+    const syncFiltersFromDom = () => {
+      state.executionLogFilters = {
+        query: document.getElementById('execution-log-filter-query')?.value || '',
+        status: document.getElementById('execution-log-filter-status')?.value || '',
+        connector: document.getElementById('execution-log-filter-connector')?.value || '',
+        marketType: document.getElementById('execution-log-filter-market')?.value || '',
+      };
+      renderExecutionLogs();
+    };
+    bar.querySelectorAll('input, select').forEach((input) => {
+      input.addEventListener(input.tagName === 'INPUT' ? 'input' : 'change', syncFiltersFromDom);
+    });
+    document.getElementById('execution-log-filter-clear')?.addEventListener('click', () => {
+      state.executionLogFilters = { query: '', status: '', connector: '', marketType: '' };
+      renderExecutionLogs();
+    });
+    bar.dataset.bound = 'true';
+  }
+
+  const filters = state.executionLogFilters || {};
+  const queryInput = document.getElementById('execution-log-filter-query');
+  const statusSelect = document.getElementById('execution-log-filter-status');
+  const connectorSelect = document.getElementById('execution-log-filter-connector');
+  const marketSelect = document.getElementById('execution-log-filter-market');
+  if (queryInput && queryInput.value !== filters.query) queryInput.value = filters.query || '';
+
+  const applyOptions = (select, options, value, defaultLabel) => {
+    if (!select) return;
+    const currentValue = value || '';
+    select.innerHTML = [`<option value="">${defaultLabel}</option>`, ...options.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`)].join('');
+    select.value = options.includes(currentValue) ? currentValue : '';
+  };
+
+  applyOptions(statusSelect, executionLogFilterOptions('status'), filters.status, 'Estado');
+  applyOptions(connectorSelect, executionLogFilterOptions('connector'), filters.connector, 'Conector');
+  applyOptions(marketSelect, executionLogFilterOptions('marketType'), filters.marketType, 'Mercado');
+  state.executionLogFilters = {
+    query: queryInput?.value || '',
+    status: statusSelect?.value || '',
+    connector: connectorSelect?.value || '',
+    marketType: marketSelect?.value || '',
+  };
+
+  return bar;
+}
+
 function renderExecutionLogs() {
   const board = document.getElementById('execution-logs-board');
   if (!board) return;
+  renderExecutionLogFilterBar();
   if (!state.executionLogs.length) {
     board.innerHTML = '<div class="log-table-compact"><small class="hint" style="padding: 12px; display: block;">Sin logs todavía.</small></div>';
+    const meta = document.getElementById('execution-logs-refresh-meta');
+    if (meta) meta.textContent = `Mostrando 0 logs. Última actualización: ${new Date().toLocaleTimeString()}`;
+    return;
+  }
+  const visibleLogs = filteredExecutionLogs();
+  if (!visibleLogs.length) {
+    board.innerHTML = '<div class="log-table-compact"><small class="hint" style="padding: 12px; display: block;">Sin resultados.</small></div>';
+    const meta = document.getElementById('execution-logs-refresh-meta');
+    if (meta) meta.textContent = `Mostrando 0 de ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
     return;
   }
 
@@ -869,7 +1018,7 @@ function renderExecutionLogs() {
     </div>
   `;
 
-  const rows = state.executionLogs.map((item) => {
+  const rows = visibleLogs.map((item) => {
     const detail = buildLogDetails(item);
     const detailId = `log-detail-${item.id}`;
     const symbol = displaySymbol(item.display_symbol || item.symbol);
@@ -921,16 +1070,13 @@ function renderExecutionLogs() {
     row.addEventListener('click', () => {
       const detailId = row.dataset.logToggle;
       const detail = document.getElementById(detailId);
-      const isExpanded = row.classList.contains('is-expanded');
-      
-      // Close others if needed (optional, keeping it simple for now)
       row.classList.toggle('is-expanded');
       detail?.classList.toggle('hidden');
     });
   });
 
   const meta = document.getElementById('execution-logs-refresh-meta');
-  if (meta) meta.textContent = `Mostrando ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
+  if (meta) meta.textContent = `Mostrando ${visibleLogs.length} de ${state.executionLogs.length} logs. Última actualización: ${new Date().toLocaleTimeString()}`;
 }
 function renderActivity() {
   const activity = state.activity || {};
@@ -1212,6 +1358,37 @@ function buildRunPayload(form) {
   };
 }
 
+function buildManualRunPayload(form) {
+  const payload = buildRunPayload(form);
+  return {
+    connector_ids: [payload.connector_id],
+    market_type: payload.market_type,
+    symbols: payload.symbols,
+    symbol_source_mode: payload.symbol_source_mode,
+    dynamic_symbol_limit: payload.dynamic_symbol_limit,
+    timeframe: payload.timeframe,
+    strategy_slug: payload.strategy_slug,
+    risk_per_trade: payload.risk_per_trade,
+    min_ml_probability: payload.min_ml_probability,
+    take_profit_mode: payload.take_profit_mode,
+    take_profit_value: payload.take_profit_value,
+    stop_loss_mode: payload.stop_loss_mode,
+    stop_loss_value: payload.stop_loss_value,
+    trailing_stop_mode: payload.trailing_stop_mode,
+    trailing_stop_value: payload.trailing_stop_value,
+    trade_amount_mode: payload.trade_amount_mode,
+    amount_per_trade: payload.amount_per_trade,
+    amount_percentage: payload.amount_percentage,
+    use_live_if_available: payload.use_live_if_available,
+    indicator_exit_enabled: payload.indicator_exit_enabled,
+    indicator_exit_rule: payload.indicator_exit_rule,
+    leverage_profile: payload.leverage_profile,
+    max_open_positions: payload.max_open_positions,
+    compound_growth_enabled: payload.compound_growth_enabled,
+    atr_volatility_filter_enabled: payload.atr_volatility_filter_enabled,
+  };
+}
+
 function getPopoverElements() {
   return {
     popover: document.getElementById('field-advisory-popover'),
@@ -1432,7 +1609,7 @@ async function runStrategy(event) {
     state.pendingActions.runStrategy = true;
     setStatus('run-feedback', 'Ejecutando estrategia...', 'ok');
     setButtonsBusy([submitButton, document.getElementById('activate-bot-btn')], true, 'Procesando...');
-    await api('/api/strategies/run', { method: 'POST', body: JSON.stringify(buildRunPayload(form)) });
+    await api('/api/strategies/run', { method: 'POST', body: JSON.stringify(buildManualRunPayload(form)) });
     setStatus('run-feedback', 'Estrategia ejecutada correctamente.', 'ok');
     await refreshDashboard();
   } catch (error) {
