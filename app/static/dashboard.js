@@ -159,6 +159,10 @@ const state = {
   heartbeat: null,
   activity: null,
   editingConnectorId: null,
+  connectorHealth: {},
+  availableSymbols: [],
+  selectedSymbols: [],
+  symbolSearchTerm: '',
   pendingActions: {
     runStrategy: false,
     activateBot: false,
@@ -177,6 +181,112 @@ const REPORT_STATE_LABELS = {
   problemas_tecnicos: 'Problemas técnicos',
   eventos_extremos_de_mercado: 'Eventos extremos de mercado',
 };
+
+async function fetchSupportedSymbols(connectorId) {
+    if (!connectorId) {
+        state.availableSymbols = [];
+        state.selectedSymbols = [];
+        renderSymbolSelector();
+        return;
+    }
+    try {
+        const data = await api(`/api/connectors/${connectorId}/supported-symbols`);
+        state.availableSymbols = data.symbols || [];
+        const currentSelected = new Set(state.selectedSymbols);
+        const availableSet = new Set(state.availableSymbols);
+        state.selectedSymbols = [...currentSelected].filter(s => availableSet.has(s));
+        renderSymbolSelector();
+    } catch (error) {
+        setStatus('run-feedback', `Error cargando símbolos: ${parseApiError(error)}`, 'error');
+        state.availableSymbols = [];
+        renderSymbolSelector();
+    }
+}
+
+function renderSymbolSelector() {
+    const availableList = document.getElementById('available-symbols-list');
+    const selectedList = document.getElementById('selected-symbols-list');
+    const hiddenInput = document.getElementById('run-form-symbols-hidden');
+    if (!availableList || !selectedList || !hiddenInput) return;
+
+    const searchTerm = state.symbolSearchTerm.toLowerCase();
+    const selectedSet = new Set(state.selectedSymbols);
+    const availableSymbols = state.availableSymbols
+        .filter(s => !selectedSet.has(s))
+        .filter(s => s.toLowerCase().includes(searchTerm));
+
+    availableList.innerHTML = availableSymbols.map(s => `<li data-symbol="${escapeHtml(s)}">${escapeHtml(s)}</li>`).join('');
+    selectedList.innerHTML = state.selectedSymbols.map(s => `<li data-symbol="${escapeHtml(s)}">${escapeHtml(s)}</li>`).join('');
+
+    hiddenInput.value = state.selectedSymbols.join(',');
+}
+
+function initSymbolSelector() {
+    const availableList = document.getElementById('available-symbols-list');
+    const selectedList = document.getElementById('selected-symbols-list');
+    const searchInput = document.getElementById('symbol-search-input');
+    const addBtn = document.getElementById('symbol-add-btn');
+    const removeBtn = document.getElementById('symbol-remove-btn');
+    const addAllBtn = document.getElementById('symbol-add-all-btn');
+    const removeAllBtn = document.getElementById('symbol-remove-all-btn');
+
+    if (!availableList) return;
+
+    const toggleSymbolSelection = (event) => {
+        if (event.target.tagName === 'LI') {
+            event.target.classList.toggle('selected');
+        }
+    };
+
+    availableList.addEventListener('click', toggleSymbolSelection);
+    selectedList.addEventListener('click', toggleSymbolSelection);
+
+    searchInput.addEventListener('input', () => {
+        state.symbolSearchTerm = searchInput.value;
+        renderSymbolSelector();
+    });
+
+    addBtn.addEventListener('click', () => {
+        const selected = Array.from(availableList.querySelectorAll('.selected')).map(li => li.dataset.symbol);
+        state.selectedSymbols = [...new Set([...state.selectedSymbols, ...selected])].sort();
+        renderSymbolSelector();
+    });
+    
+    removeBtn.addEventListener('click', () => {
+        const selected = new Set(Array.from(selectedList.querySelectorAll('.selected')).map(li => li.dataset.symbol));
+        state.selectedSymbols = state.selectedSymbols.filter(s => !selected.has(s));
+        renderSymbolSelector();
+    });
+
+    addAllBtn.addEventListener('click', () => {
+        const filteredAvailable = state.availableSymbols.filter(s => s.toLowerCase().includes(state.symbolSearchTerm.toLowerCase()));
+        const selectedSet = new Set(state.selectedSymbols);
+        const toAdd = filteredAvailable.filter(s => !selectedSet.has(s));
+        state.selectedSymbols = [...state.selectedSymbols, ...toAdd].sort();
+        renderSymbolSelector();
+    });
+
+    removeAllBtn.addEventListener('click', () => {
+        state.selectedSymbols = [];
+        renderSymbolSelector();
+    });
+}
+
+async function fetchConnectorHealth(connector) {
+    try {
+        const health = await api(`/api/connectors/${connector.id}/health`);
+        state.connectorHealth[connector.id] = health;
+    } catch (error) {
+        state.connectorHealth[connector.id] = {
+            ok: false,
+            reasons: ['Error fetching health'],
+            source: 'frontend_error',
+            error: parseApiError(error),
+        };
+    }
+}
+
+
 
 async function api(url, options = {}) {
   const res = await fetch(url, {
@@ -633,10 +743,21 @@ function renderConnectors() {
     runSelect.dispatchEvent(new Event('change'));
   }
   if (panel) {
-    panel.innerHTML = state.connectors.length ? reportMarkup(state.connectors.map((c) => ({
-      title: `${c.label} · ${prettyPlatform(c.platform)}`,
-      body: `${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'} · sizing ${connectorSizingSummary(c)} · ${(c.symbols || []).length} símbolos`,
-    }))) : reportMarkup([{ title: 'Sin conectores', body: 'Crea al menos un conector para operar o automatizar.' }]);
+    panel.innerHTML = state.connectors.length ? reportMarkup(state.connectors.map((c) => {
+      const health = state.connectorHealth[c.id];
+      const healthOk = health?.ok;
+      const healthReasons = health?.reasons?.length ? health.reasons.join(', ') : (healthOk ? 'OK' : 'No disponible');
+      return {
+        title: `${c.label} · ${prettyPlatform(c.platform)}`,
+        body: `
+          ${c.mode} · ${prettyMarketType(c.market_type, c.id)} · ${c.is_enabled ? 'activo' : 'inactivo'}
+          <br>
+          <span class="health-status ${healthOk ? 'ok' : 'error'}">
+            <strong>Estado:</strong> ${health ? healthReasons : 'Cargando...'}
+          </span>
+        `,
+      }
+    })) : reportMarkup([{ title: 'Sin conectores', body: 'Crea al menos un conector para operar o automatizar.' }]);
   }
   if (!list) return;
   if (!state.connectors.length) {
@@ -1268,6 +1389,9 @@ async function refreshDashboard() {
     state.executionLogsMeta = executionLogs.meta || state.executionLogsMeta;
   }
   state.activity = activity || state.activity || null;
+  
+  await Promise.all(state.connectors.map(fetchConnectorHealth));
+
   renderProfile();
   renderConnectors();
   renderBotSessions();
@@ -1394,6 +1518,14 @@ function buildRunPayload(form) {
   };
 
   const symbols = String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean);
+  if (symbols.length === 0) {
+    const symbolInput = form.querySelector('input[name="symbols"]');
+    if(symbolInput) {
+      const manualSymbols = String(symbolInput.value || '').split(',').map((item) => item.trim()).filter(Boolean);
+      if(manualSymbols.length > 0) symbols.push(...manualSymbols);
+    }
+  }
+
   if (!symbols.length) {
     throw new Error('Debes indicar al menos un símbolo.');
   }
@@ -1764,10 +1896,11 @@ function startAutoRefresh() {
 async function init() {
   initTabs();
   resetConnectorForm();
-  document.getElementById('run-connector-select')?.addEventListener('change', () => {
-    const connectorId = document.getElementById('run-connector-select').value;
+  document.getElementById('run-connector-select')?.addEventListener('change', (event) => {
+    const connectorId = event.target.value;
     const connector = getConnectorById(connectorId);
     renderStrategyOptions(connector?.market_type);
+    fetchSupportedSymbols(connectorId);
   });
   document.getElementById('connector-platform')?.addEventListener('change', renderConnectorFields);
   document.getElementById('connector-market-type')?.addEventListener('change', renderConnectorFields);
@@ -1797,6 +1930,7 @@ async function init() {
   bindFieldAdvisories('#run-form', 'run');
   document.getElementById('connector-form')?.setAttribute('novalidate', 'novalidate');
   document.getElementById('run-form')?.setAttribute('novalidate', 'novalidate');
+  initSymbolSelector();
   await refreshDashboard();
   startAutoRefresh();
 }

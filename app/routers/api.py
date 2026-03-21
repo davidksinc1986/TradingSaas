@@ -65,7 +65,7 @@ from app.services.connector_state import (
     resolve_runtime_market_type,
     sync_connector_config_market_type,
 )
-from app.services.connectors import get_client
+from app.services.connectors import get_client, get_health_summary
 from app.services.market import price_check
 from app.services.policies import ensure_user_grants, get_user_grant, validate_connector_request
 from app.services.pricing import estimate_monthly_cost
@@ -898,6 +898,28 @@ def connector_balance(connector_id: int, db=Depends(get_db), user=Depends(curren
     }
 
 
+@router.get("/connectors/{connector_id}/health")
+def connector_health(connector_id: int, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(
+        Connector.id == connector_id,
+        Connector.user_id == user.id,
+    ).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+    
+    health = get_health_summary(connector)
+    return {
+        "connector_id": connector.id,
+        "ok": health.get("ok"),
+        "reasons": health.get("reasons", []),
+        "balance_ok": health.get("balance_ok"),
+        "markets_ok": health.get("markets_ok"),
+        "source": health.get("source", "unknown"),
+        "balance_details": health.get("balance", {}),
+    }
+
+
+
 @router.post("/connectors")
 def create_connector(payload: ConnectorCreate, db=Depends(get_db), user: User = Depends(current_user)):
     target_user_id = payload.user_id or user.id
@@ -1712,6 +1734,61 @@ def connector_symbols_catalog(connector_id: int, db=Depends(get_db), user=Depend
         "count": len(payload),
         "source": source,
     }
+
+
+@router.get("/connectors/{connector_id}/supported-symbols")
+def connector_supported_symbols(connector_id: int, db=Depends(get_db), user=Depends(current_user)):
+    connector = db.query(Connector).filter(
+        Connector.id == connector_id,
+        Connector.user_id == user.id,
+    ).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    symbols = []
+    source = "unknown"
+    try:
+        client = get_client(connector)
+        exchange = client.build_exchange()
+        markets = exchange.load_markets()
+        market_type = str(getattr(connector, "market_type", "spot") or "spot").lower()
+        
+        symbols = sorted(
+            symbol
+            for symbol, market in (markets or {}).items()
+            if market.get("active", True) and (
+                (market_type == "spot" and market.get("spot")) or
+                (market_type == "futures" and (market.get("future") or market.get("swap")))
+            )
+        )
+        
+        if market_type in {"spot", "futures"}:
+            usdt_symbols = [s for s in symbols if s.endswith("/USDT")]
+            if usdt_symbols:
+                symbols = usdt_symbols
+
+        source = "exchange_live"
+    except Exception as exc:
+        source = f"error:{exc}"
+        # Fallback to policy if available
+        policy = db.query(PlatformPolicy).filter(PlatformPolicy.platform == connector.platform).first()
+        if policy:
+            symbols = sorted({
+                *((policy.top_symbols_json or {}).get("symbols", [])),
+                *((policy.allowed_symbols_json or {}).get("symbols", [])),
+            })
+            source = "exchange_fallback_static"
+
+
+    return {
+        "connector_id": connector.id,
+        "platform": connector.platform,
+        "market_type": connector.market_type,
+        "symbols": symbols,
+        "count": len(symbols),
+        "source": source,
+    }
+
 
 
 @router.get("/execution-logs/download")

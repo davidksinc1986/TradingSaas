@@ -1,20 +1,33 @@
-# env
-.env
-.env.*
-
-# python
+# Python
 __pycache__/
 *.pyc
-
-# venv
-.venv/
-
-# db
+*.pyo
+*.pyd
+*.sqlite3
 *.db
 
-# local data
-data/
+# Env
+.env
+venv/
+.venv/
 
-# misc
+# Logs
 *.log
 
+# OS
+.DS_Store
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Temp / basura
+*.tmp
+*.swp
+patch.js
+output.txt
+final_diff.txt
+git_diff.txt
+prompt.txt
+tatus

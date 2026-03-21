@@ -146,7 +146,29 @@
           <select id="run-connector-select" name="connector_id"></select>
         </label>
         <label>Nombre estrategia / sesión<input name="session_name" placeholder="Momentum BTC principal"></label>
-        <label>Símbolos<input name="symbols" placeholder="BTC/USDT,ETH/USDT" required></label>
+        <div class="symbol-selector-wrapper">
+          <label>Símbolos</label>
+          <div class="symbol-selector-grid">
+            <div class="symbol-list-container">
+              <div class="symbol-search-wrapper">
+                <input type="search" id="symbol-search-input" placeholder="Buscar símbolo...">
+              </div>
+              <ul id="available-symbols-list" class="symbol-list"></ul>
+            </div>
+            <div class="symbol-selector-actions">
+              <button type="button" class="btn btn-sm" id="symbol-add-btn" title="Añadir seleccionados">&gt;</button>
+              <button type="button" class="btn btn-sm" id="symbol-remove-btn" title="Quitar seleccionados">&lt;</button>
+              <button type="button" class="btn btn-sm" id="symbol-add-all-btn" title="Añadir todos">&gt;&gt;</button>
+              <button type="button" class="btn btn-sm" id="symbol-remove-all-btn" title="Quitar todos">&lt;&lt;</button>
+            </div>
+            <div class="symbol-list-container">
+              <div class="symbol-list-header">Seleccionados</div>
+              <ul id="selected-symbols-list" class="symbol-list"></ul>
+            </div>
+          </div>
+          <input type="hidden" name="symbols" id="run-form-symbols-hidden">
+        </div>
+
         <label>Origen de símbolos
           <select name="symbol_source_mode" id="run-symbol-source-mode">
             <option value="manual">Lista manual</option>

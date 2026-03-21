@@ -114,6 +114,38 @@ def select_symbols_for_run(
         }
 
     universe = _normalize_universe(cfg, fallback_symbols)
+    if connector:
+        try:
+            from app.services.connectors import get_client
+            client = get_client(connector)
+            exchange = client.build_exchange()
+            markets = exchange.load_markets()
+            market_type = str(getattr(connector, "market_type", "spot") or "spot").lower()
+            
+            supported_symbols = {
+                symbol
+                for symbol, market in (markets or {}).items()
+                if market.get("active", True) and (
+                    (market_type == "spot" and market.get("spot")) or
+                    (market_type == "futures" and (market.get("future") or market.get("swap")))
+                )
+            }
+            
+            if market_type in {"spot", "futures"}:
+                usdt_symbols = {s for s in supported_symbols if s.endswith("/USDT")}
+                if usdt_symbols:
+                    supported_symbols = usdt_symbols
+
+            original_count = len(universe)
+            universe = [s for s in universe if s in supported_symbols]
+            removed_count = original_count - len(universe)
+            if removed_count > 0:
+                print(f"INFO: Removed {removed_count} unsupported symbols from scanner universe for {connector.label}")
+
+        except Exception as e:
+            print(f"WARNING: Could not fetch supported symbols for {connector.label}, proceeding with unfiltered universe. Reason: {e}")
+
+
     if not universe:
         fallback_list = list(fallback_symbols)
         return fallback_list, {

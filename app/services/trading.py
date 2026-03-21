@@ -1415,6 +1415,7 @@ def run_strategy(
 
             open_positions = db.query(OpenPosition).filter(
                 OpenPosition.connector_id == connector.id,
+                OpenPosition.market_type == connector.market_type,
                 OpenPosition.is_open.is_(True),
             ).all()
             open_positions = [item for item in open_positions if _safe_float(item.current_qty) > 0]

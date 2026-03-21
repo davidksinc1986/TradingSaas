@@ -100,6 +100,9 @@ def build_trade_risk_plan(
     warnings: list[str] = []
     block_reasons: list[str] = []
 
+    if market_meta.get("source") == "synthetic_fallback" and position_context.get("is_live"):
+        block_reasons.append("synthetic_data_on_live_connector")
+
     available_balance = max(_safe_float(available_balance), 0.0)
     price = max(_safe_float(price), 0.0)
     stop_loss_price = max(_safe_float(stop_loss_price), 0.0)
