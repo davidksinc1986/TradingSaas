@@ -194,7 +194,11 @@ async function fetchSupportedSymbols(connectorId) {
         state.availableSymbols = data.symbols || [];
         const currentSelected = new Set(state.selectedSymbols);
         const availableSet = new Set(state.availableSymbols);
-        state.selectedSymbols = [...currentSelected].filter(s => availableSet.has(s));
+        // Preserve selection even if temporarily missing from catalog to prevent wipes during slow loads
+        // but ensure they are still valid in the context of the connector
+        if (availableSet.size > 0) {
+            state.selectedSymbols = [...currentSelected].filter(s => availableSet.has(s) || s.includes('/'));
+        }
         renderSymbolSelector();
     } catch (error) {
         setStatus('run-feedback', `Error cargando símbolos: ${parseApiError(error)}`, 'error');
@@ -218,7 +222,12 @@ function renderSymbolSelector() {
     availableList.innerHTML = availableSymbols.map(s => `<li data-symbol="${escapeHtml(s)}">${escapeHtml(s)}</li>`).join('');
     selectedList.innerHTML = state.selectedSymbols.map(s => `<li data-symbol="${escapeHtml(s)}">${escapeHtml(s)}</li>`).join('');
 
-    hiddenInput.value = state.selectedSymbols.join(',');
+    const val = state.selectedSymbols.join(',');
+    hiddenInput.value = val;
+    // Sync with any active edit form to ensure consistency
+    document.querySelectorAll('.bot-session-form:not(.hidden) [name="symbols"]').forEach(input => {
+        if (input !== hiddenInput) input.value = val;
+    });
 }
 
 function initSymbolSelector() {
@@ -964,7 +973,7 @@ function renderBotSessions() {
             session_name: String(fd.get('session_name') || '').trim() || null,
             strategy_slug: fd.get('strategy_slug'),
             timeframe: fd.get('timeframe'),
-            symbols: String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
+            symbols: (fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean),
             symbol_source_mode: fd.get('symbol_source_mode'),
             dynamic_symbol_limit: fd.get('symbol_source_mode') === 'dynamic' ? Number(fd.get('dynamic_symbol_limit') || 10) : null,
             risk_per_trade: Number(fd.get('risk_per_trade')),
@@ -995,6 +1004,12 @@ function renderBotSessions() {
         if (button.dataset.botAction === 'edit') {
           form?.classList.remove('hidden');
           button.classList.add('hidden');
+          // Sync global symbol state with the session being edited
+          const session = state.botSessions.find(s => s.id === id);
+          if (session && Array.isArray(session.symbols)) {
+            state.selectedSymbols = [...session.symbols];
+            renderSymbolSelector();
+          }
           return;
         }
         if (button.dataset.botAction === 'cancel-edit') {
@@ -1517,13 +1532,9 @@ function buildRunPayload(form) {
     return parsed;
   };
 
-  const symbols = String(fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean);
+  let symbols = (fd.get('symbols') || '').split(',').map((item) => item.trim()).filter(Boolean);
   if (symbols.length === 0) {
-    const symbolInput = form.querySelector('input[name="symbols"]');
-    if(symbolInput) {
-      const manualSymbols = String(symbolInput.value || '').split(',').map((item) => item.trim()).filter(Boolean);
-      if(manualSymbols.length > 0) symbols.push(...manualSymbols);
-    }
+    symbols = [...state.selectedSymbols];
   }
 
   if (!symbols.length) {

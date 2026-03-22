@@ -1,33 +1,12 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.sqlite3
-*.db
-
-# Env
 .env
 venv/
-.venv/
-
-# Logs
+__pycache__/
+*.pyc
 *.log
-
-# OS
-.DS_Store
-
-# Node / frontend
+*.tmp
 node_modules/
 dist/
 build/
-
-# Temp / basura
-*.tmp
-*.swp
-patch.js
-output.txt
-final_diff.txt
-git_diff.txt
-prompt.txt
-tatus
+.DS_Store
+*.sqlite3
+*.db
