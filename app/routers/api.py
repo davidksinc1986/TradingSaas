@@ -1489,15 +1489,15 @@ def update_bot_session(session_id: int, payload: BotSessionUpdate, db=Depends(ge
         if payload.session_name is not None:
             session.session_name = _clean_optional_name(payload.session_name)
         if payload.symbols is not None:
-            current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+            current_symbols_json = dict(_safe_json_object(getattr(session, "symbols_json", {})))
             current_symbols_json["symbols"] = payload.symbols
             session.symbols_json = current_symbols_json
         if payload.symbol_source_mode is not None:
-            current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+            current_symbols_json = dict(_safe_json_object(getattr(session, "symbols_json", {})))
             current_symbols_json["symbol_source_mode"] = payload.symbol_source_mode
             session.symbols_json = current_symbols_json
         if payload.dynamic_symbol_limit is not None:
-            current_symbols_json = _safe_json_object(getattr(session, "symbols_json", {}))
+            current_symbols_json = dict(_safe_json_object(getattr(session, "symbols_json", {})))
             current_symbols_json["dynamic_symbol_limit"] = payload.dynamic_symbol_limit
             session.symbols_json = current_symbols_json
         if payload.strategy_slug is not None:
@@ -2378,7 +2378,7 @@ def connector_heartbeat(db=Depends(get_db), user=Depends(current_user)):
     for connector in connectors:
         try:
             client = get_client(connector)
-            raw = client.test_connection()
+            raw = get_health_summary(connector)
             checks.append({
                 "id": connector.id,
                 "label": connector.label,
@@ -2773,7 +2773,7 @@ def admin_user_heartbeat(user_id: int, db=Depends(get_db), _: User = Depends(adm
     for connector in connectors:
         try:
             client = get_client(connector)
-            raw = client.test_connection()
+            raw = get_health_summary(connector)
             checks.append({
                 "id": connector.id,
                 "label": connector.label,

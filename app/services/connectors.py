@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 
+from app.models import Connector
 from app.security import decrypt_payload
 from app.services.execution_guardrails import (
     ExecutionReferencePrice,
@@ -1941,3 +1942,40 @@ def get_client(connector):
     if connector.platform == "tradingview":
         return TradingViewConnectorClient(connector)
     return BaseConnectorClient(connector)
+
+def get_health_summary(connector: Connector) -> dict[str, Any]:
+    client = get_client(connector)
+    try:
+        health = client.test_connection()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "reasons": [f"test_connection_failed:{exc}"],
+            "balance_ok": False,
+            "markets_ok": False,
+            "source": "error",
+            "balance_details": {},
+        }
+
+    reasons = health.get("warnings") or []
+    if not health.get("ok"):
+        reasons.append(health.get("note") or "general_health_check_failed")
+
+    balance_preview = health.get("balance_preview") or {}
+    balance_ok = "error" not in balance_preview
+    if not balance_ok:
+        reasons.append(balance_preview.get("error") or "balance_check_failed")
+
+    markets_loaded = health.get("markets_loaded", 0)
+    markets_ok = markets_loaded > 0
+    if not markets_ok:
+        reasons.append("markets_load_failed")
+
+    return {
+        "ok": health.get("ok") and balance_ok and markets_ok,
+        "reasons": reasons,
+        "balance_ok": balance_ok,
+        "markets_ok": markets_ok,
+        "source": health.get("platform", "unknown"),
+        "balance_details": balance_preview,
+    }

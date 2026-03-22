@@ -241,14 +241,24 @@ function initSymbolSelector() {
 
     if (!availableList) return;
 
-    const toggleSymbolSelection = (event) => {
+    const handleAvailableClick = (event) => {
         if (event.target.tagName === 'LI') {
-            event.target.classList.toggle('selected');
+            const symbol = event.target.dataset.symbol;
+            state.selectedSymbols = [...new Set([...state.selectedSymbols, symbol])].sort();
+            renderSymbolSelector();
         }
     };
 
-    availableList.addEventListener('click', toggleSymbolSelection);
-    selectedList.addEventListener('click', toggleSymbolSelection);
+    const handleSelectedClick = (event) => {
+        if (event.target.tagName === 'LI') {
+            const symbol = event.target.dataset.symbol;
+            state.selectedSymbols = state.selectedSymbols.filter(s => s !== symbol);
+            renderSymbolSelector();
+        }
+    };
+
+    availableList.addEventListener('click', handleAvailableClick);
+    selectedList.addEventListener('click', handleSelectedClick);
 
     searchInput.addEventListener('input', () => {
         state.symbolSearchTerm = searchInput.value;
@@ -1811,14 +1821,13 @@ function bindFieldAdvisories(formSelector, formKind) {
     const label = input.closest('label');
     appendAsteriskToLabel(label);
     const trigger = label?.querySelector('.field-advisory-trigger');
-    ['mouseenter', 'focus'].forEach((eventName) => {
-      trigger?.addEventListener(eventName, () => {
-        const advisory = advisoryForField(formKind, input);
-        if (advisory?.message) showFieldPopover(trigger, meta.title, advisory.message);
-      });
+    trigger?.addEventListener('click', (e) => {
+      e.preventDefault();
+      const advisory = advisoryForField(formKind, input);
+      if (advisory?.message) showFieldPopover(trigger, meta.title, advisory.message);
     });
     ['input', 'change'].forEach((eventName) => {
-      input.addEventListener(eventName, () => syncFieldHintState(formKind, input, { reveal: true }));
+      input.addEventListener(eventName, () => syncFieldHintState(formKind, input, { reveal: false }));
     });
     input.addEventListener('blur', hideFieldPopover);
     syncFieldHintState(formKind, input);
