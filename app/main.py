@@ -87,7 +87,7 @@ def ensure_schema_updates(db):
         "indicator_exit_enabled": "ALTER TABLE bot_sessions ADD COLUMN indicator_exit_enabled BOOLEAN DEFAULT 0",
         "indicator_exit_rule": "ALTER TABLE bot_sessions ADD COLUMN indicator_exit_rule VARCHAR(30) DEFAULT 'macd_cross'",
         "leverage_profile": "ALTER TABLE bot_sessions ADD COLUMN leverage_profile VARCHAR(20) DEFAULT 'none'",
-        "max_open_positions": "ALTER TABLE bot_sessions ADD COLUMN max_open_positions INTEGER DEFAULT 1",
+        "max_open_positions": "ALTER TABLE bot_sessions ADD COLUMN max_open_positions INTEGER DEFAULT 10",
         "compound_growth_enabled": "ALTER TABLE bot_sessions ADD COLUMN compound_growth_enabled BOOLEAN DEFAULT 0",
         "atr_volatility_filter_enabled": "ALTER TABLE bot_sessions ADD COLUMN atr_volatility_filter_enabled BOOLEAN DEFAULT 1",
     })

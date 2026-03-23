@@ -119,7 +119,7 @@ def _process_due_bot_session(*, session_id: int, now: datetime) -> int:
                 indicator_exit_enabled=session.indicator_exit_enabled,
                 indicator_exit_rule=session.indicator_exit_rule,
                 leverage_profile=session.leverage_profile,
-                max_open_positions=max(int(session.max_open_positions or 1), 1),
+                max_open_positions=max(int(session.max_open_positions or 10), 1),
                 compound_growth_enabled=bool(session.compound_growth_enabled),
                 atr_volatility_filter_enabled=bool(session.atr_volatility_filter_enabled),
                 symbol_source_mode=symbol_source_mode,

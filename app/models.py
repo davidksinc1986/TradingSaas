@@ -161,7 +161,7 @@ class BotSession(Base):
     indicator_exit_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     indicator_exit_rule: Mapped[str] = mapped_column(String(30), default="macd_cross")
     leverage_profile: Mapped[str] = mapped_column(String(20), default="none")
-    max_open_positions: Mapped[int] = mapped_column(Integer, default=1)
+    max_open_positions: Mapped[int] = mapped_column(Integer, default=10)
     compound_growth_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     atr_volatility_filter_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

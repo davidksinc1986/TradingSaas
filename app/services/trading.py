@@ -1157,7 +1157,7 @@ def run_strategy(
     indicator_exit_enabled: bool = False,
     indicator_exit_rule: str = "macd_cross",
     leverage_profile: str = "none",
-    max_open_positions: int = 1,
+    max_open_positions: int = 10,
     compound_growth_enabled: bool = False,
     atr_volatility_filter_enabled: bool = True,
     symbol_source_mode: str = "manual",
@@ -1431,7 +1431,14 @@ def run_strategy(
                 if stop_price > 0:
                     current_open_risk += abs(_safe_float(item.entry_price) - stop_price) * _safe_float(item.current_qty)
 
-            if open_count >= max_open_positions and not position_context.get("has_position"):
+            connector_max_open_positions = max_open_positions
+            if isinstance(connector.config_json, dict) and connector.config_json.get("max_open_positions") is not None:
+                try:
+                    connector_max_open_positions = int(connector.config_json.get("max_open_positions"))
+                except (ValueError, TypeError):
+                    pass
+
+            if open_count >= connector_max_open_positions and not position_context.get("has_position"):
                 decision_reasons.append("max_open_positions")
 
             if signal == "sell" and connector_market_type != "futures" and not position_context.get("has_position"):
@@ -1514,7 +1521,7 @@ def run_strategy(
 
             guardrails = RiskGuardrails.from_config(
                 ((connector.config_json or {}).get("risk_engine") if isinstance(connector.config_json, dict) else {}) or {},
-                max_open_positions=max_open_positions,
+                max_open_positions=connector_max_open_positions,
             )
             risk_plan = build_trade_risk_plan(
                 available_balance=_safe_float(balance.get("available_balance"), 0.0),

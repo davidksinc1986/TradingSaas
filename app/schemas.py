@@ -97,7 +97,7 @@ class StrategyRequest(StrategyRiskMixin, TradeAmountMixin):
     indicator_exit_enabled: bool = False
     indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
     leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] = "none"
-    max_open_positions: int = Field(default=1, ge=1, le=20)
+    max_open_positions: int = Field(default=10, ge=1, le=20)
     compound_growth_enabled: bool = False
     atr_volatility_filter_enabled: bool = True
 
@@ -124,7 +124,7 @@ class BotSessionCreate(StrategyRiskMixin, TradeAmountMixin):
     indicator_exit_enabled: bool = False
     indicator_exit_rule: Literal["macd_cross", "rsi_reversal", "ema_cross"] = "macd_cross"
     leverage_profile: Literal["conservative", "balanced", "aggressive", "none"] = "none"
-    max_open_positions: int = Field(default=1, ge=1, le=20)
+    max_open_positions: int = Field(default=10, ge=1, le=20)
     compound_growth_enabled: bool = False
     atr_volatility_filter_enabled: bool = True
 

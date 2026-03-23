@@ -21,7 +21,7 @@ class RiskGuardrails:
     max_risk_per_trade: float = 0.02
     max_portfolio_heat: float = 0.06
     max_symbol_concentration: float = 0.35
-    max_open_positions: int = 5
+    max_open_positions: int = 10
     max_daily_loss: float = 0.04
     max_drawdown: float = 0.12
     max_degraded_sources: int = 2

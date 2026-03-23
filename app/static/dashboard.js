@@ -46,6 +46,7 @@ const COMMON_CONNECTOR_CONFIG_FIELDS = [
   { key: 'leverage_profile', label: 'Leverage profile', target: 'config', type: 'select', options: ['none', 'conservative', 'balanced', 'aggressive'], platforms: ['binance', 'bybit', 'okx'], futuresOnly: true, hint: 'Perfil de apalancamiento usado por la lógica runtime.' },
   { key: 'retry_attempts', label: 'Retry attempts', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Número de reintentos para timeouts/rechazos recuperables.' },
   { key: 'retry_delay_ms', label: 'Retry delay (ms)', target: 'config', type: 'number', platforms: ['binance', 'bybit', 'okx'], hint: 'Espera entre reintentos; 0 = inmediato.' },
+  { key: 'max_open_positions', label: 'Max posiciones (riesgo global)', target: 'config', type: 'number', hint: 'Límite duro a nivel de conector que sobrescribe el de bots.' },
 ];
 
 const STRATEGIES = [
@@ -1588,7 +1589,7 @@ function buildRunPayload(form) {
     indicator_exit_enabled: false,
     indicator_exit_rule: 'macd_cross',
     leverage_profile: 'none',
-    max_open_positions: 1,
+    max_open_positions: 10,
     compound_growth_enabled: false,
     atr_volatility_filter_enabled: true,
   };
